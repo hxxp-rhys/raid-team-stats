@@ -19,25 +19,34 @@ type SendArgs = {
   html?: string;
 };
 
-const buildTransport = (): Transporter | null => {
+// Lazily resolved on first send. Building at module load would crash the
+// Next.js build's page-data collection phase, which imports email.ts but
+// doesn't actually call sendMail. `undefined` = not yet attempted; `null` =
+// no SMTP configured (dev fallback applies).
+let cachedTransporter: Transporter | null | undefined;
+
+const getTransporter = (): Transporter | null => {
+  if (cachedTransporter !== undefined) return cachedTransporter;
   if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD) {
     if (env.NODE_ENV === "production") {
       throw new Error("SMTP_HOST, SMTP_USER, SMTP_PASSWORD are required in production");
     }
+    cachedTransporter = null;
     return null;
   }
-  return nodemailer.createTransport({
+  cachedTransporter = nodemailer.createTransport({
     host: env.SMTP_HOST,
     port: env.SMTP_PORT,
     secure: env.SMTP_PORT === 465,
     auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
   });
+  return cachedTransporter;
 };
 
-const transporter = buildTransport();
-const fromAddress = env.SMTP_FROM ?? "no-reply@localhost";
+const fromAddress = (): string => env.SMTP_FROM ?? "no-reply@localhost";
 
 const sendMail = async (args: SendArgs): Promise<void> => {
+  const transporter = getTransporter();
   if (!transporter) {
     // Dev fallback: render the email to logs so flows are inspectable.
     logger.info(
@@ -48,7 +57,7 @@ const sendMail = async (args: SendArgs): Promise<void> => {
   }
   try {
     await transporter.sendMail({
-      from: fromAddress,
+      from: fromAddress(),
       to: args.to,
       subject: args.subject,
       text: args.text,
