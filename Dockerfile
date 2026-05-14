@@ -18,8 +18,10 @@ RUN apk add --no-cache libc6-compat
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Generate Prisma client into src/generated/prisma (matches schema output path).
-RUN npx prisma generate
+# Generate Prisma client into src/generated/prisma (matches schema output
+# path). Prisma 7's config loader resolves env vars even for `generate`, so
+# we hand it a placeholder DATABASE_URL — the real one comes in at runtime.
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npx prisma generate
 
 # SKIP_ENV_VALIDATION lets the build proceed without runtime secrets present.
 ENV NODE_ENV=production
