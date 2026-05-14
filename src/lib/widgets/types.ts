@@ -49,6 +49,25 @@ export const parseLayout = (raw: unknown): DashboardLayout => {
   return result.success ? result.data : { widgets: [] };
 };
 
+/**
+ * Per-widget configuration schemas. Widgets that omit an entry here are
+ * "no-config" — the editor surfaces them but does not render a form. To add
+ * a new configurable widget: drop a schema below, and the WidgetConfigEditor
+ * will pick it up automatically.
+ */
+export const WIDGET_CONFIG_SCHEMAS: Partial<Record<WidgetType, z.ZodTypeAny>> = {
+  character_timeline: z.object({
+    characterId: z.string().cuid().optional(),
+  }),
+};
+
+export type CharacterTimelineConfig = {
+  characterId?: string;
+};
+
+export const isConfigurable = (type: WidgetType): boolean =>
+  WIDGET_CONFIG_SCHEMAS[type] !== undefined;
+
 export const WIDGET_META: Record<
   WidgetType,
   { title: string; description: string }

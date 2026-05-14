@@ -91,6 +91,12 @@ function Inner({ params }: { params: Params }) {
     setLayout((l) => ({ widgets: l.widgets.filter((w) => w.id !== id) }));
     setDirty(true);
   };
+  const updateWidgetConfig = (id: string, config: Record<string, unknown>) => {
+    setLayout((l) => ({
+      widgets: l.widgets.map((w) => (w.id === id ? { ...w, config } : w)),
+    }));
+    setDirty(true);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -239,6 +245,7 @@ function Inner({ params }: { params: Params }) {
                     raidTeamId={teamId}
                     index={i}
                     onRemove={removeWidget}
+                    onConfigChange={updateWidgetConfig}
                   />
                 ))}
               </ul>

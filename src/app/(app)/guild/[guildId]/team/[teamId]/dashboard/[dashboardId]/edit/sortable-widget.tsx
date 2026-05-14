@@ -1,28 +1,34 @@
 "use client";
 
+import { useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
 import {
   WIDGET_META,
+  isConfigurable,
   type WidgetInstance,
 } from "@/lib/widgets/types";
 import { WidgetRender } from "@/components/widgets";
+import { WidgetConfigEditor } from "./widget-config";
 
 export function SortableWidget({
   widget,
   raidTeamId,
   index,
   onRemove,
+  onConfigChange,
 }: {
   widget: WidgetInstance;
   raidTeamId: string;
   index: number;
   onRemove: (id: string) => void;
+  onConfigChange: (id: string, config: Record<string, unknown>) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: widget.id });
+  const [editing, setEditing] = useState(false);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -43,16 +49,35 @@ export function SortableWidget({
           <span aria-hidden="true">⋮⋮</span>
           {index + 1}. {WIDGET_META[widget.type].title}
         </button>
-        <Button
-          size="xs"
-          variant="destructive"
-          onClick={() => onRemove(widget.id)}
-          // Prevent drag listeners on the button from interfering with click.
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          Remove
-        </Button>
+        <div className="flex gap-1">
+          {isConfigurable(widget.type) && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setEditing((v) => !v)}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {editing ? "Close" : "Configure"}
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="destructive"
+            onClick={() => onRemove(widget.id)}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            Remove
+          </Button>
+        </div>
       </div>
+      {editing && (
+        <WidgetConfigEditor
+          raidTeamId={raidTeamId}
+          widget={widget}
+          onChange={(config) => onConfigChange(widget.id, config)}
+          onClose={() => setEditing(false)}
+        />
+      )}
       <WidgetRender instance={widget} raidTeamId={raidTeamId} />
     </li>
   );

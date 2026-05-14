@@ -8,6 +8,7 @@ import {
 } from "@/server/api/trpc";
 import { normalizeRaidTeamSlug } from "@/lib/realm";
 import { audit } from "@/server/security/audit";
+import { consumeLimit, policies } from "@/server/security/rate-limit";
 
 /**
  * DashboardConfig CRUD. Only LEADER/CO_LEADER (or guild OWNER/OFFICER) may
@@ -160,5 +161,132 @@ export const dashboardRouter = router({
       await assertRaidTeamRole(ctx, dashboard.raidTeamId, "LEADER");
       await ctx.db.dashboardConfig.delete({ where: { id: input.dashboardId } });
       return { ok: true };
+    }),
+
+  /**
+   * CSV export of the dashboard's underlying audit data. Format mirrors the
+   * "Eclipse Midnight" reference spreadsheet — one row per active raid-team
+   * member with iLvL / M+ rating / tier pieces / missing enchants/gems /
+   * last sync.
+   *
+   * Authorization rides on raid-team read access. Rate-limited per user
+   * (1/min) — exports are cheap on the server but easy to script-pull, and
+   * the audit log captures every successful export.
+   */
+  exportCsv: protectedProcedure
+    .input(z.object({ dashboardId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: input.dashboardId },
+        select: { id: true, name: true, slug: true, raidTeamId: true },
+      });
+      if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, dashboard.raidTeamId, "MEMBER");
+
+      const rl = await consumeLimit(policies.trpcMutationPerUser, ctx.session.user.id);
+      if (!rl.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Export rate-limited. Try again shortly.",
+        });
+      }
+
+      const memberships = await ctx.db.raidTeamMembership.findMany({
+        where: { raidTeamId: dashboard.raidTeamId, isActive: true },
+        include: {
+          character: {
+            select: {
+              id: true,
+              name: true,
+              realmSlug: true,
+              faction: true,
+              level: true,
+              lastSyncedAt: true,
+            },
+          },
+        },
+        orderBy: { addedAt: "asc" },
+      });
+
+      const characterIds = memberships.map((m) => m.character.id);
+      const [equipment, mplus] = await Promise.all([
+        Promise.all(
+          characterIds.map((id) =>
+            ctx.db.equipmentSnapshot.findFirst({
+              where: { characterId: id },
+              orderBy: { capturedAt: "desc" },
+              select: {
+                itemLevel: true,
+                missingEnchantsCount: true,
+                missingGemsCount: true,
+                tierSetPiecesCount: true,
+                capturedAt: true,
+              },
+            }),
+          ),
+        ),
+        Promise.all(
+          characterIds.map((id) =>
+            ctx.db.mplusSnapshot.findFirst({
+              where: { characterId: id },
+              orderBy: { capturedAt: "desc" },
+              select: { currentRating: true, weeklyHighest: true, seasonId: true },
+            }),
+          ),
+        ),
+      ]);
+
+      const header = [
+        "character",
+        "realm",
+        "faction",
+        "level",
+        "item_level",
+        "tier_pieces",
+        "missing_enchants",
+        "missing_gems",
+        "mplus_rating",
+        "mplus_weekly_highest",
+        "mplus_season",
+        "last_synced_at",
+      ];
+      const rows = memberships.map((m, i) => [
+        m.character.name,
+        m.character.realmSlug,
+        m.character.faction,
+        m.character.level ?? "",
+        equipment[i]?.itemLevel ?? "",
+        equipment[i]?.tierSetPiecesCount ?? "",
+        equipment[i]?.missingEnchantsCount ?? "",
+        equipment[i]?.missingGemsCount ?? "",
+        mplus[i]?.currentRating?.toString() ?? "",
+        mplus[i]?.weeklyHighest ?? "",
+        mplus[i]?.seasonId ?? "",
+        m.character.lastSyncedAt.toISOString(),
+      ]);
+
+      const csv = [header, ...rows]
+        .map((row) =>
+          row
+            .map((cell) => {
+              const s = String(cell ?? "");
+              return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+            })
+            .join(","),
+        )
+        .join("\n");
+
+      await audit({
+        event: "DASHBOARD_EXPORTED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "dashboard",
+        subjectId: dashboard.id,
+        metadata: { rowCount: memberships.length },
+      });
+
+      return {
+        filename: `${dashboard.slug}-${new Date().toISOString().slice(0, 10)}.csv`,
+        csv,
+      };
     }),
 });
