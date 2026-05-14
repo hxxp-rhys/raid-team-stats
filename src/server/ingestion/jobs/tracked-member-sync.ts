@@ -52,6 +52,19 @@ export async function enqueueTrackedMemberSyncForAll(): Promise<{ enqueued: numb
 
 // Minimal equipment shape we extract from the Blizzard payload. The full
 // payload lives in rawPayload for replay.
+//
+// `set` carries the item-set membership when an equipped piece belongs to a
+// raid tier set. Blizzard returns:
+//   {
+//     "item_set": { "id": 1735, "name": "Foo Tier Set" },
+//     "items": [...],
+//     "effects": [
+//       { "display_string": "(2) Set: ...", "required_count": 2 },
+//       { "display_string": "(4) Set: ...", "required_count": 4 }
+//     ]
+//   }
+// We count distinct equipped pieces by item_set.id; the tier-set tracker
+// widget renders the resulting 0–5 score per character.
 const equipmentItemSchema = z
   .object({
     slot: z.object({ type: z.string() }).passthrough().optional(),
@@ -59,6 +72,12 @@ const equipmentItemSchema = z
     level: z.object({ value: z.number().optional() }).passthrough().optional(),
     enchantments: z.array(z.unknown()).optional(),
     sockets: z.array(z.unknown()).optional(),
+    set: z
+      .object({
+        item_set: z.object({ id: z.number().int() }).passthrough().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -152,6 +171,23 @@ export async function handleTrackedMemberSync(
       (i) => i.sockets && i.sockets.length === 0,
     ).length;
 
+    // Count distinct tier-set IDs across equipped pieces, then the dominant
+    // set's piece count. "Dominant" matters because Blizzard models legacy
+    // and current tier with the same set field — players can have 2pc of
+    // last season + 2pc of this one — and the tracker should report the
+    // highest active stack, not the sum.
+    const piecesByItemSet = new Map<number, number>();
+    for (const item of equipment.equipped_items) {
+      const setId = item.set?.item_set?.id;
+      if (typeof setId === "number") {
+        piecesByItemSet.set(setId, (piecesByItemSet.get(setId) ?? 0) + 1);
+      }
+    }
+    const tierSetIds = Array.from(piecesByItemSet.keys()).sort();
+    const tierSetPiecesCount = piecesByItemSet.size === 0
+      ? 0
+      : Math.max(...piecesByItemSet.values());
+
     await writeEquipmentSnapshot({
       characterId: character.id,
       source: "BLIZZARD",
@@ -159,8 +195,8 @@ export async function handleTrackedMemberSync(
       itemLevel: equipment.equipped_item_level ?? null,
       missingEnchantsCount,
       missingGemsCount,
-      tierSetPiecesCount: null, // Phase 4.x: derive from item-set ids.
-      tierSetIds: [],
+      tierSetPiecesCount,
+      tierSetIds,
       items: equipment.equipped_items,
       rawPayload: equipment,
     });

@@ -35,10 +35,16 @@ type Args = {
   guild: string;
   region: "us" | "eu" | "kr" | "tw";
   firstCharacter: boolean;
+  /** Also exercise the Tier-B handler against this guild's row in our DB. */
+  tierB: boolean;
 };
 
 function parseArgs(argv: string[]): Args {
-  const args: Partial<Args> = { region: "us", firstCharacter: false };
+  const args: Partial<Args> = {
+    region: "us",
+    firstCharacter: false,
+    tierB: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     switch (token) {
@@ -53,6 +59,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--first-character":
         args.firstCharacter = true;
+        break;
+      case "--tier-b":
+        args.tierB = true;
         break;
       case "--help":
       case "-h":
@@ -75,11 +84,19 @@ function parseArgs(argv: string[]): Args {
 function printUsage() {
   console.error(
     [
-      "Usage: tsx scripts/smoke-blizzard.ts --realm <realm> --guild <guild> [--region us|eu|kr|tw] [--first-character]",
+      "Usage: tsx scripts/smoke-blizzard.ts --realm <realm> --guild <guild>",
+      "         [--region us|eu|kr|tw] [--first-character] [--tier-b]",
+      "",
+      "Flags:",
+      "  --first-character   Also fetch the first character's profile summary.",
+      "  --tier-b            Run the real Tier-B guild-roster-sync handler",
+      "                      against the guild row in our DB. Writes Character +",
+      "                      GuildCharacterLink + SyncRun rows.",
       "",
       "Examples:",
       "  --realm stormrage --guild eclipse-midnight",
       '  --realm "Wyrmrest Accord" --guild "My Guild" --region eu --first-character',
+      "  --realm stormrage --guild eclipse-midnight --tier-b",
     ].join("\n"),
   );
 }
@@ -153,6 +170,60 @@ async function main() {
     if (summary.guild) {
       console.log(`  guild:   ${summary.guild.name} <${summary.guild.realm.slug}>`);
     }
+  }
+
+  if (args.tierB) {
+    console.log("");
+    console.log("→ Tier-B (guild-roster-sync) end-to-end …");
+    const { db } = await import("@/lib/db");
+    const region = args.region.toUpperCase() as "US" | "EU" | "KR" | "TW";
+    const guild = await db.guild.upsert({
+      where: {
+        region_realmSlug_guildSlug_faction: {
+          region,
+          realmSlug,
+          guildSlug,
+          faction: "NEUTRAL",
+        },
+      },
+      create: {
+        region,
+        realmSlug,
+        guildSlug,
+        faction: "NEUTRAL",
+        name: args.guild,
+      },
+      update: {},
+      select: { id: true, name: true, claimedByUserId: true },
+    });
+
+    if (!guild.claimedByUserId) {
+      console.log(
+        "  ! Guild row has no claimedByUserId — Tier-B sync attributes new",
+      );
+      console.log(
+        "    Character rows to the platform admin user. Create that user",
+      );
+      console.log(
+        "    first via /signup if you want the rows owned by a real account.",
+      );
+    }
+
+    const { handleGuildRosterSync } = await import(
+      "@/server/ingestion/jobs/guild-roster-sync"
+    );
+    const tierBStart = Date.now();
+    await handleGuildRosterSync({ guildId: guild.id });
+    console.log(`  ok in ${Date.now() - tierBStart}ms`);
+
+    const counts = await Promise.all([
+      db.character.count({ where: { region, realmSlug } }),
+      db.guildCharacterLink.count({ where: { guildId: guild.id } }),
+      db.syncRun.count({ where: { guildId: guild.id, tier: "B" } }),
+    ]);
+    console.log(`  characters:        ${counts[0]}`);
+    console.log(`  guildCharacterLnk: ${counts[1]}`);
+    console.log(`  syncRun (tier B):  ${counts[2]}`);
   }
 
   console.log("");

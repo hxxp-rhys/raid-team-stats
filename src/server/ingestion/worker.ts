@@ -6,11 +6,13 @@
  * Start with: `npx tsx src/server/ingestion/worker.ts`
  */
 
-import { Worker } from "bullmq";
+import { QueueEvents, Worker } from "bullmq";
 
 import { redisBlocking } from "@/lib/redis";
 import { logger } from "@/lib/logger";
+import { jobDurationSeconds, jobsTotal, queueDepth } from "@/lib/metrics";
 import { QUEUE_NAMES } from "@/server/ingestion/queues";
+import { queues } from "@/server/ingestion/queues";
 import {
   handleManualRosterRefresh,
   type ManualRosterRefreshPayload,
@@ -99,6 +101,46 @@ const start = async () => {
   );
 
   await registerSchedules();
+
+  // Periodic queue-depth gauge update — Prometheus pulls /api/metrics from
+  // the web container, but the source of truth for queue counts is the
+  // worker's view of Redis. Mirror the gauges via QueueEvents + a 15s tick.
+  const queueObjects = [
+    { name: "manual-roster-refresh", q: queues.manualRosterRefresh },
+    { name: "tracked-member-sync", q: queues.trackedMemberSync },
+    { name: "guild-roster-sync", q: queues.guildRosterSync },
+  ];
+  setInterval(async () => {
+    for (const { name, q } of queueObjects) {
+      try {
+        const counts = await q.getJobCounts(
+          "waiting",
+          "active",
+          "delayed",
+          "failed",
+        );
+        for (const [state, n] of Object.entries(counts)) {
+          queueDepth.set({ queue: name, state }, n);
+        }
+      } catch (err) {
+        logger.warn({ err, queue: name }, "queue depth gauge refresh failed");
+      }
+    }
+  }, 15_000);
+
+  // QueueEvents emits completed/failed across the cluster — count + measure.
+  for (const { name, q } of queueObjects) {
+    const events = new QueueEvents(q.name, { connection: redisBlocking });
+    events.on("completed", async ({ jobId }) => {
+      jobsTotal.inc({ queue: name, status: "completed" });
+      const job = await q.getJob(jobId).catch(() => null);
+      if (job?.processedOn && job?.finishedOn) {
+        const sec = (job.finishedOn - job.processedOn) / 1000;
+        jobDurationSeconds.observe({ queue: name }, sec);
+      }
+    });
+    events.on("failed", () => jobsTotal.inc({ queue: name, status: "failed" }));
+  }
 
   logger.info({ queues: workers.map((w) => w.name) }, "BullMQ workers online");
 };

@@ -62,6 +62,9 @@ services:
       REDIS_URL: redis://redis:6379
       HOSTNAME: 0.0.0.0
       PORT: "3000"
+      # Web + prometheus share the same default so /api/metrics is reachable
+      # immediately after `docker compose up` without further config.
+      METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
@@ -98,6 +101,7 @@ services:
       NODE_ENV: development
       DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
       REDIS_URL: redis://redis:6379
+      METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
     command: ["sh", "-c", "npx prisma generate && npx tsx src/server/ingestion/worker.ts"]
     volumes:
       - ./:/app
@@ -111,9 +115,81 @@ services:
       web:
         condition: service_started
 
+  # ── Observability ───────────────────────────────────────────────────────
+  # prometheus + loki + promtail + grafana. Bound to localhost only on
+  # dev; the prod compose puts Grafana behind Caddy basic auth.
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: rts-prometheus
+    restart: unless-stopped
+    user: "65534:65534"  # nobody
+    environment:
+      METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/entrypoint.sh:/etc/prometheus/entrypoint.sh:ro
+      - rts-prometheus:/prometheus
+    entrypoint: ["/bin/sh", "/etc/prometheus/entrypoint.sh"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      web:
+        condition: service_started
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: rts-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./ops/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - rts-loki:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: rts-promtail
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./ops/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - rts-promtail-positions:/tmp
+    depends_on:
+      loki:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: rts-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - rts-grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+
 volumes:
   rts-pgdata:
   rts-redisdata:
   rts-node-modules:
   rts-next-cache:
   rts-prisma-client:
+  rts-prometheus:
+  rts-loki:
+  rts-promtail-positions:
+  rts-grafana:

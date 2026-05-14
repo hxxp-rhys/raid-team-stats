@@ -98,6 +98,8 @@ const config: NextAuthConfig = {
             metadata: { reason: "unknown_account" },
             ip: ip ?? undefined,
           });
+          const { authEventsTotal } = await import("@/lib/metrics");
+          authEventsTotal.inc({ event: "login_failure" });
           return null;
         }
 
@@ -109,6 +111,8 @@ const config: NextAuthConfig = {
             metadata: { reason: "bad_password" },
             ip: ip ?? undefined,
           });
+          const { authEventsTotal } = await import("@/lib/metrics");
+          authEventsTotal.inc({ event: "login_failure" });
           return null;
         }
 
@@ -131,7 +135,9 @@ const config: NextAuthConfig = {
             "@/server/auth/mfa"
           );
           if (await isMfaEnabled(user.id)) {
+            const { authEventsTotal: m } = await import("@/lib/metrics");
             if (!mfaCode) {
+              m.inc({ event: "mfa_required" });
               throw new Error("mfa_required");
             }
             const mfaOk = await verifyAnyMfaCode(user.id, mfaCode);
@@ -142,6 +148,7 @@ const config: NextAuthConfig = {
                 metadata: { reason: "mfa_failed" },
                 ip: ip ?? undefined,
               });
+              m.inc({ event: "mfa_failure" });
               throw new Error("Authenticator code is incorrect or expired.");
             }
           }
@@ -160,6 +167,8 @@ const config: NextAuthConfig = {
           }
         }
 
+        const { authEventsTotal: m } = await import("@/lib/metrics");
+        m.inc({ event: "login_success" });
         return {
           id: user.id,
           email: user.email,

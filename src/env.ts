@@ -87,6 +87,11 @@ export const env = createEnv({
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+
+    // Shared bearer used by the Prometheus container to scrape /api/metrics.
+    // Empty in dev allows the admin-session path to access metrics in a
+    // browser; production should always set this.
+    METRICS_TOKEN: z.string().optional(),
   },
 
   client: {
@@ -117,6 +122,7 @@ export const env = createEnv({
     SMTP_FROM: process.env.SMTP_FROM,
     ADMIN_USER_IDS: process.env.ADMIN_USER_IDS,
     RATE_LIMIT_TRUST_PROXY: process.env.RATE_LIMIT_TRUST_PROXY,
+    METRICS_TOKEN: process.env.METRICS_TOKEN,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
   },
 

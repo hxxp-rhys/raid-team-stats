@@ -79,12 +79,85 @@ rclone copyto $RCLONE_REMOTE/<file>.sql.age - \
 
 ## Observability
 
-- All container logs go to stdout in line-delimited JSON (pino). Configure
-  your host's log aggregator (Loki, Vector, Datadog, etc.) to pull from
-  Docker's JSON log driver.
-- `/api/health` is liveness; `/api/ready` checks Postgres + Redis.
-- BullMQ job state lives in Redis; mount Bull Board behind admin auth in a
-  follow-up if you want a job UI.
+The default `docker-compose.yml` already runs a complete observability
+stack (Prometheus + Loki + Promtail + Grafana). The same images and
+configs work in production — copy the `prometheus`, `loki`, `promtail`,
+and `grafana` services into `docker-compose.prod.yml`, then put Grafana
+behind Caddy basic auth (snippet below).
+
+### What's instrumented
+
+- **HTTP traffic**: `rts_http_request_duration_seconds` (histogram with
+  `method`, `route_class`, `status_class`) and `rts_http_rate_limited_total`
+  emitted from `src/proxy.ts` on every request the proxy matcher sees.
+  Health/ready/metrics endpoints bypass the matcher and are not counted.
+- **Auth**: `rts_auth_events_total{event=login_success|login_failure|
+  mfa_required|mfa_failure}` from the Credentials provider.
+- **BullMQ**: `rts_jobs_total{queue,status}`, `rts_job_duration_seconds`
+  histogram, and `rts_queue_depth{queue,state}` gauge refreshed every 15s
+  from the worker process via QueueEvents.
+- **Ingestion**: `rts_upstream_requests_total{source,status_class}` and
+  `rts_upstream_budget_remaining{source}` (wired in when each client opts
+  in — Phase 8.x).
+- **Node runtime**: `rts_process_*` defaults from prom-client (event-loop
+  lag, GC pause, heap, file descriptors).
+
+### Endpoints
+
+- `/api/metrics` — Prometheus exposition format. Two auth paths:
+  1. `Authorization: Bearer $METRICS_TOKEN` for the Prometheus container
+     (substituted into the prometheus.yml at container start by
+     `ops/prometheus/entrypoint.sh`).
+  2. Authenticated platform admin session for spot-checks in a browser.
+- `/api/health` (liveness) and `/api/ready` (Postgres + Redis check) —
+  used by Docker healthchecks and external uptime monitors.
+
+### Caddy snippet — put Grafana behind basic auth + your domain
+
+```caddyfile
+grafana.${APP_HOST} {
+  basicauth /* {
+    admin <bcrypt-hash-from `caddy hash-password`>
+  }
+  reverse_proxy grafana:3000
+}
+```
+
+Or expose Grafana under a path on the main domain:
+
+```caddyfile
+${APP_HOST} {
+  handle_path /grafana/* {
+    basicauth /* {
+      admin <bcrypt-hash>
+    }
+    reverse_proxy grafana:3000
+  }
+  reverse_proxy web:3000
+}
+```
+
+The Grafana container's `GF_SERVER_ROOT_URL` env should be set to match
+the chosen URL if you go with the sub-path approach.
+
+### Log shipping
+
+Promtail tails the Docker socket and ships every container's stdout/stderr
+to Loki with the container name as a label. Caddy's JSON access logs are
+auto-parsed and indexed by `status`, `method`, `host`, `remote_ip`. The
+included `RTS — Overview` dashboard surfaces:
+
+- HTTP request rate + p95 latency per route class
+- Rate-limit denials per hour
+- Auth event timeline
+- Queue depth + job throughput
+- Caddy 5xx tail + app-level pino errors
+
+### k6 load test
+
+The k6 thresholds in `tests/load/k6-auth.js` are tuned for a local docker
+compose. Re-tune them against production before treating threshold breaches
+as alerts.
 
 ## Upgrades
 
