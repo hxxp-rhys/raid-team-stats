@@ -122,8 +122,10 @@ jobs:
           --health-timeout 3s
           --health-retries 12
 
+    # Job-level env is shared but NODE_ENV is deliberately omitted here so
+    # npm install picks up devDependencies. The `Start app` step sets
+    # production NODE_ENV when it actually matters.
     env:
-      NODE_ENV: production
       APP_URL: http://localhost:3000
       LOG_LEVEL: warn
       DATABASE_URL: postgresql://raid_team_stats:ci_password@localhost:5432/raid_team_stats?schema=public
@@ -179,6 +181,8 @@ jobs:
             curl -fsS http://localhost:3000/api/health && break
             sleep 1
           done
+        env:
+          NODE_ENV: production
 
       - name: Playwright smoke
         run: npm run test:e2e
