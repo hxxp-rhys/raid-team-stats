@@ -52,6 +52,21 @@ Schema changes while running:
 docker compose exec web npx prisma migrate dev --name <descriptive_name>
 ```
 
+Dependency changes (a new `npm install` ran on the host)? The container's
+`node_modules` lives in a named volume that doesn't see host changes — refresh
+it once:
+
+```bash
+docker compose exec web npm install --no-audit --no-fund
+docker compose restart web
+```
+
+Smoke-testing the verify/reset flow without an email round-trip:
+
+```bash
+docker compose exec web npx tsx scripts/dev-issue-verify-token.ts verify_email user@example.com
+```
+
 ### Boot (native host — optional, faster HMR on Windows)
 
 If file-watching feels sluggish in Docker on Windows/WSL2:
