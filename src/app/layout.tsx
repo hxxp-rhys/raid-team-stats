@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import { env } from "@/env";
-import "./globals.css";
 import { Geist } from "next/font/google";
+import { env } from "@/env";
 import { cn } from "@/lib/utils";
+import { Providers } from "@/app/providers";
+import "./globals.css";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: env.NEXT_PUBLIC_APP_NAME,
@@ -21,9 +22,9 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={cn("font-sans", geist.variable)}>
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
-        {children}
+    <html lang="en" className={cn("dark font-sans", geist.variable)}>
+      <body className="bg-background text-foreground min-h-screen antialiased">
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
