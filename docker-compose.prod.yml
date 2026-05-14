@@ -1,0 +1,186 @@
+# Production-ready stack: Caddy + Next.js + BullMQ worker + PgBouncer + Postgres + Redis.
+#
+# Brings up the v1 minimum for a single-host deployment (Hetzner / Fly.io /
+# DigitalOcean). For multi-host or k8s, lift the same images into your
+# orchestrator and keep the env-var contract.
+#
+# Bring up:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Required env (in `.env.prod` next to this file, NEVER committed):
+#   APP_HOST=raid.example.com
+#   POSTGRES_PASSWORD=<strong>
+#   ...see .env.example for the full list
+#
+# TLS: Caddy auto-acquires certs from Let's Encrypt for APP_HOST. Set
+# APP_HOST=localhost during the first smoke test to skip the public-DNS
+# requirement (Caddy will issue a self-signed cert).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: rts-caddy
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    cap_drop:
+      - ALL
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - rts-caddy-data:/data
+      - rts-caddy-config:/config
+    environment:
+      APP_HOST: ${APP_HOST}
+    depends_on:
+      web:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raid-team-stats:prod
+    container_name: rts-web-prod
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env.prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@pgbouncer:6432/raid_team_stats?schema=public
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_TRUST_PROXY: "true"
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 3s
+      start_period: 30s
+      retries: 4
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: raid-team-stats:prod
+    container_name: rts-worker-prod
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env.prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@pgbouncer:6432/raid_team_stats?schema=public
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/server/ingestion/worker.js"]
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: rts-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: raid_team_stats
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: raid_team_stats
+    volumes:
+      - rts-pgdata-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raid_team_stats -d raid_team_stats"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.0
+    container_name: rts-pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_USER: raid_team_stats
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_HOST: postgres
+      DB_NAME: raid_team_stats
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "500"
+      DEFAULT_POOL_SIZE: "20"
+      AUTH_TYPE: scram-sha-256
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rts-redis-prod
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - "60"
+      - "1000"
+    volumes:
+      - rts-redisdata-prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backup:
+    # Optional: nightly pg_dump → age-encrypted blob → off-host object store.
+    # Configure BACKUP_AGE_PUBKEY and RCLONE_REMOTE in .env.prod, then enable
+    # this service. See scripts/backup.sh for the actual command.
+    image: alpine:3.20
+    container_name: rts-backup
+    restart: unless-stopped
+    profiles:
+      - backup
+    env_file:
+      - .env.prod
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - rts-backup-staging:/var/backup
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        apk add --no-cache postgresql16-client age rclone curl coreutils;
+        echo "0 4 * * * /usr/local/bin/backup.sh" | crontab -;
+        crond -f -l 2
+
+volumes:
+  rts-pgdata-prod:
+  rts-redisdata-prod:
+  rts-caddy-data:
+  rts-caddy-config:
+  rts-backup-staging:

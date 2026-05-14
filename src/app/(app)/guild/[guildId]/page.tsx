@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, type FormEvent } from "react";
+import { Suspense, use, useState, type FormEvent } from "react";
 import Link from "next/link";
 
 import { api } from "@/lib/trpc-client";
@@ -20,7 +20,26 @@ import { WowauditConfigCard } from "./wowaudit-config";
 
 type Params = Promise<{ guildId: string }>;
 
+/**
+ * Page wrapper. With Next 16's cacheComponents, components that call `use()`
+ * on a request-time promise must sit inside a Suspense boundary so the
+ * static-shell prerender can produce HTML during build.
+ */
 export default function GuildDetailPage({ params }: { params: Params }) {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-3xl px-4 py-12">
+          <p className="text-muted-foreground text-sm">Loading…</p>
+        </main>
+      }
+    >
+      <GuildDetailInner params={params} />
+    </Suspense>
+  );
+}
+
+function GuildDetailInner({ params }: { params: Params }) {
   const { guildId } = use(params);
 
   const detail = api.guild.get.useQuery({ guildId });
