@@ -85,6 +85,9 @@ jobs:
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: 1
+          # Build doesn't need live secrets — env.ts re-validates at boot.
+          # Matches the Dockerfile, which also sets this for the build stage.
+          SKIP_ENV_VALIDATION: "1"
 
       - name: npm audit (production)
         run: npm audit --omit=dev --audit-level=high

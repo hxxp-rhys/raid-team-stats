@@ -16,6 +16,45 @@ const teamRoleSchema = z.enum(["MEMBER", "CO_LEADER"]);
 
 export const raidTeamRouter = router({
   /**
+   * Full team detail (settings + active member list with character info).
+   * Used by /guild/[guildId]/team/[teamId] page.
+   */
+  get: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        include: {
+          memberships: {
+            where: { isActive: true },
+            include: {
+              character: {
+                select: {
+                  id: true,
+                  name: true,
+                  realmSlug: true,
+                  region: true,
+                  faction: true,
+                  classId: true,
+                  level: true,
+                  lastSyncedAt: true,
+                  userId: true,
+                },
+              },
+            },
+            orderBy: { addedAt: "asc" },
+          },
+          guild: { select: { id: true, name: true, region: true } },
+        },
+      });
+      if (!team) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      return team;
+    }),
+
+  /**
    * Returns the raid teams the caller can see in a given guild.
    * - Guild OWNER/OFFICER sees every team.
    * - A team member sees their own team(s).

@@ -39,6 +39,7 @@ model User {
   guildsClaimed       Guild[]              @relation("GuildClaimedBy")
   raidTeamsLed        RaidTeam[]           @relation("RaidTeamLeader")
   raidTeamAdditions   RaidTeamMembership[] @relation("RaidTeamMemberAddedBy")
+  dashboardsOwned     DashboardConfig[]    @relation("DashboardOwner")
 }
 
 model Account {
@@ -328,6 +329,7 @@ model RaidTeam {
   guild       Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
   leader      User                 @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: Restrict)
   memberships RaidTeamMembership[]
+  dashboards  DashboardConfig[]
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
@@ -504,4 +506,29 @@ model SyncRun {
 
   @@index([tier, startedAt(sort: Desc)])
   @@index([guildId, startedAt(sort: Desc)])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Phase 5 — customizable dashboards, scoped to a RaidTeam.
+// `visibility` mirrors RaidTeam.visibility and cannot be more permissive than
+// the team's; enforced at the tRPC layer.
+// ──────────────────────────────────────────────────────────────────────────────
+
+model DashboardConfig {
+  id          String             @id @default(cuid())
+  raidTeamId  String
+  ownerUserId String
+  name        String
+  slug        String
+  visibility  RaidTeamVisibility @default(TEAM)
+  layout      Json
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  raidTeam RaidTeam @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  owner    User     @relation("DashboardOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([raidTeamId, slug])
+  @@index([raidTeamId])
+  @@index([ownerUserId])
 }
