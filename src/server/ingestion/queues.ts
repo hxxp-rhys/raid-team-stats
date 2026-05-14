@@ -12,10 +12,11 @@ import { redisBlocking } from "@/lib/redis";
  * and to be safe for blocking commands.
  */
 
+// BullMQ rejects ":" in queue names (it's the Redis key separator). Use "-".
 export const QUEUE_NAMES = {
-  trackedMemberSync: "rts:tracked-member-sync",
-  guildRosterSync: "rts:guild-roster-sync",
-  manualRosterRefresh: "rts:manual-roster-refresh",
+  trackedMemberSync: "rts-tracked-member-sync",
+  guildRosterSync: "rts-guild-roster-sync",
+  manualRosterRefresh: "rts-manual-roster-refresh",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
