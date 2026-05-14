@@ -40,9 +40,14 @@ const redactPaths = [
 ];
 
 const isDev = env.NODE_ENV !== "production";
+// SKIP_ENV_VALIDATION=1 (used in Docker builds) bypasses zod defaults, so
+// env.LOG_LEVEL can be undefined here. Pino errors out with "default
+// level:undefined must be included in custom levels" — provide a safe
+// runtime fallback.
+const level = env.LOG_LEVEL ?? "info";
 
 export const logger = pino({
-  level: env.LOG_LEVEL,
+  level,
   redact: {
     paths: redactPaths,
     censor: "[redacted]",
