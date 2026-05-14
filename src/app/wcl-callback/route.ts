@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
 
@@ -10,6 +11,7 @@ import { env } from "@/env";
  * user-link flow exists, redirects the user back to their profile.
  */
 export async function GET(): Promise<NextResponse> {
+  await connection();
   return NextResponse.redirect(new URL("/profile?wcl=not-yet", env.APP_URL), {
     status: 307,
   });
