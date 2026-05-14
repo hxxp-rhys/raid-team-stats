@@ -1,5 +1,14 @@
-# Development stack: Postgres + Redis only.
-# Run the Next.js app on the host with `npm run dev` for fast HMR.
+# Full-stack development compose. Brings up Postgres, Redis, and the Next.js
+# web server in containers. The web service builds Dockerfile.dev and bind-
+# mounts the project so file edits trigger Next dev's hot reload.
+#
+# Trade-off: Windows/WSL2 bind-mount file-watching is slower than native host
+# `npm run dev`. If HMR feels sluggish, you can fall back to: comment out the
+# `web` service, run `docker compose up postgres redis`, and start the app on
+# the host with `npm run dev`. Either workflow uses the same .env.
+#
+# Production stack (Caddy + pgbouncer + worker + web + postgres + redis) lives
+# in docker-compose.prod.yml, shipped in Phase 6.
 
 services:
   postgres:
@@ -35,6 +44,50 @@ services:
       timeout: 3s
       retries: 12
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: raid-team-stats-web:dev
+    container_name: rts-web
+    restart: unless-stopped
+    # .env supplies most variables; the entries below override the few that
+    # must use service-DNS names instead of localhost when running inside the
+    # compose network.
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
+      REDIS_URL: redis://redis:6379
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Bind-mount the project for live reload.
+      - ./:/app
+      # Named volumes shadow these paths so the container keeps its own copies
+      # (Alpine-built native modules, generated Prisma client, Next dev cache)
+      # rather than picking up host artifacts compiled for a different OS.
+      - rts-node-modules:/app/node_modules
+      - rts-next-cache:/app/.next
+      - rts-prisma-client:/app/src/generated
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 90s
+      retries: 6
+
 volumes:
   rts-pgdata:
   rts-redisdata:
+  rts-node-modules:
+  rts-next-cache:
+  rts-prisma-client:

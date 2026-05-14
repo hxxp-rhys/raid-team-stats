@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+# Development image. Runs `next dev` inside a container so the dev stack can be
+# brought up entirely with `docker compose up`. For native HMR speed on Windows,
+# run the Next.js dev server on the host instead and use a Postgres+Redis-only
+# compose — but the user opted into full-stack containerization, accepting the
+# slower file-watch performance that bind mounts incur on Windows/WSL2.
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+# libc6-compat for native modules (argon2), python3+make+g++ for any node-gyp
+# rebuilds, curl for healthchecks.
+RUN apk add --no-cache libc6-compat python3 make g++ curl
+
+# Install deps with --ignore-scripts so the postinstall (prisma generate) does
+# not fire here — schema isn't copied yet, and we regenerate the client every
+# container start anyway.
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
+EXPOSE 3000
+
+# Generate Prisma client + apply pending migrations + start dev server.
+# `migrate deploy` is idempotent — it just applies any new migration files.
+# Schema changes during dev: `docker compose exec web npx prisma migrate dev --name <name>`
+CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && npm run dev -- -H 0.0.0.0 -p 3000"]

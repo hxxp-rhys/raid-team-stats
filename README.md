@@ -25,36 +25,48 @@ renders configurable dashboards scoped to guild-internal raid teams.
 
 ### Prerequisites
 
-- Node.js **22+** (see `Dockerfile` for the production target).
-- Docker / Docker Desktop for Postgres + Redis.
+- Docker / Docker Desktop (the full stack runs in containers).
+- Node.js **22+** on the host is **optional** — only needed if you fall back
+  to running `next dev` natively for faster HMR on Windows.
 
-### Boot
+### Boot (containerized — primary path)
 
 ```bash
-# 1. Install deps (postinstall runs `prisma generate`).
-npm install
-
-# 2. Copy and tweak the env. The placeholder secrets in .env let the app start
-#    in development; production env vars are validated strictly.
+# 1. Copy and tweak the env. The placeholder secrets let the app start in
+#    development; production env vars are validated strictly.
 cp .env.example .env
 
-# 3. Start Postgres + Redis.
-docker compose up -d
-
-# 4. Apply the schema (creates tables in the local DB).
-npm run db:migrate -- --name init
-
-# 5. Run the dev server.
-npm run dev
+# 2. Bring up Postgres, Redis, and the Next.js dev server.
+#    First run builds the dev image (~2 min); subsequent runs are seconds.
+docker compose up
 ```
 
 App boots on <http://localhost:3000>. Health probes at `/api/health` and
-`/api/ready`.
+`/api/ready`. The container starts by running `prisma generate` and
+`prisma migrate deploy` automatically, so the schema is always in sync with
+the committed migrations.
+
+Schema changes while running:
+
+```bash
+docker compose exec web npx prisma migrate dev --name <descriptive_name>
+```
+
+### Boot (native host — optional, faster HMR on Windows)
+
+If file-watching feels sluggish in Docker on Windows/WSL2:
+
+```bash
+npm install
+docker compose up -d postgres redis
+npm run db:migrate -- --name init
+npm run dev
+```
 
 > **OneDrive note:** This repo lives under a OneDrive-synced folder on Windows.
-> If you see file-lock or sync-conflict errors, pause OneDrive sync for the
-> repo folder during development (right-click the folder → Free Up Space /
-> Pause syncing).
+> If you see file-lock or sync-conflict errors during native-host dev, pause
+> OneDrive sync for the repo folder (right-click → Free Up Space / Pause
+> syncing).
 
 ### Common scripts
 
