@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { masterKey, CIPHER_VERSION } from "@/server/crypto/key-source";
+import { getMasterKey, CIPHER_VERSION } from "@/server/crypto/key-source";
 
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12; // 96-bit IV recommended for GCM
@@ -22,7 +22,7 @@ export function encryptToken(plaintext: string | null | undefined): string | nul
   if (plaintext == null) return null;
 
   const iv = randomBytes(IV_LEN);
-  const cipher = createCipheriv(ALGO, masterKey, iv);
+  const cipher = createCipheriv(ALGO, getMasterKey(), iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
 
@@ -57,7 +57,7 @@ export function decryptToken(ciphertext: string | null | undefined): string | nu
   const tag = envelope.subarray(1 + IV_LEN, 1 + IV_LEN + TAG_LEN);
   const ct = envelope.subarray(1 + IV_LEN + TAG_LEN);
 
-  const decipher = createDecipheriv(ALGO, masterKey, iv);
+  const decipher = createDecipheriv(ALGO, getMasterKey(), iv);
   decipher.setAuthTag(tag);
 
   const plaintext = Buffer.concat([decipher.update(ct), decipher.final()]);

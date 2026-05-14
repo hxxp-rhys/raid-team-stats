@@ -8,20 +8,30 @@ import { env } from "@/env";
  * Format: TOKEN_ENCRYPTION_KEY is a base64-encoded 32-byte (256-bit) value.
  * Generate via `openssl rand -base64 32`.
  *
- * The key is loaded once at module import. Rotation requires a re-encryption
- * pass over every Account row (Phase 2.x — operational procedure documented in
- * SECURITY.md when the rotation script lands).
+ * Loaded lazily on first use so that build-time module evaluation under
+ * SKIP_ENV_VALIDATION=1 (Docker build) does not crash when the env var is
+ * absent. Cached after the first successful decode. Rotation requires a
+ * re-encryption pass over every Account row.
  */
-const decoded = Buffer.from(env.TOKEN_ENCRYPTION_KEY, "base64");
+let cached: Buffer | null = null;
 
-if (decoded.length !== 32) {
-  throw new Error(
-    `TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decoded.length}). ` +
-      `Generate with: openssl rand -base64 32`,
-  );
+export function getMasterKey(): Buffer {
+  if (cached) return cached;
+  if (!env.TOKEN_ENCRYPTION_KEY) {
+    throw new Error(
+      "TOKEN_ENCRYPTION_KEY is not set. Generate with: openssl rand -base64 32",
+    );
+  }
+  const decoded = Buffer.from(env.TOKEN_ENCRYPTION_KEY, "base64");
+  if (decoded.length !== 32) {
+    throw new Error(
+      `TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decoded.length}). ` +
+        `Generate with: openssl rand -base64 32`,
+    );
+  }
+  cached = decoded;
+  return cached;
 }
-
-export const masterKey: Buffer = decoded;
 
 /**
  * Version byte for the cipher envelope. Bumping this signals a key/algorithm
