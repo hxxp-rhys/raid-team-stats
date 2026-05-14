@@ -15,10 +15,23 @@ import {
   handleManualRosterRefresh,
   type ManualRosterRefreshPayload,
 } from "@/server/ingestion/jobs/manual-roster-refresh";
+import {
+  handleTrackedMemberSync,
+  enqueueTrackedMemberSyncForAll,
+  type TrackedMemberSyncPayload,
+} from "@/server/ingestion/jobs/tracked-member-sync";
+import {
+  handleGuildRosterSync,
+  enqueueGuildRosterSyncForAllGuilds,
+  type GuildRosterSyncPayload,
+} from "@/server/ingestion/jobs/guild-roster-sync";
+import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
 const workers: Worker[] = [];
 
-const start = () => {
+type FanoutPayload = { kind?: string };
+
+const start = async () => {
   logger.info({}, "BullMQ worker process starting");
 
   workers.push(
@@ -37,8 +50,55 @@ const start = () => {
     }),
   );
 
-  // Tier A (hourly tracked) and Tier B (weekly guild roster) workers
-  // register here in subsequent phases.
+  // Tier A — fan-out job + per-character jobs share the same queue.
+  workers.push(
+    new Worker<TrackedMemberSyncPayload | FanoutPayload>(
+      QUEUE_NAMES.trackedMemberSync,
+      async (job) => {
+        if ((job.data as FanoutPayload).kind === FANOUT_KIND.tierA) {
+          const r = await enqueueTrackedMemberSyncForAll();
+          logger.info({ enqueued: r.enqueued }, "tier-a fanout queued");
+          return;
+        }
+        await handleTrackedMemberSync(job.data as TrackedMemberSyncPayload);
+      },
+      {
+        connection: redisBlocking,
+        concurrency: 8,
+      },
+    ).on("failed", (job, err) => {
+      logger.error(
+        { jobId: job?.id, attemptsMade: job?.attemptsMade, err },
+        "tier-a job failed",
+      );
+    }),
+  );
+
+  // Tier B — fan-out job + per-guild jobs share the same queue.
+  workers.push(
+    new Worker<GuildRosterSyncPayload | FanoutPayload>(
+      QUEUE_NAMES.guildRosterSync,
+      async (job) => {
+        if ((job.data as FanoutPayload).kind === FANOUT_KIND.tierB) {
+          const r = await enqueueGuildRosterSyncForAllGuilds();
+          logger.info({ enqueued: r.enqueued }, "tier-b fanout queued");
+          return;
+        }
+        await handleGuildRosterSync(job.data as GuildRosterSyncPayload);
+      },
+      {
+        connection: redisBlocking,
+        concurrency: 4,
+      },
+    ).on("failed", (job, err) => {
+      logger.error(
+        { jobId: job?.id, attemptsMade: job?.attemptsMade, err },
+        "tier-b job failed",
+      );
+    }),
+  );
+
+  await registerSchedules();
 
   logger.info({ queues: workers.map((w) => w.name) }, "BullMQ workers online");
 };
@@ -52,4 +112,4 @@ const shutdown = async () => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-start();
+void start();

@@ -16,6 +16,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+import { WowauditConfigCard } from "./wowaudit-config";
+
 type Params = Promise<{ guildId: string }>;
 
 export default function GuildDetailPage({ params }: { params: Params }) {
@@ -184,7 +186,7 @@ export default function GuildDetailPage({ params }: { params: Params }) {
           {isStaff && (
             <form
               onSubmit={onCreateTeam}
-              className="border-border space-y-3 rounded-md border p-3"
+              className="space-y-3 rounded-md border border-border p-3"
             >
               <div className="space-y-2">
                 <Label htmlFor="teamName">Create a raid team</Label>
@@ -214,6 +216,8 @@ export default function GuildDetailPage({ params }: { params: Params }) {
           )}
         </CardContent>
       </Card>
+
+      <WowauditConfigCard guildId={guildId} canEdit={isStaff} />
     </main>
   );
 }
