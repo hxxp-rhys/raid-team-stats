@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import type { Route } from "next";
 
 import { Button } from "@/components/ui/button";
@@ -24,22 +24,24 @@ const KNOWN_SAFE_ERRORS = new Set([
   "Authenticator code is incorrect or expired.",
 ]);
 
-// useSearchParams() in Next 16 + cacheComponents requires a Suspense
-// boundary above the call site, otherwise the static prerender bails and
-// the page never hydrates. Split the search-param-reading body into an
-// inner component wrapped in Suspense at the page export.
+// Read `?callbackUrl=` from window.location after hydration. Using
+// `useSearchParams()` on a `/signin` page that's served as static HTML
+// under Next 16 + cacheComponents leaves the inner Suspense waiting
+// forever — there's no per-request server step to unblock it. Reading
+// the URL client-side sidesteps the suspension entirely.
 export default function SignInPage() {
-  return (
-    <Suspense fallback={null}>
-      <SignInInner />
-    </Suspense>
-  );
-}
-
-function SignInInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") ?? "/profile";
+  // useState's lazy initializer runs once at mount; on the server it sees
+  // no window so falls through to "/profile", on the client it picks up
+  // the search param. This avoids both `useSearchParams()` Suspense
+  // weirdness on a statically-served route AND the `set-state-in-effect`
+  // lint rule.
+  const [callbackUrl] = useState<string>(() => {
+    if (typeof window === "undefined") return "/profile";
+    return (
+      new URLSearchParams(window.location.search).get("callbackUrl") ?? "/profile"
+    );
+  });
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
