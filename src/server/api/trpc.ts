@@ -109,3 +109,110 @@ export const protectedProcedure = publicProcedure.use(async ({ ctx, next }) => {
     },
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Authorization helpers — called from procedure resolvers once the input has
+// been validated. Using helpers rather than middleware factories keeps the
+// procedure builder generic over input shape.
+//
+// Both helpers throw with NOT_FOUND when the membership doesn't exist (rather
+// than FORBIDDEN), to avoid leaking the existence of guilds / teams to non-
+// members.
+// ────────────────────────────────────────────────────────────────────────────
+
+const guildRoleRank: Record<string, number> = {
+  PENDING: 0,
+  MEMBER: 1,
+  OFFICER: 2,
+  OWNER: 3,
+};
+
+const raidTeamRoleRank: Record<string, number> = {
+  MEMBER: 0,
+  CO_LEADER: 1,
+  LEADER: 2,
+};
+
+export type GuildRole = "PENDING" | "MEMBER" | "OFFICER" | "OWNER";
+export type RaidTeamRole = "MEMBER" | "CO_LEADER" | "LEADER";
+
+/**
+ * Verifies the caller has at least `minRole` in the guild and the membership
+ * status is ACTIVE. Throws NOT_FOUND on missing/inactive, FORBIDDEN on
+ * insufficient role.
+ */
+export async function assertGuildRole(
+  ctx: TrpcContext,
+  guildId: string,
+  minRole: GuildRole,
+): Promise<void> {
+  if (!ctx.session?.user?.id) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  const membership = await ctx.db.guildMembership.findUnique({
+    where: { userId_guildId: { userId: ctx.session.user.id, guildId } },
+    select: { role: true, status: true },
+  });
+  if (!membership || membership.status !== "ACTIVE") {
+    throw new TRPCError({ code: "NOT_FOUND" });
+  }
+  if ((guildRoleRank[membership.role] ?? -1) < guildRoleRank[minRole]!) {
+    throw new TRPCError({ code: "FORBIDDEN" });
+  }
+}
+
+/**
+ * Verifies the caller can act on the raid team at the given role. A guild
+ * OWNER/OFFICER overrides any raid-team-level role requirement (oversight
+ * authority). Throws NOT_FOUND for non-members.
+ */
+export async function assertRaidTeamRole(
+  ctx: TrpcContext,
+  raidTeamId: string,
+  minRole: RaidTeamRole,
+): Promise<{ guildId: string }> {
+  if (!ctx.session?.user?.id) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+
+  const team = await ctx.db.raidTeam.findUnique({
+    where: { id: raidTeamId },
+    select: { id: true, guildId: true },
+  });
+  if (!team) {
+    throw new TRPCError({ code: "NOT_FOUND" });
+  }
+
+  // Guild OWNER/OFFICER override.
+  const guildMembership = await ctx.db.guildMembership.findUnique({
+    where: {
+      userId_guildId: { userId: ctx.session.user.id, guildId: team.guildId },
+    },
+    select: { role: true, status: true },
+  });
+  if (
+    guildMembership?.status === "ACTIVE" &&
+    (guildMembership.role === "OWNER" || guildMembership.role === "OFFICER")
+  ) {
+    return { guildId: team.guildId };
+  }
+
+  // Otherwise require team-level membership at >= minRole.
+  const teamMembership = await ctx.db.raidTeamMembership.findFirst({
+    where: {
+      raidTeamId,
+      isActive: true,
+      character: { userId: ctx.session.user.id },
+    },
+    select: { role: true },
+  });
+  if (!teamMembership) {
+    throw new TRPCError({ code: "NOT_FOUND" });
+  }
+  if (
+    (raidTeamRoleRank[teamMembership.role] ?? -1) < raidTeamRoleRank[minRole]!
+  ) {
+    throw new TRPCError({ code: "FORBIDDEN" });
+  }
+  return { guildId: team.guildId };
+}

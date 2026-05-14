@@ -46,10 +46,24 @@ export const env = createEnv({
     BLIZZARD_CLIENT_ID: requiredInProd(z.string().min(1)),
     BLIZZARD_CLIENT_SECRET: requiredInProd(z.string().min(1)),
     BLIZZARD_REGION: z.enum(["us", "eu", "kr", "tw"]).default("us"),
+    // Custom OAuth redirect URI registered with the Battle.net developer
+    // console. Defaults to the localhost dev path; production should set this
+    // to the public URL (e.g. https://raider.hxxp.io/bnet-login-callback).
+    BATTLENET_REDIRECT_URI: z
+      .string()
+      .url()
+      .default("http://localhost:3000/bnet-login-callback"),
 
     WCL_CLIENT_ID: requiredInProd(z.string().min(1)),
     WCL_CLIENT_SECRET: requiredInProd(z.string().min(1)),
     WCL_HOURLY_POINTS_BUDGET: z.coerce.number().int().positive().default(17000),
+    // Custom OAuth redirect URI registered with the Warcraft Logs API. Reserved
+    // for the user-link WCL flow shipped in v1.1; v1 uses client-credentials
+    // only and does not actually exercise this URL yet.
+    WCL_REDIRECT_URI: z
+      .string()
+      .url()
+      .default("http://localhost:3000/wcl-callback"),
 
     RAIDERIO_API_KEY: z.string().optional(),
 
@@ -90,9 +104,11 @@ export const env = createEnv({
     BLIZZARD_CLIENT_ID: process.env.BLIZZARD_CLIENT_ID,
     BLIZZARD_CLIENT_SECRET: process.env.BLIZZARD_CLIENT_SECRET,
     BLIZZARD_REGION: process.env.BLIZZARD_REGION,
+    BATTLENET_REDIRECT_URI: process.env.BATTLENET_REDIRECT_URI,
     WCL_CLIENT_ID: process.env.WCL_CLIENT_ID,
     WCL_CLIENT_SECRET: process.env.WCL_CLIENT_SECRET,
     WCL_HOURLY_POINTS_BUDGET: process.env.WCL_HOURLY_POINTS_BUDGET,
+    WCL_REDIRECT_URI: process.env.WCL_REDIRECT_URI,
     RAIDERIO_API_KEY: process.env.RAIDERIO_API_KEY,
     SMTP_HOST: process.env.SMTP_HOST,
     SMTP_PORT: process.env.SMTP_PORT,

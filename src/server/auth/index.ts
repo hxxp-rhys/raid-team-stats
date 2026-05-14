@@ -150,6 +150,10 @@ const config: NextAuthConfig = {
       authorization: {
         params: {
           scope: "openid wow.profile",
+          // Override Auth.js's auto-generated redirect URI so it matches the
+          // value registered with Battle.net. The actual handler lives at
+          // `/bnet-login-callback` and proxies into Auth.js's catch-all.
+          redirect_uri: env.BATTLENET_REDIRECT_URI,
         },
       },
     }),

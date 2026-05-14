@@ -32,6 +32,13 @@ model User {
   credential     Credential?
   mfaSecret      MfaSecret?
   auditLogsActor AuditLog[]  @relation("AuditLogActor")
+
+  characters          Character[]
+  guildMemberships    GuildMembership[]
+  membershipApprovals GuildMembership[]    @relation("GuildMembershipApprover")
+  guildsClaimed       Guild[]              @relation("GuildClaimedBy")
+  raidTeamsLed        RaidTeam[]           @relation("RaidTeamLeader")
+  raidTeamAdditions   RaidTeamMembership[] @relation("RaidTeamMemberAddedBy")
 }
 
 model Account {
@@ -148,4 +155,187 @@ model AuditLog {
   @@index([event, createdAt])
   @@index([actorUserId, createdAt])
   @@index([subjectType, subjectId, createdAt])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Phase 3 — guilds, characters, raid teams.
+//
+// A `Guild` is uniquely identified by (region, realmSlug, guildSlug, faction).
+// Never key by name alone — multiple guilds across realms/factions share names.
+//
+// Each Battle.net-linked `Character` belongs to one `User` (the BattleTag
+// owner). Guild membership is materialised as `GuildCharacterLink` (per-
+// character history) plus `GuildMembership` (per-user role).
+//
+// `RaidTeam` is a subset of a guild's members — the actual raid roster the
+// raid leader curates. Stat dashboards (Phase 5) belong to raid teams.
+// ──────────────────────────────────────────────────────────────────────────────
+
+enum Region {
+  US
+  EU
+  KR
+  TW
+}
+
+enum Faction {
+  ALLIANCE
+  HORDE
+  NEUTRAL
+}
+
+enum GuildClaimStatus {
+  UNCLAIMED
+  GM_CLAIMED
+  ADMIN_CLAIMED
+}
+
+enum GuildMemberRole {
+  OWNER
+  OFFICER
+  MEMBER
+  PENDING
+}
+
+enum GuildMembershipStatus {
+  ACTIVE
+  PENDING
+  DEPARTED
+}
+
+enum GuildCharacterLinkStatus {
+  ACTIVE
+  DEPARTED
+}
+
+enum RaidTeamVisibility {
+  TEAM
+  GUILD
+  LINK
+}
+
+enum RaidTeamMemberRole {
+  LEADER
+  CO_LEADER
+  MEMBER
+}
+
+model Character {
+  id                  String   @id @default(cuid())
+  userId              String
+  blizzardCharacterId BigInt   @unique
+  region              Region
+  realmSlug           String
+  name                String
+  classId             Int?
+  race                String?
+  faction             Faction
+  level               Int?
+  lastSyncedAt        DateTime @default(now())
+  createdAt           DateTime @default(now())
+
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guildLinks      GuildCharacterLink[]
+  raidMemberships RaidTeamMembership[]
+
+  @@unique([region, realmSlug, name])
+  @@index([userId])
+}
+
+model Guild {
+  id              String           @id @default(cuid())
+  region          Region
+  realmSlug       String
+  guildSlug       String
+  name            String
+  faction         Faction
+  claimStatus     GuildClaimStatus @default(UNCLAIMED)
+  claimedByUserId String?
+  claimedAt       DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  claimedBy      User?                @relation("GuildClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+  memberships    GuildMembership[]
+  characterLinks GuildCharacterLink[]
+  raidTeams      RaidTeam[]
+
+  @@unique([region, realmSlug, guildSlug, faction])
+  @@index([claimStatus])
+}
+
+model GuildMembership {
+  id               String                @id @default(cuid())
+  userId           String
+  guildId          String
+  role             GuildMemberRole       @default(MEMBER)
+  status           GuildMembershipStatus @default(PENDING)
+  joinedAt         DateTime              @default(now())
+  approvedAt       DateTime?
+  approvedByUserId String?
+  departedAt       DateTime?
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guild      Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  approvedBy User? @relation("GuildMembershipApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, guildId])
+  @@index([guildId, status])
+}
+
+model GuildCharacterLink {
+  id                  String                   @id @default(cuid())
+  characterId         String
+  guildId             String
+  rosterRank          Int?
+  firstSeenAt         DateTime                 @default(now())
+  lastSeenAt          DateTime                 @default(now())
+  status              GuildCharacterLinkStatus @default(ACTIVE)
+  consecutiveAbsences Int                      @default(0)
+  rejoinedAt          DateTime?
+  departedAt          DateTime?
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  guild     Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, guildId])
+  @@index([guildId, status])
+}
+
+model RaidTeam {
+  id           String             @id @default(cuid())
+  guildId      String
+  name         String
+  slug         String
+  leaderUserId String
+  visibility   RaidTeamVisibility @default(TEAM)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  guild       Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  leader      User                 @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: Restrict)
+  memberships RaidTeamMembership[]
+
+  @@unique([guildId, slug])
+  @@index([leaderUserId])
+}
+
+model RaidTeamMembership {
+  id            String             @id @default(cuid())
+  raidTeamId    String
+  characterId   String
+  role          RaidTeamMemberRole @default(MEMBER)
+  addedAt       DateTime           @default(now())
+  addedByUserId String?
+  isActive      Boolean            @default(true)
+  removedAt     DateTime?
+  removalReason String?
+
+  raidTeam  RaidTeam  @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  addedBy   User?     @relation("RaidTeamMemberAddedBy", fields: [addedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([raidTeamId, characterId])
+  @@index([characterId, isActive])
+  @@index([raidTeamId, isActive])
 }
