@@ -88,6 +88,25 @@ services:
       start_period: 90s
       retries: 6
 
+  # TLS terminator for local dev. Hits the same `web` service on 3000 but adds
+  # an HTTPS entrypoint at https://localhost:8443 using the bind-mounted
+  # Cloudflare Origin cert in ./certs/ (gitignored). The plain-HTTP web port
+  # 3000 stays available for tooling that needs unencrypted hot reload.
+  caddy:
+    image: caddy:2-alpine
+    container_name: rts-caddy
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - rts-caddy-data:/data
+      - rts-caddy-config:/config
+    ports:
+      - "127.0.0.1:8443:443"
+    depends_on:
+      web:
+        condition: service_started
+
   worker:
     build:
       context: .
@@ -193,3 +212,5 @@ volumes:
   rts-loki:
   rts-promtail-positions:
   rts-grafana:
+  rts-caddy-data:
+  rts-caddy-config:
