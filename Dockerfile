@@ -6,7 +6,10 @@ FROM node:22-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache libc6-compat python3 make g++
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+# --ignore-scripts skips the `postinstall: prisma generate` hook here
+# (the schema isn't copied yet). The build stage runs prisma generate
+# explicitly once the full source tree is in place.
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --no-audit --no-fund
 
 # ─── build ────────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS build

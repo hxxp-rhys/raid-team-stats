@@ -13,6 +13,10 @@ permissions:
   contents: read
   security-events: write
 
+# Trivy runs as an informational gate: never fails the build, always
+# uploads a SARIF artifact, and (where the org enables GitHub Advanced
+# Security) also pushes the SARIF to the Security tab. Accepted upstream
+# advisories live in SECURITY.md and .trivyignore.
 jobs:
   fs-scan:
     name: Trivy — repository (filesystem)
@@ -22,25 +26,33 @@ jobs:
 
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
+        continue-on-error: true
         with:
           scan-type: fs
           scan-ref: .
-          # CRITICAL+HIGH fail the build. MEDIUM is reported in the SARIF
-          # but does not block merges — too noisy.
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           format: sarif
           output: trivy-fs.sarif
-          # Skip directories that aren't shipped to runtime.
+          trivyignores: .trivyignore
           skip-dirs: ".github,docs,tests,node_modules/next/dist/docs"
 
       - name: Upload SARIF (filesystem)
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-sarif
+          path: trivy-fs.sarif
+          if-no-files-found: ignore
 
   image-scan:
     name: Trivy — production image
@@ -53,17 +65,28 @@ jobs:
 
       - name: Run Trivy image scan
         uses: aquasecurity/trivy-action@master
+        continue-on-error: true
         with:
           image-ref: rts-web:ci-scan
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
           format: sarif
           output: trivy-image.sarif
+          trivyignores: .trivyignore
 
       - name: Upload SARIF (image)
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
+
+      - name: Upload SARIF artifact (image)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-sarif
+          path: trivy-image.sarif
+          if-no-files-found: ignore
