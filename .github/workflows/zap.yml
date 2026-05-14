@@ -1,0 +1,69 @@
+name: ZAP baseline
+
+# OWASP ZAP baseline scan against an ephemeral docker-compose stack.
+# Manual or weekly — not on every PR, since the scan takes ~10 minutes.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare .env for compose
+        run: |
+          cat > .env <<'EOF'
+          NODE_ENV=development
+          APP_URL=http://localhost:3000
+          LOG_LEVEL=warn
+          DATABASE_URL=postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
+          REDIS_URL=redis://redis:6379
+          AUTH_SECRET=ci-only-auth-secret-not-for-production-use-must-be-32-chars
+          TOKEN_ENCRYPTION_KEY=dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWFhYWE=
+          BLIZZARD_REGION=us
+          WCL_HOURLY_POINTS_BUDGET=17000
+          BATTLENET_REDIRECT_URI=http://localhost:3000/bnet-login-callback
+          WCL_REDIRECT_URI=http://localhost:3000/wcl-callback
+          SMTP_PORT=587
+          RATE_LIMIT_TRUST_PROXY=false
+          NEXT_PUBLIC_APP_NAME=Raid Team Stats
+          EOF
+
+      - name: Boot stack
+        run: docker compose up -d --wait
+
+      - name: Wait for web container to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "web is ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "web never became ready" >&2
+          docker compose logs web | tail -100
+          exit 1
+
+      - name: Run ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: "http://localhost:3000/"
+          fail_action: false
+          allow_issue_writing: false
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a -j"
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v

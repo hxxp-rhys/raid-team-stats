@@ -1,0 +1,17 @@
+# ZAP baseline rule overrides.
+#
+# Format: <ruleId>\tIGNORE|WARN|FAIL\t<comment>
+#
+# Default is WARN. Use IGNORE for findings we've explicitly accepted (with a
+# justification in the comment), and FAIL for hard-stop violations we never
+# want to ship past.
+
+# ZAP flags "Modern Web Application" + "Modern Web Application Detected" on
+# nearly every Next.js app; not actionable.
+10109	IGNORE	Modern Web Application detection — not a vulnerability
+
+# Cookie loose-mode warnings are expected on the Auth.js __Secure- cookies
+# under HTTP (the proxy makes them Secure on HTTPS only). Re-evaluate under
+# the prod compose.
+10042	IGNORE	Cookie is not Secure during HTTP-only baseline (CI runs no TLS)
+10054	IGNORE	Cookie Without Secure Flag — same justification

@@ -92,3 +92,109 @@ jobs:
       - name: npm audit (production)
         run: npm audit --omit=dev --audit-level=high
         continue-on-error: true
+
+  e2e:
+    name: Playwright E2E smoke
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raid_team_stats
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: raid_team_stats
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U raid_team_stats -d raid_team_stats"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    env:
+      NODE_ENV: production
+      APP_URL: http://localhost:3000
+      LOG_LEVEL: warn
+      DATABASE_URL: postgresql://raid_team_stats:ci_password@localhost:5432/raid_team_stats?schema=public
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: Y2ktb25seS1hdXRoLXNlY3JldC1ub3QtZm9yLXByb2R1Y3Rpb24tdXNlLTEyMzQ1
+      TOKEN_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWFhYWE=
+      BLIZZARD_CLIENT_ID: ci-noop
+      BLIZZARD_CLIENT_SECRET: ci-noop
+      BLIZZARD_REGION: us
+      BATTLENET_REDIRECT_URI: http://localhost:3000/bnet-login-callback
+      WCL_CLIENT_ID: ci-noop
+      WCL_CLIENT_SECRET: ci-noop
+      WCL_HOURLY_POINTS_BUDGET: 17000
+      WCL_REDIRECT_URI: http://localhost:3000/wcl-callback
+      SMTP_HOST: example.invalid
+      SMTP_PORT: 587
+      SMTP_USER: ci@example.invalid
+      SMTP_PASSWORD: ci-noop
+      SMTP_FROM: ci@example.invalid
+      RATE_LIMIT_TRUST_PROXY: "false"
+      NEXT_PUBLIC_APP_NAME: Raid Team Stats
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Build app
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+          SKIP_ENV_VALIDATION: "1"
+
+      - name: Start app
+        run: |
+          npm run start > app.log 2>&1 &
+          for i in {1..40}; do
+            curl -fsS http://localhost:3000/api/health && break
+            sleep 1
+          done
+
+      - name: Playwright smoke
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          if-no-files-found: ignore
+
+      - name: Upload app log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-log
+          path: app.log
+          if-no-files-found: ignore

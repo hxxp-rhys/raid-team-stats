@@ -4,6 +4,21 @@ import { Suspense, use, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +38,7 @@ import {
   type WidgetInstance,
   type WidgetType,
 } from "@/lib/widgets/types";
-import { WidgetRender } from "@/components/widgets";
+import { SortableWidget } from "./sortable-widget";
 
 type Params = Promise<{ guildId: string; teamId: string; dashboardId: string }>;
 
@@ -76,15 +91,20 @@ function Inner({ params }: { params: Params }) {
     setLayout((l) => ({ widgets: l.widgets.filter((w) => w.id !== id) }));
     setDirty(true);
   };
-  const move = (id: string, delta: -1 | 1) => {
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const onDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
     setLayout((l) => {
-      const idx = l.widgets.findIndex((w) => w.id === id);
-      const target = idx + delta;
-      if (idx < 0 || target < 0 || target >= l.widgets.length) return l;
-      const next = [...l.widgets];
-      const [item] = next.splice(idx, 1);
-      next.splice(target, 0, item!);
-      return { widgets: next };
+      const oldIndex = l.widgets.findIndex((w) => w.id === active.id);
+      const newIndex = l.widgets.findIndex((w) => w.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return l;
+      return { widgets: arrayMove(l.widgets, oldIndex, newIndex) };
     });
     setDirty(true);
   };
@@ -165,8 +185,8 @@ function Inner({ params }: { params: Params }) {
         <CardHeader>
           <CardTitle>Add a widget</CardTitle>
           <CardDescription>
-            Each widget reads from the team&apos;s latest snapshot data. Re-order
-            with the arrows once added.
+            Each widget reads from the team&apos;s latest snapshot data. Drag
+            widgets in the list below to reorder.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -202,43 +222,28 @@ function Inner({ params }: { params: Params }) {
             No widgets yet. Pick one from the palette above.
           </p>
         ) : (
-          <ul className="space-y-3">
-            {layout.widgets.map((w, i) => (
-              <li key={w.id} className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground text-xs">
-                    {i + 1}. {WIDGET_META[w.type].title}
-                  </span>
-                  <div className="flex gap-1">
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => move(w.id, -1)}
-                      disabled={i === 0}
-                    >
-                      ↑
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() => move(w.id, 1)}
-                      disabled={i === layout.widgets.length - 1}
-                    >
-                      ↓
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="destructive"
-                      onClick={() => removeWidget(w.id)}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                </div>
-                <WidgetRender instance={w} raidTeamId={teamId} />
-              </li>
-            ))}
-          </ul>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={layout.widgets.map((w) => w.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ul className="space-y-3">
+                {layout.widgets.map((w, i) => (
+                  <SortableWidget
+                    key={w.id}
+                    widget={w}
+                    raidTeamId={teamId}
+                    index={i}
+                    onRemove={removeWidget}
+                  />
+                ))}
+              </ul>
+            </SortableContext>
+          </DndContext>
         )}
       </section>
     </main>

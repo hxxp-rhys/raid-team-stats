@@ -11,6 +11,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProfileActions } from "./actions";
+import { MfaCard } from "./mfa-card";
+import { DeleteAccountCard } from "./delete-account-card";
 
 export default async function ProfilePage() {
   const session = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
@@ -65,7 +67,7 @@ export default async function ProfilePage() {
             />
             <Row
               label="Two-factor auth"
-              value={user.mfaEnabled ? "Enabled" : "Disabled (coming soon)"}
+              value={user.mfaEnabled ? "Enabled" : "Disabled"}
             />
           </CardContent>
         </Card>
@@ -91,6 +93,10 @@ export default async function ProfilePage() {
         </Card>
 
         <ProfileActions battlenetLinked={battlenetLinked} />
+
+        <MfaCard />
+
+        <DeleteAccountCard />
       </div>
     </main>
   );

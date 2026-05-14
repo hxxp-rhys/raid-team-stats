@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 
-import { router, publicProcedure } from "@/server/api/trpc";
+import { router, publicProcedure, protectedProcedure } from "@/server/api/trpc";
 import {
   emailSchema,
   passwordSchema,
@@ -198,6 +198,68 @@ export const authRouter = router({
         userAgent: ctx.userAgent ?? undefined,
       });
 
+      return { ok: true };
+    }),
+
+  /**
+   * GDPR right-to-erasure. Requires the caller to confirm with their current
+   * password. Cascade-deletes the User row → Prisma onDelete handles auth
+   * tables, characters, snapshots, guild memberships, raid-team memberships,
+   * dashboards, and (via SetNull) the historical audit log. Raid-team
+   * leadership has onDelete: Restrict — the user must transfer those teams
+   * first, which we surface as a clean error.
+   */
+  deleteAccount: protectedProcedure
+    .input(z.object({ password: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const credential = await ctx.db.credential.findUnique({
+        where: { userId: ctx.session.user.id },
+        select: { passwordHash: true },
+      });
+      if (!credential) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This account has no password set. Reset your password first, then retry.",
+        });
+      }
+      const ok = await verifyPassword(credential.passwordHash, input.password);
+      if (!ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Password is incorrect.",
+        });
+      }
+
+      const blockingTeams = await ctx.db.raidTeam.findMany({
+        where: { leaderUserId: ctx.session.user.id },
+        select: { id: true, name: true },
+      });
+      if (blockingTeams.length > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            `You're still the leader of ${blockingTeams.length} raid team(s): ` +
+            blockingTeams.map((t) => t.name).join(", ") +
+            `. Transfer leadership before deleting your account.`,
+        });
+      }
+
+      const userId = ctx.session.user.id;
+
+      // Audit BEFORE the delete so the actor reference still resolves —
+      // the actor relation is SetNull, so post-delete rows just lose the
+      // pointer but the event survives.
+      await audit({
+        event: "USER_DELETED",
+        actorUserId: userId,
+        subjectType: "user",
+        subjectId: userId,
+        ip: ctx.ip ?? undefined,
+        userAgent: ctx.userAgent ?? undefined,
+      });
+
+      await ctx.db.user.delete({ where: { id: userId } });
       return { ok: true };
     }),
 });

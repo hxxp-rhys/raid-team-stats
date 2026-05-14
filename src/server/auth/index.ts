@@ -63,11 +63,16 @@ const config: NextAuthConfig = {
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        mfaCode: { label: "Authenticator code", type: "text" },
       },
       async authorize(rawCredentials) {
         const parsed = credentialsSchema.safeParse(rawCredentials);
         if (!parsed.success) return null;
         const { email, password } = parsed.data;
+        const mfaCode =
+          typeof rawCredentials?.mfaCode === "string"
+            ? rawCredentials.mfaCode
+            : "";
 
         const ip = await readClientIp();
         const throttle = await consumeLoginAttempt({ email, ip });
@@ -116,6 +121,30 @@ const config: NextAuthConfig = {
             ip: ip ?? undefined,
           });
           throw new Error("Please verify your email address before signing in.");
+        }
+
+        // MFA gate. If enabled, require a valid TOTP / recovery code before
+        // returning the user. The /signin client treats the "mfa_required"
+        // error as a signal to render the code-input step.
+        if (user.mfaEnabled) {
+          const { isMfaEnabled, verifyAnyMfaCode } = await import(
+            "@/server/auth/mfa"
+          );
+          if (await isMfaEnabled(user.id)) {
+            if (!mfaCode) {
+              throw new Error("mfa_required");
+            }
+            const mfaOk = await verifyAnyMfaCode(user.id, mfaCode);
+            if (!mfaOk) {
+              await audit({
+                event: "AUTH_LOGIN_FAILURE",
+                actorUserId: user.id,
+                metadata: { reason: "mfa_failed" },
+                ip: ip ?? undefined,
+              });
+              throw new Error("Authenticator code is incorrect or expired.");
+            }
+          }
         }
 
         // Opportunistically upgrade the hash if the Argon2 parameters changed.
