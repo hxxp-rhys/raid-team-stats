@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,7 +24,19 @@ const KNOWN_SAFE_ERRORS = new Set([
   "Authenticator code is incorrect or expired.",
 ]);
 
+// useSearchParams() in Next 16 + cacheComponents requires a Suspense
+// boundary above the call site, otherwise the static prerender bails and
+// the page never hydrates. Split the search-param-reading body into an
+// inner component wrapped in Suspense at the page export.
 export default function SignInPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignInInner />
+    </Suspense>
+  );
+}
+
+function SignInInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/profile";

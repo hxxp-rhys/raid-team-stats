@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { newCspNonce, CSP_NONCE_HEADER } from "@/server/security/csp";
+import { newCspNonce, CSP_NONCE_HEADER, buildCsp } from "@/server/security/csp";
 import { applySecurityHeaders } from "@/server/security/headers";
 import { consumeLimit, policies, ipKey } from "@/server/security/rate-limit";
 import { env } from "@/env";
@@ -50,6 +50,11 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   const forwardedHeaders = new Headers(request.headers);
   sanitizeProxyHeaders(request, forwardedHeaders);
   forwardedHeaders.set(CSP_NONCE_HEADER, nonce);
+  // Next 16 reads the Content-Security-Policy off the *request* headers to
+  // extract the nonce it tags onto its own bundle <script> tags. Without
+  // this, static prerender emits unnonced scripts that 'strict-dynamic'
+  // then blocks — hydration never happens and the page looks empty.
+  forwardedHeaders.set("Content-Security-Policy", buildCsp({ nonce, isDev }));
 
   const response = NextResponse.next({ request: { headers: forwardedHeaders } });
 
