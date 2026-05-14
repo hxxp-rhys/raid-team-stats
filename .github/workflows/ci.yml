@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raid_team_stats
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: raid_team_stats
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U raid_team_stats -d raid_team_stats"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    env:
+      NODE_ENV: test
+      APP_URL: http://localhost:3000
+      LOG_LEVEL: warn
+      DATABASE_URL: postgresql://raid_team_stats:ci_password@localhost:5432/raid_team_stats?schema=public
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: ci-only-auth-secret-not-for-production-use-must-be-32-chars
+      TOKEN_ENCRYPTION_KEY: ci-only-base64-encoded-32-byte-key-AAAAAAAAAAAAAAAAAAA=
+      BLIZZARD_REGION: us
+      WCL_HOURLY_POINTS_BUDGET: 17000
+      SMTP_PORT: 587
+      RATE_LIMIT_TRUST_PROXY: "false"
+      NEXT_PUBLIC_APP_NAME: Raid Team Stats
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test --if-present
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: npm audit (production)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true

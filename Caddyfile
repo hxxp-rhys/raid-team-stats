@@ -1,0 +1,38 @@
+# Caddy reverse proxy for production. Automatic TLS via Let's Encrypt when a real
+# domain is configured. Replace {$APP_HOST} via env at deploy time.
+
+{$APP_HOST} {
+	encode zstd gzip
+
+	# Belt-and-braces: the Next.js app already emits these, but the proxy
+	# layer is the authoritative perimeter.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	# Block dotfile access and well-known sensitive paths at the edge.
+	@dotfiles path_regexp \/\..*
+	respond @dotfiles 404
+
+	# Reverse proxy to the Next.js app container. Trust X-Forwarded-* only from
+	# this internal hop — set RATE_LIMIT_TRUST_PROXY=true in the app env.
+	reverse_proxy web:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto https
+	}
+
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}

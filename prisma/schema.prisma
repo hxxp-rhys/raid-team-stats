@@ -1,0 +1,151 @@
+// Prisma 7 schema for raid-team-stats.
+// Foundation tables only (Phase 1 + Phase 2 auth surface). Phase 3+ tables added later.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Auth.js v5 — Prisma adapter schema (User / Account / Session / VerificationToken)
+// access_token, refresh_token, id_token are encrypted at the application layer
+// before insert via a Prisma client extension. They remain TEXT here.
+// ──────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  displayName   String?
+  avatarUrl     String?
+  mfaEnabled    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  credential     Credential?
+  mfaSecret      MfaSecret?
+  auditLogsActor AuditLog[]  @relation("AuditLogActor")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Local credentials (password) and MFA. Kept separate from Auth.js Account model
+// so that OAuth-only or password-only users are both representable cleanly.
+// ──────────────────────────────────────────────────────────────────────────────
+
+model Credential {
+  userId        String    @id
+  passwordHash  String
+  lastChangedAt DateTime  @default(now())
+  failedLogins  Int       @default(0)
+  lockedUntil   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MfaSecret {
+  userId        String    @id
+  secret        String // AES-256-GCM ciphertext (TOTP secret)
+  recoveryCodes String[] // bcrypt-hashed recovery codes
+  enabledAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Audit log — append-only record of security-relevant events.
+// Never updated, never deleted (retention policy enforced by separate retention job).
+// ──────────────────────────────────────────────────────────────────────────────
+
+enum AuditEvent {
+  AUTH_LOGIN_SUCCESS
+  AUTH_LOGIN_FAILURE
+  AUTH_LOGOUT
+  AUTH_PASSWORD_CHANGE
+  AUTH_PASSWORD_RESET_REQUEST
+  AUTH_PASSWORD_RESET_COMPLETE
+  AUTH_MFA_ENABLED
+  AUTH_MFA_DISABLED
+  AUTH_BATTLENET_LINKED
+  AUTH_BATTLENET_UNLINKED
+  USER_CREATED
+  USER_DELETED
+  GUILD_CREATED
+  GUILD_CLAIMED
+  GUILD_ROLE_CHANGED
+  MEMBER_APPROVED
+  MEMBER_DEPARTED
+  RAID_TEAM_CREATED
+  RAID_TEAM_MEMBER_ADDED
+  RAID_TEAM_MEMBER_REMOVED
+  RAID_TEAM_LEADERSHIP_TRANSFERRED
+  DASHBOARD_EXPORTED
+  SYNC_TRIGGERED
+  SYNC_FAILED
+  RATE_LIMIT_EXCEEDED
+  AUTHZ_DENIED
+}
+
+model AuditLog {
+  id          BigInt     @id @default(autoincrement())
+  event       AuditEvent
+  actorUserId String?
+  subjectType String? // e.g. "user", "guild", "raidTeam", "character", "dashboard"
+  subjectId   String?
+  ipHash      String? // SHA-256 of (ip + daily salt) — never the raw IP
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime   @default(now())
+
+  actor User? @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([event, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([subjectType, subjectId, createdAt])
+}
