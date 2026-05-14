@@ -15,6 +15,7 @@ import { api } from "@/lib/trpc-client";
 import { parseLayout } from "@/lib/widgets/types";
 import { WidgetRender } from "@/components/widgets";
 import { ExportCsvButton } from "./export-button";
+import { ShareLinkButton } from "./share-button";
 
 type Params = Promise<{ guildId: string; teamId: string; dashboardId: string }>;
 
@@ -76,16 +77,19 @@ function Inner({ params }: { params: Params }) {
             {layout.widgets.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex items-start gap-2">
-          <ExportCsvButton dashboardId={dashboardId} />
-          <Link
-            href={
-              `/guild/${guildId}/team/${teamId}/dashboard/${dashboardId}/edit` as Route
-            }
-            className={buttonVariants({ size: "sm", variant: "outline" })}
-          >
-            Edit
-          </Link>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-start gap-2">
+            <ShareLinkButton dashboardId={dashboardId} />
+            <ExportCsvButton dashboardId={dashboardId} />
+            <Link
+              href={
+                `/guild/${guildId}/team/${teamId}/dashboard/${dashboardId}/edit` as Route
+              }
+              className={buttonVariants({ size: "sm", variant: "outline" })}
+            >
+              Edit
+            </Link>
+          </div>
         </div>
       </header>
 

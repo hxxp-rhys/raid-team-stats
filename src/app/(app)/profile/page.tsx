@@ -13,6 +13,7 @@ import {
 import { ProfileActions } from "./actions";
 import { MfaCard } from "./mfa-card";
 import { DeleteAccountCard } from "./delete-account-card";
+import { OwnerMfaWarning } from "./owner-mfa-warning";
 
 export default async function ProfilePage() {
   const session = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
@@ -53,6 +54,7 @@ export default async function ProfilePage() {
       </header>
 
       <div className="space-y-6">
+        <OwnerMfaWarning />
         <Card>
           <CardHeader>
             <CardTitle>Account</CardTitle>

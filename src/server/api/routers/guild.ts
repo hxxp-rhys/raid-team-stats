@@ -144,6 +144,10 @@ export const guildRouter = router({
    * Guild OWNER promotes / demotes another member (cannot change one's own
    * role; cannot demote the sole OWNER — handled by an explicit
    * transferOwnership endpoint in a follow-up).
+   *
+   * MFA-gated escalation: target users being promoted to OWNER must have
+   * `mfaEnabled` first. Officers can be elevated without MFA (lower blast
+   * radius); the policy can tighten later by changing the role threshold.
    */
   setMemberRole: protectedProcedure
     .input(
@@ -160,6 +164,19 @@ export const guildRouter = router({
           code: "BAD_REQUEST",
           message: "Use transferOwnership to demote yourself.",
         });
+      }
+      if (input.role === "OWNER") {
+        const target = await ctx.db.user.findUnique({
+          where: { id: input.userId },
+          select: { mfaEnabled: true, email: true },
+        });
+        if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+        if (!target.mfaEnabled) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `${target.email} must enable two-factor authentication before being promoted to OWNER.`,
+          });
+        }
       }
       await ctx.db.guildMembership.update({
         where: {

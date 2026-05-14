@@ -9,6 +9,8 @@ import {
 import { normalizeRaidTeamSlug } from "@/lib/realm";
 import { audit } from "@/server/security/audit";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
+import { createShareToken, verifyShareToken } from "@/server/security/share-token";
+import { env } from "@/env";
 
 /**
  * DashboardConfig CRUD. Only LEADER/CO_LEADER (or guild OWNER/OFFICER) may
@@ -161,6 +163,74 @@ export const dashboardRouter = router({
       await assertRaidTeamRole(ctx, dashboard.raidTeamId, "LEADER");
       await ctx.db.dashboardConfig.delete({ where: { id: input.dashboardId } });
       return { ok: true };
+    }),
+
+  /**
+   * Generates a short-lived shareable URL. Tokens are HMAC-signed against
+   * AUTH_SECRET; resolving still goes through `getByShareToken` which
+   * re-verifies guild membership at access time. Officer+ on the raid team
+   * may create.
+   */
+  createShareLink: protectedProcedure
+    .input(
+      z.object({
+        dashboardId: z.string().cuid(),
+        ttlDays: z.number().int().min(1).max(30).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: input.dashboardId },
+        select: { raidTeamId: true, name: true, slug: true },
+      });
+      if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, dashboard.raidTeamId, "CO_LEADER");
+
+      const { token, expiresAt } = createShareToken({
+        dashboardId: input.dashboardId,
+        raidTeamId: dashboard.raidTeamId,
+        ttlDays: input.ttlDays,
+      });
+      const baseUrl = env.APP_URL.replace(/\/$/, "");
+      const url = `${baseUrl}/share/${encodeURIComponent(token)}`;
+
+      await audit({
+        event: "DASHBOARD_EXPORTED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "dashboard",
+        subjectId: input.dashboardId,
+        metadata: { kind: "share_link_issued", expiresAt },
+      });
+
+      return { token, url, expiresAt };
+    }),
+
+  /**
+   * Resolves a share token to dashboard data. The caller still has to be an
+   * active guild member of the dashboard's raid team's guild — share tokens
+   * are a URL-routing capability, NOT a permission bypass.
+   */
+  getByShareToken: protectedProcedure
+    .input(z.object({ token: z.string().min(1).max(2048) }))
+    .query(async ({ ctx, input }) => {
+      const verified = verifyShareToken(input.token);
+      if (!verified) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Share link is invalid or has expired.",
+        });
+      }
+      // assertRaidTeamRole returns NOT_FOUND for non-members — desired here
+      // to avoid leaking the existence of the dashboard.
+      await assertRaidTeamRole(ctx, verified.raidTeamId, "MEMBER");
+
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: verified.dashboardId },
+      });
+      if (!dashboard || dashboard.raidTeamId !== verified.raidTeamId) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      return { dashboard, expiresAt: verified.expiresAt };
     }),
 
   /**
