@@ -1,8 +1,10 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
-const requiredInProd = (schema: z.ZodTypeAny) =>
-  process.env.NODE_ENV === "production" ? schema : schema.optional();
+const requiredInProd = <T extends z.ZodString>(schema: T) =>
+  (process.env.NODE_ENV === "production" ? schema : schema.optional()) as
+    | T
+    | z.ZodOptional<T>;
 
 export const env = createEnv({
   server: {
