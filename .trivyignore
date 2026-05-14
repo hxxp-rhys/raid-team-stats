@@ -1,0 +1,16 @@
+# Accepted upstream advisories — see SECURITY.md for the full rationale.
+# Each entry should be revisited on every dependency review.
+
+# nodemailer 7.x — SMTP command injection via envelope.size + CRLF in name.
+# We never expose these fields to user input; reassess when @auth/core pins
+# a patched version.
+CVE-2024-39008
+CVE-2025-XXX  # placeholder for the second nodemailer advisory once it has a CVE
+
+# postcss < 8.5.10 — XSS via unescaped </style> in CSS stringify. Build-time
+# only against our own CSS files. No fix without downgrading Next major.
+CVE-2024-XXX  # placeholder
+
+# @hono/node-server < 1.19.13 — middleware bypass via repeated slashes.
+# Transitive via @prisma/dev which we don't invoke.
+CVE-2024-XXX  # placeholder
