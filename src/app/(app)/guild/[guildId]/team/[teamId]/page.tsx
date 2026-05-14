@@ -56,19 +56,27 @@ export default function TeamDetailPage({ params }: { params: Params }) {
 
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-4 py-12">
-      <header>
+      <header className="flex items-baseline justify-between gap-4">
+        <div>
+          <Link
+            href={{ pathname: `/guild/${guildId}` }}
+            className="text-muted-foreground hover:text-foreground text-sm transition-colors"
+          >
+            ← {t.guild.name}
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">{t.name}</h1>
+          <p className="text-muted-foreground text-sm">
+            {t.memberships.length} active member
+            {t.memberships.length === 1 ? "" : "s"} · visibility{" "}
+            {t.visibility.toLowerCase()}
+          </p>
+        </div>
         <Link
-          href={{ pathname: `/guild/${guildId}` }}
-          className="text-muted-foreground hover:text-foreground text-sm transition-colors"
+          href={{ pathname: `/guild/${guildId}/team/${teamId}/dashboard` }}
+          className="text-primary text-sm underline-offset-4 hover:underline"
         >
-          ← {t.guild.name}
+          Dashboards →
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{t.name}</h1>
-        <p className="text-muted-foreground text-sm">
-          {t.memberships.length} active member
-          {t.memberships.length === 1 ? "" : "s"} · visibility{" "}
-          {t.visibility.toLowerCase()}
-        </p>
       </header>
 
       <Card>

@@ -46,10 +46,9 @@ export const snapshotRouter = router({
         return { members: [] as Array<{ character: never; latest: never }> };
       }
 
-      // Pull the latest CharacterSnapshot per character (BLIZZARD source).
-      // Postgres DISTINCT ON would be ideal here but Prisma doesn't expose it;
-      // a per-character query batched via Promise.all is acceptable for the
-      // 25-character raid scale we target.
+      // Pull the latest snapshot of each domain per character. Postgres
+      // DISTINCT ON would be ideal but Prisma doesn't expose it; a per-
+      // character batched query is acceptable for the 25-character raid scale.
       const latest = await Promise.all(
         characterIds.map((id) =>
           Promise.all([
@@ -71,6 +70,7 @@ export const snapshotRouter = router({
                 missingEnchantsCount: true,
                 missingGemsCount: true,
                 tierSetPiecesCount: true,
+                tierSetIds: true,
                 capturedAt: true,
               },
             }),
@@ -81,6 +81,40 @@ export const snapshotRouter = router({
                 seasonId: true,
                 currentRating: true,
                 weeklyHighest: true,
+                runsThisWeek: true,
+                capturedAt: true,
+              },
+            }),
+            ctx.db.vaultSnapshot.findFirst({
+              where: { characterId: id },
+              orderBy: { capturedAt: "desc" },
+              select: {
+                weekStart: true,
+                slots: true,
+                capturedAt: true,
+              },
+            }),
+            ctx.db.raidSnapshot.findFirst({
+              where: { characterId: id, source: "BLIZZARD" },
+              orderBy: { capturedAt: "desc" },
+              select: {
+                tierId: true,
+                expansionId: true,
+                completions: true,
+                capturedAt: true,
+              },
+            }),
+            ctx.db.wclParseSnapshot.findMany({
+              where: { characterId: id },
+              orderBy: { capturedAt: "desc" },
+              take: 12,
+              select: {
+                zoneId: true,
+                encounterId: true,
+                difficulty: true,
+                percentile: true,
+                metric: true,
+                reportCode: true,
                 capturedAt: true,
               },
             }),
@@ -96,8 +130,59 @@ export const snapshotRouter = router({
             character: latest[i]![0],
             equipment: latest[i]![1],
             mplus: latest[i]![2],
+            vault: latest[i]![3],
+            raid: latest[i]![4],
+            wclParses: latest[i]![5],
           },
         })),
+      };
+    }),
+
+  /**
+   * Returns the full iLvL history for a single character — used by the
+   * character-timeline widget. Caller must be a member (or guild staff) of
+   * a raid team the character is on.
+   */
+  characterTimeline: protectedProcedure
+    .input(
+      z.object({
+        characterId: z.string().cuid(),
+        days: z.number().int().min(7).max(180).default(60),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      // Authorize via team membership: any team the character is on grants
+      // access. assertRaidTeamRole on every team is overkill — we just check
+      // there's *some* shared team the caller can read.
+      const sharedMembership = await ctx.db.raidTeamMembership.findFirst({
+        where: {
+          characterId: input.characterId,
+          isActive: true,
+          raidTeam: {
+            OR: [
+              { memberships: { some: { character: { userId: ctx.session.user.id }, isActive: true } } },
+              { guild: { memberships: { some: { userId: ctx.session.user.id, status: "ACTIVE", role: { in: ["OWNER", "OFFICER"] } } } } },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      if (!sharedMembership) {
+        return { points: [] as Array<{ at: Date; itemLevel: number | null }> };
+      }
+
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+      const rows = await ctx.db.characterSnapshot.findMany({
+        where: {
+          characterId: input.characterId,
+          source: "BLIZZARD",
+          capturedAt: { gte: since },
+        },
+        orderBy: { capturedAt: "asc" },
+        select: { capturedAt: true, itemLevel: true },
+      });
+      return {
+        points: rows.map((r) => ({ at: r.capturedAt, itemLevel: r.itemLevel })),
       };
     }),
 });
