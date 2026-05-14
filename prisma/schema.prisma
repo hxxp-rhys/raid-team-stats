@@ -234,9 +234,15 @@ model Character {
   lastSyncedAt        DateTime @default(now())
   createdAt           DateTime @default(now())
 
-  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  guildLinks      GuildCharacterLink[]
-  raidMemberships RaidTeamMembership[]
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guildLinks         GuildCharacterLink[]
+  raidMemberships    RaidTeamMembership[]
+  characterSnapshots CharacterSnapshot[]
+  equipmentSnapshots EquipmentSnapshot[]
+  mplusSnapshots     MplusSnapshot[]
+  raidSnapshots      RaidSnapshot[]
+  vaultSnapshots     VaultSnapshot[]
+  wclParseSnapshots  WclParseSnapshot[]
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -254,6 +260,13 @@ model Guild {
   claimedAt       DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+
+  // WoW Audit integration. The API key is stored AES-256-GCM-encrypted via
+  // the token cipher (see src/server/ingestion/wowaudit/config.ts). Never
+  // returned to clients raw — only "configured? yes/no" + last-4 preview.
+  wowauditApiKey  String? @db.Text
+  wowauditTeamId  String?
+  wowauditBaseUrl String?
 
   claimedBy      User?                @relation("GuildClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
   memberships    GuildMembership[]
@@ -338,4 +351,157 @@ model RaidTeamMembership {
   @@unique([raidTeamId, characterId])
   @@index([characterId, isActive])
   @@index([raidTeamId, isActive])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Phase 4 — per-domain immutable snapshots.
+//
+// Each snapshot row is the canonical record of one observation from one
+// upstream source (Blizzard / Warcraft Logs / Raider.IO). `sourceHash` lets
+// the ingestion worker dedup re-runs that produce identical data. `rawPayload`
+// keeps the source JSON for replay when an upstream schema drifts.
+//
+// Indexes are tuned for the dashboard read pattern: "give me the latest N
+// rows for character X" via (characterId, capturedAt DESC).
+// ──────────────────────────────────────────────────────────────────────────────
+
+enum SnapshotSource {
+  BLIZZARD
+  WARCRAFT_LOGS
+  RAIDERIO
+  WOWAUDIT
+}
+
+model CharacterSnapshot {
+  id          String         @id @default(cuid())
+  characterId String
+  capturedAt  DateTime       @default(now())
+  source      SnapshotSource
+  sourceHash  String
+  itemLevel   Int?
+  level       Int?
+  specId      Int?
+  specName    String?
+  loadoutText String?
+  rawPayload  Json
+  createdAt   DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, capturedAt(sort: Desc)])
+  @@index([characterId, source, capturedAt(sort: Desc)])
+}
+
+model EquipmentSnapshot {
+  id                   String         @id @default(cuid())
+  characterId          String
+  capturedAt           DateTime       @default(now())
+  source               SnapshotSource
+  sourceHash           String
+  itemLevel            Int?
+  missingEnchantsCount Int?
+  missingGemsCount     Int?
+  tierSetPiecesCount   Int?
+  tierSetIds           Int[]          @default([])
+  items                Json
+  rawPayload           Json
+  createdAt            DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, capturedAt(sort: Desc)])
+}
+
+model MplusSnapshot {
+  id            String         @id @default(cuid())
+  characterId   String
+  capturedAt    DateTime       @default(now())
+  source        SnapshotSource
+  sourceHash    String
+  seasonId      Int
+  currentRating Decimal?       @db.Decimal(8, 2)
+  weeklyHighest Int?
+  runsThisWeek  Json
+  rawPayload    Json
+  createdAt     DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, capturedAt(sort: Desc)])
+  @@index([characterId, seasonId, capturedAt(sort: Desc)])
+}
+
+model RaidSnapshot {
+  id          String         @id @default(cuid())
+  characterId String
+  capturedAt  DateTime       @default(now())
+  source      SnapshotSource
+  sourceHash  String
+  expansionId Int?
+  tierId      Int?
+  completions Json
+  rawPayload  Json
+  createdAt   DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, capturedAt(sort: Desc)])
+}
+
+model VaultSnapshot {
+  id          String         @id @default(cuid())
+  characterId String
+  capturedAt  DateTime       @default(now())
+  source      SnapshotSource
+  sourceHash  String
+  weekStart   DateTime
+  slots       Json
+  rawPayload  Json
+  createdAt   DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, weekStart])
+  @@index([characterId, capturedAt(sort: Desc)])
+}
+
+model WclParseSnapshot {
+  id          String         @id @default(cuid())
+  characterId String
+  capturedAt  DateTime       @default(now())
+  source      SnapshotSource
+  sourceHash  String
+  zoneId      Int
+  encounterId Int
+  difficulty  Int
+  percentile  Int?
+  metric      String?
+  reportCode  String?
+  rawPayload  Json
+  createdAt   DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, encounterId, difficulty, capturedAt(sort: Desc)])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Phase 4 — ingestion bookkeeping. Tracks per-character sync timestamps and
+// per-source budget consumption for ops visibility.
+// ──────────────────────────────────────────────────────────────────────────────
+
+model SyncRun {
+  id           String         @id @default(cuid())
+  tier         String // "A" | "B" | "C"
+  source       SnapshotSource
+  guildId      String?
+  characterId  String?
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  ok           Boolean        @default(false)
+  errorMessage String?
+  metrics      Json?
+
+  @@index([tier, startedAt(sort: Desc)])
+  @@index([guildId, startedAt(sort: Desc)])
 }

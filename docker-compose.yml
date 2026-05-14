@@ -85,6 +85,32 @@ services:
       start_period: 90s
       retries: 6
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: raid-team-stats-web:dev
+    container_name: rts-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
+      REDIS_URL: redis://redis:6379
+    command: ["sh", "-c", "npx prisma generate && npx tsx src/server/ingestion/worker.ts"]
+    volumes:
+      - ./:/app
+      - rts-node-modules:/app/node_modules
+      - rts-prisma-client:/app/src/generated
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
+
 volumes:
   rts-pgdata:
   rts-redisdata:
