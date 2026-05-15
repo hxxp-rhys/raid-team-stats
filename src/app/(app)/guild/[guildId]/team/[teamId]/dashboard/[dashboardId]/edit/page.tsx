@@ -151,11 +151,10 @@ function Inner({ params }: { params: Params }) {
     ) {
       return;
     }
-    setLayout((l) => {
-      const idx = l.tabs.findIndex((t) => t.id === id);
-      const tabs = l.tabs.filter((t) => t.id !== id);
-      return { ...l, tabs };
-    });
+    setLayout((l) => ({
+      ...l,
+      tabs: l.tabs.filter((t) => t.id !== id),
+    }));
     if (activeTabId === id) {
       const fallback =
         layout.tabs.find((t) => t.id !== id)?.id ?? "overview";

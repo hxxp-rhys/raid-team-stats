@@ -38,6 +38,8 @@ export default function ShareViewPage({ params }: { params: Params }) {
 function Inner({ params }: { params: Params }) {
   const { token } = use(params);
   const q = api.dashboard.getByShareToken.useQuery({ token });
+  // Hooks must run on every render path — keep above early returns.
+  const [activeTabId, setActiveTabId] = useState<string>("overview");
 
   if (q.isPending) {
     return (
@@ -62,9 +64,6 @@ function Inner({ params }: { params: Params }) {
   const { dashboard, expiresAt } = q.data;
   const layout = parseLayout(dashboard.layout);
   const totalWidgets = layout.tabs.reduce((s, t) => s + t.widgets.length, 0);
-  const [activeTabId, setActiveTabId] = useState<string>(
-    layout.tabs[0]?.id ?? "overview",
-  );
   const activeTab =
     layout.tabs.find((t) => t.id === activeTabId) ?? layout.tabs[0];
   const expires = new Date(expiresAt);

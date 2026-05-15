@@ -37,6 +37,10 @@ function Inner({ params }: { params: Params }) {
   const { guildId, teamId, dashboardId } = use(params);
   const q = api.dashboard.get.useQuery({ dashboardId });
 
+  // Hook calls must run on every render — keep them ABOVE the early returns
+  // even though `activeTabId` is unused on the pending/error branches.
+  const [activeTabId, setActiveTabId] = useState<string>("overview");
+
   if (q.isPending) {
     return (
       <main className="mx-auto max-w-5xl px-4 py-12">
@@ -59,9 +63,6 @@ function Inner({ params }: { params: Params }) {
   const dashboard = q.data;
   const layout = parseLayout(dashboard.layout);
   const totalWidgets = layout.tabs.reduce((sum, t) => sum + t.widgets.length, 0);
-  const [activeTabId, setActiveTabId] = useState<string>(
-    layout.tabs[0]?.id ?? "overview",
-  );
   const activeTab =
     layout.tabs.find((t) => t.id === activeTabId) ?? layout.tabs[0];
 
