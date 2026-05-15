@@ -15,8 +15,14 @@ import {
   writeMplusSnapshot,
   writeRaidSnapshot,
   writeVaultSnapshot,
+  writeWclParseSnapshot,
   logSnapshotError,
 } from "@/server/ingestion/snapshots";
+import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
+import {
+  CHARACTER_ZONE_RANKINGS_QUERY,
+  characterZoneRankingsResponseSchema,
+} from "@/server/ingestion/warcraftlogs/queries";
 import type { Region } from "@/generated/prisma/enums";
 import { z } from "zod";
 
@@ -437,7 +443,63 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "vault", characterId: character.id });
   }
 
-  // Still deferred: WCL parses (separate GraphQL pipeline), Raider.IO.
+  // 6. Warcraft Logs parses. WCL's `characterData.character(...).zoneRankings`
+  //    returns a JSON scalar with per-encounter best-percentile data for the
+  //    requested zoneID. We pull best-DPS rankings for the current raid tier
+  //    and persist one WclParseSnapshot per (encounter, difficulty).
+  //
+  //    `WCL_RAID_ZONE_ID` overrides the default if set, otherwise we use the
+  //    most recently frozen Mythic raid tier (Manaforge Omega = zone 44) so
+  //    top-end raiders' historical parses still surface.
+  try {
+    const zoneID = Number(process.env.WCL_RAID_ZONE_ID ?? "44");
+    const wcl = warcraftLogsClient();
+    const rankings = await wcl.query({
+      query: CHARACTER_ZONE_RANKINGS_QUERY,
+      variables: {
+        name: character.name,
+        server: character.realmSlug,
+        region: regionToCode(character.region).toUpperCase(),
+        zoneID,
+        metric: "dps",
+      },
+      schema: characterZoneRankingsResponseSchema,
+      estimatedPoints: 5,
+    });
+
+    type RawRanking = {
+      encounter?: { id?: number };
+      rankPercent?: number | null;
+      bestPercent?: number | null;
+      report?: { code?: string | null } | null;
+      difficulty?: number;
+    };
+    const zr = rankings.characterData?.character?.zoneRankings as
+      | { rankings?: RawRanking[]; difficulty?: number }
+      | null
+      | undefined;
+    const list = zr?.rankings ?? [];
+    for (const r of list) {
+      if (!r.encounter?.id) continue;
+      const pct = r.rankPercent ?? r.bestPercent ?? null;
+      await writeWclParseSnapshot({
+        characterId: character.id,
+        capturedAt,
+        zoneId: zoneID,
+        encounterId: r.encounter.id,
+        difficulty: r.difficulty ?? zr?.difficulty ?? 5, // 5 = Mythic
+        percentile: pct != null ? Math.round(pct * 100) / 100 : null,
+        metric: "dps",
+        reportCode: r.report?.code ?? null,
+        rawPayload: r,
+      });
+    }
+  } catch (err) {
+    logSnapshotError(err, { stage: "wcl", characterId: character.id });
+  }
+
+  // Still deferred: Raider.IO (mostly duplicates Blizzard data — defer until
+  // we surface gear-snapshot percentile rankings the API uniquely provides).
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();

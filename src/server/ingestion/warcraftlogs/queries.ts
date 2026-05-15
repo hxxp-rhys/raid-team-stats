@@ -11,7 +11,7 @@ export const CHARACTER_ZONE_RANKINGS_QUERY = /* GraphQL */ `
     $server: String!
     $region: String!
     $zoneID: Int!
-    $metric: CharacterRankingMetricType
+    $metric: CharacterPageRankingMetricType
   ) {
     characterData {
       character(name: $name, serverSlug: $server, serverRegion: $region) {
