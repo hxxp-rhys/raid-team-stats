@@ -14,9 +14,15 @@ const nextConfig: NextConfig = {
   typedRoutes: true,
 
   // Dev-only: the dockerized web container binds 0.0.0.0:3000 but the browser
-  // and curl reach it via localhost / 127.0.0.1. Next 16 blocks cross-origin
-  // requests to dev resources by default — explicitly allow our local hosts.
-  allowedDevOrigins: ["localhost", "127.0.0.1", "0.0.0.0"],
+  // reaches it via localhost / 127.0.0.1 or via the Caddy TLS terminator on
+  // raiders.hxxp.io. Next 16 blocks cross-origin requests to dev resources
+  // (HMR sockets, RSC payloads) by default — explicitly allow all of these.
+  allowedDevOrigins: [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "raiders.hxxp.io",
+  ],
 
   // Optional standalone output for slim Docker images. Enable when wiring CI/CD.
   // output: "standalone",

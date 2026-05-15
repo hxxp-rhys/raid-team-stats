@@ -37,7 +37,7 @@ capacity.
 
 The Battle.net app is configured with `BATTLENET_REDIRECT_URI` (default
 `http://localhost:3000/bnet-login-callback`, prod
-`https://raider.hxxp.io/bnet-login-callback`). Auth.js's BattleNet
+`https://raiders.hxxp.io/bnet-login-callback`). Auth.js's BattleNet
 provider gets `authorization.params.redirect_uri = env.BATTLENET_REDIRECT_URI`
 so Battle.net redirects to our custom URL. The custom URL is a thin
 proxy route that forwards into Auth.js's catch-all callback handler at
@@ -110,8 +110,8 @@ the app talks to is already in place.
 For Battle.net (and the future WCL user-link), we registered specific
 non-Auth.js paths with the OAuth provider:
 
-- `https://raider.hxxp.io/bnet-login-callback` → proxy → Auth.js
-- `https://raider.hxxp.io/wcl-callback` → reserved for v1.1
+- `https://raiders.hxxp.io/bnet-login-callback` → proxy → Auth.js
+- `https://raiders.hxxp.io/wcl-callback` → reserved for v1.1
 
 The proxy route lives in `src/app/bnet-login-callback/route.ts` and
 rewrites the URL to `/api/auth/callback/battlenet` before invoking

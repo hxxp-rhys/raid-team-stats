@@ -155,37 +155,41 @@ export async function applyVerification(
 async function markUnobservedAbsences(
   input: ApplyVerificationInput,
 ): Promise<void> {
-  const observedBlizzardIds = input.characters.map((c) => c.blizzardCharacterId);
-  const observedGuildKeys = new Set(
-    input.characters
-      .map((c) =>
-        c.guild
-          ? `${c.region}|${normalizeRealmSlug(c.guild.realmSlug)}|${normalizeGuildSlug(c.guild.name)}|${c.guild.faction}`
-          : null,
-      )
-      .filter((k): k is string => k !== null),
-  );
+  // Build a per-character map of which guild each observed character is in.
+  // Characters not in this map were not observed at all this run.
+  // String-keyed because blizzardCharacterId is BigInt on the Prisma row but
+  // number on the observation input — stringify both sides to compare.
+  const observedCharGuildKey = new Map<string, string | null>();
+  for (const c of input.characters) {
+    const key = c.guild
+      ? `${c.region}|${normalizeRealmSlug(c.guild.realmSlug)}|${normalizeGuildSlug(c.guild.name)}|${c.guild.faction}`
+      : null;
+    observedCharGuildKey.set(String(c.blizzardCharacterId), key);
+  }
 
+  // Pull every ACTIVE link this user owns — including links to characters
+  // that weren't observed this run, which still need absence-counter
+  // increments under the lifecycle grace-period rules in CLAUDE.md.
   const links = await db.guildCharacterLink.findMany({
     where: {
       status: "ACTIVE",
-      character: {
-        userId: input.userId,
-        ...(observedBlizzardIds.length > 0
-          ? { blizzardCharacterId: { in: observedBlizzardIds } }
-          : {}),
-      },
+      character: { userId: input.userId },
     },
     select: {
       characterId: true,
       guildId: true,
       guild: { select: { region: true, realmSlug: true, guildSlug: true, faction: true } },
+      character: { select: { blizzardCharacterId: true } },
     },
   });
 
   for (const link of links) {
-    const key = `${link.guild.region}|${link.guild.realmSlug}|${link.guild.guildSlug}|${link.guild.faction}`;
-    if (observedGuildKeys.has(key)) continue;
+    const linkGuildKey = `${link.guild.region}|${link.guild.realmSlug}|${link.guild.guildSlug}|${link.guild.faction}`;
+    const observedKey = observedCharGuildKey.get(String(link.character.blizzardCharacterId));
+    // Reaffirmed: this character is still observed in this exact guild.
+    if (observedKey === linkGuildKey) continue;
+    // Anything else (observed in a different guild, or not observed at all)
+    // counts as an absence for this (character, guild) pair.
     await recordGuildAbsence({
       characterId: link.characterId,
       guildId: link.guildId,

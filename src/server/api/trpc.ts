@@ -6,6 +6,7 @@ import type { Session } from "next-auth";
 
 import { auth } from "@/server/auth";
 import { db } from "@/lib/db";
+import { env } from "@/env";
 import { logger } from "@/lib/logger";
 
 export type TrpcContext = {
@@ -77,13 +78,25 @@ const logMiddleware = middleware(async ({ path, type, next }) => {
  * Same-origin enforcement on mutations to defend against CSRF when the cookie
  * SameSite=Lax fallback isn't enough. Reads (queries) skip this check so RSCs
  * and direct GETs still work.
+ *
+ * Allowed origins = APP_URL + TRUSTED_ORIGINS (comma-separated). Use the
+ * latter when the app is reachable on multiple URLs (e.g. dev via localhost
+ * plus prod hostname via the same instance).
  */
+// Lazy-built so SKIP_ENV_VALIDATION=1 (Docker build) doesn't crash on
+// undefined env values at module evaluation. See feedback memory note about
+// the SMTP/BullMQ/key-source/logger family of bugs.
+let cachedAllowedOrigins: Set<string> | null = null;
+const allowedOrigins = (): Set<string> => {
+  if (!cachedAllowedOrigins) {
+    cachedAllowedOrigins = new Set<string>([env.APP_URL, ...env.TRUSTED_ORIGINS]);
+  }
+  return cachedAllowedOrigins;
+};
+
 const sameOriginMiddleware = middleware(async ({ ctx, type, next }) => {
-  if (type === "mutation") {
-    const allowed = process.env.APP_URL ?? "";
-    if (allowed && ctx.origin && ctx.origin !== allowed) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "Cross-origin request denied" });
-    }
+  if (type === "mutation" && ctx.origin && !allowedOrigins().has(ctx.origin)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Cross-origin request denied" });
   }
   return next();
 });
@@ -137,9 +150,19 @@ export type GuildRole = "PENDING" | "MEMBER" | "OFFICER" | "OWNER";
 export type RaidTeamRole = "MEMBER" | "CO_LEADER" | "LEADER";
 
 /**
+ * Platform admin override: any user whose id appears in env.ADMIN_USER_IDS is
+ * treated as OWNER for every guild and LEADER for every raid team, regardless
+ * of actual membership rows. Used for ops (claiming abandoned guilds, fixing
+ * roster bugs, etc). The override is audited via the procedure-level audit
+ * helpers, not here, so callers retain attribution.
+ */
+export const isPlatformAdmin = (userId: string | undefined): boolean =>
+  typeof userId === "string" && env.ADMIN_USER_IDS.includes(userId);
+
+/**
  * Verifies the caller has at least `minRole` in the guild and the membership
  * status is ACTIVE. Throws NOT_FOUND on missing/inactive, FORBIDDEN on
- * insufficient role.
+ * insufficient role. Platform admins bypass both checks.
  */
 export async function assertGuildRole(
   ctx: TrpcContext,
@@ -149,6 +172,7 @@ export async function assertGuildRole(
   if (!ctx.session?.user?.id) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
+  if (isPlatformAdmin(ctx.session.user.id)) return;
   const membership = await ctx.db.guildMembership.findUnique({
     where: { userId_guildId: { userId: ctx.session.user.id, guildId } },
     select: { role: true, status: true },
@@ -181,6 +205,11 @@ export async function assertRaidTeamRole(
   });
   if (!team) {
     throw new TRPCError({ code: "NOT_FOUND" });
+  }
+
+  // Platform admin override.
+  if (isPlatformAdmin(ctx.session.user.id)) {
+    return { guildId: team.guildId };
   }
 
   // Guild OWNER/OFFICER override.

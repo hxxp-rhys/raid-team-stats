@@ -89,9 +89,14 @@ services:
       retries: 6
 
   # TLS terminator for local dev. Hits the same `web` service on 3000 but adds
-  # an HTTPS entrypoint at https://localhost:8443 using the bind-mounted
-  # Cloudflare Origin cert in ./certs/ (gitignored). The plain-HTTP web port
-  # 3000 stays available for tooling that needs unencrypted hot reload.
+  # an HTTPS entrypoint at https://localhost (or https://raiders.hxxp.io if DNS
+  # points here) using the bind-mounted Cloudflare Origin cert in ./certs/
+  # (gitignored). The plain-HTTP web port 3000 stays available for tooling
+  # that needs unencrypted hot reload.
+  #
+  # Bound to 0.0.0.0 (not 127.0.0.1) so an upstream port-forwarder can reach
+  # the host's LAN/public interface. Port 80 is exposed only to issue the
+  # HTTP→HTTPS redirect that Caddyfile.dev defines.
   caddy:
     image: caddy:2-alpine
     container_name: rts-caddy
@@ -102,7 +107,8 @@ services:
       - rts-caddy-data:/data
       - rts-caddy-config:/config
     ports:
-      - "127.0.0.1:8443:443"
+      - "80:80"
+      - "443:443"
     depends_on:
       web:
         condition: service_started

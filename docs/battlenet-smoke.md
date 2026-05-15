@@ -10,7 +10,7 @@ during the consent step. Here's the path I've used during dev.
    <https://develop.battle.net/access/clients>.
 2. Both these redirect URIs registered on that client (Settings → Redirect
    URIs):
-   - `https://raider.hxxp.io/bnet-login-callback` (production)
+   - `https://raiders.hxxp.io/bnet-login-callback` (production)
    - `http://localhost:3000/bnet-login-callback` (dev — Battle.net does allow
      `http://localhost`)
 3. `BLIZZARD_CLIENT_ID`, `BLIZZARD_CLIENT_SECRET`, and

@@ -1,21 +1,33 @@
-# Dev TLS terminator. Caddy listens on :443 inside the container; docker-compose
-# maps that to 127.0.0.1:8443 on the host (the plain-HTTP web service stays on
-# 3000 for hot-reload tooling that can't speak HTTPS).
+# Dev TLS terminator. Caddy listens on :80 (HTTP, redirect-only) and :443
+# (HTTPS, reverse-proxy to the Next.js web service).
+#
+# Only the two whitelisted hostnames are accepted at the TLS layer:
+#   - localhost            (host machine)
+#   - raiders.hxxp.io      (Cloudflare-fronted public origin)
+# Requests with any other Host header get a 421 "Misdirected Request".
 #
 # Uses the bind-mounted Cloudflare Origin cert + key from ./certs — the same
 # pair a real Cloudflare tunnel would terminate against in production.
-# Browsers don't trust Cloudflare Origin certs directly, so when hitting
-# https://localhost:8443 you'll see a cert warning — that's expected; the
-# warning only goes away once Cloudflare's edge is in front of this origin.
+# Browsers don't trust Cloudflare Origin certs directly; cert warning at
+# https://localhost is expected and goes away once Cloudflare's edge sits
+# in front of this origin.
 
 {
-	# Turn off the global auto-HTTPS upgrade pass: we're already on :443 and
-	# don't have a public hostname for ACME issuance in dev.
+	# We supply explicit cert files; don't let Caddy try to ACME-issue.
 	auto_https off
 	admin off
 }
 
-:443 {
+# HTTP listener: redirect everything to HTTPS. The Host header is preserved
+# so https://raiders.hxxp.io routing still works after the redirect.
+:80 {
+	redir https://{host}{uri} permanent
+}
+
+# HTTPS listener. Site address listing both hostnames means Caddy will only
+# answer for those two; anything else (e.g. a scanner hitting the IP) gets
+# 421 and no upstream call.
+localhost, raiders.hxxp.io {
 	tls /certs/raiders.hxxp.io-crt.pem /certs/raiders.hxxp.io-key.pem
 
 	encode zstd gzip

@@ -32,6 +32,27 @@ export const env = createEnv({
 
     APP_URL: z.string().url().default("http://localhost:3000"),
 
+    // Locks Auth.js's URL computation to a fixed origin. Without this, Auth.js
+    // derives the origin from the request URL, which produces inconsistent
+    // redirect_uri values across direct-localhost and Caddy-proxied access —
+    // and breaks the OAuth token exchange (Battle.net rejects with
+    // invalid_grant). Should normally equal APP_URL.
+    AUTH_URL: z.string().url().optional(),
+
+    // Extra origins (comma-separated) accepted by the tRPC same-origin check
+    // in addition to APP_URL. Required when the app is reachable on more than
+    // one URL — e.g. APP_URL=https://raiders.hxxp.io but you also want local
+    // browser tabs on https://localhost or http://localhost:3000 to mutate.
+    TRUSTED_ORIGINS: z
+      .string()
+      .default("")
+      .transform((v) =>
+        v
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error", "fatal"])
       .default("info"),
@@ -48,7 +69,7 @@ export const env = createEnv({
     BLIZZARD_REGION: z.enum(["us", "eu", "kr", "tw"]).default("us"),
     // Custom OAuth redirect URI registered with the Battle.net developer
     // console. Defaults to the localhost dev path; production should set this
-    // to the public URL (e.g. https://raider.hxxp.io/bnet-login-callback).
+    // to the public URL (e.g. https://raiders.hxxp.io/bnet-login-callback).
     BATTLENET_REDIRECT_URI: z
       .string()
       .url()
@@ -104,6 +125,8 @@ export const env = createEnv({
     REDIS_URL: process.env.REDIS_URL,
     AUTH_SECRET: process.env.AUTH_SECRET,
     APP_URL: process.env.APP_URL,
+    AUTH_URL: process.env.AUTH_URL,
+    TRUSTED_ORIGINS: process.env.TRUSTED_ORIGINS,
     LOG_LEVEL: process.env.LOG_LEVEL,
     TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY,
     BLIZZARD_CLIENT_ID: process.env.BLIZZARD_CLIENT_ID,

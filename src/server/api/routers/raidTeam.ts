@@ -116,6 +116,46 @@ export const raidTeamRouter = router({
       );
     }),
 
+  /**
+   * Characters in the team's guild that are eligible to be added: ACTIVE
+   * guildCharacterLink and not already on another active team in this guild.
+   * Used by the team-management UI's "Add member" picker.
+   */
+  eligibleCharacters: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const { guildId } = await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+
+      const links = await ctx.db.guildCharacterLink.findMany({
+        where: { guildId, status: "ACTIVE" },
+        select: {
+          character: {
+            select: {
+              id: true,
+              name: true,
+              realmSlug: true,
+              region: true,
+              level: true,
+              classId: true,
+              raidMemberships: {
+                where: { isActive: true, raidTeam: { guildId } },
+                select: { raidTeamId: true },
+              },
+            },
+          },
+        },
+        orderBy: { character: { name: "asc" } },
+      });
+
+      // Eligible = active GuildCharacterLink AND not on any active team in
+      // this guild. (Characters already on this team show up under "Members"
+      // on the team page; re-adding from the picker would be a no-op.)
+      return links
+        .map((l) => l.character)
+        .filter((c) => c.raidMemberships.length === 0)
+        .map(({ raidMemberships: _drop, ...rest }) => rest);
+    }),
+
   create: protectedProcedure
     .input(
       z.object({

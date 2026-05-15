@@ -5,6 +5,7 @@ import {
   router,
   protectedProcedure,
   assertGuildRole,
+  isPlatformAdmin,
 } from "@/server/api/trpc";
 import { audit } from "@/server/security/audit";
 import { GuildMemberRole, GuildMembershipStatus } from "@/generated/prisma/enums";
@@ -232,10 +233,13 @@ export const guildRouter = router({
       const { enqueueManualRosterRefresh } = await import(
         "@/server/ingestion/jobs/manual-roster-refresh"
       );
-      const result = await enqueueManualRosterRefresh({
-        guildId: input.guildId,
-        triggeredByUserId: ctx.session.user.id,
-      });
+      const result = await enqueueManualRosterRefresh(
+        {
+          guildId: input.guildId,
+          triggeredByUserId: ctx.session.user.id,
+        },
+        { bypassRateLimit: isPlatformAdmin(ctx.session.user.id) },
+      );
 
       await audit({
         event: "SYNC_TRIGGERED",
@@ -266,10 +270,15 @@ export const guildRouter = router({
 
     const { blizzardClient } = await import("@/server/ingestion/blizzard/client");
     const { endpoints } = await import("@/server/ingestion/blizzard/endpoints");
-    const { userCharactersResponseSchema, characterSummaryResponseSchema, FACTION_MAP } =
-      await import("@/server/ingestion/blizzard/schemas");
-    const { normalizeRealmSlug } = await import("@/lib/realm");
+    const {
+      userCharactersResponseSchema,
+      characterSummaryResponseSchema,
+      guildRosterResponseSchema,
+      FACTION_MAP,
+    } = await import("@/server/ingestion/blizzard/schemas");
+    const { normalizeRealmSlug, normalizeGuildSlug } = await import("@/lib/realm");
     const { applyVerification } = await import("@/server/guild-auth/verify");
+    type Observation = import("@/server/guild-auth/verify").VerifiedCharacterObservation;
 
     const region = env.BLIZZARD_REGION;
     const client = blizzardClient();
@@ -283,7 +292,7 @@ export const guildRouter = router({
     const factionFromRaw = (raw: string | undefined, fallback: Faction): Faction =>
       raw ? ((FACTION_MAP[raw] ?? fallback) as Faction) : fallback;
 
-    const observations = [];
+    const observations: Observation[] = [];
     for (const wowAccount of characters.wow_accounts) {
       for (const c of wowAccount.characters) {
         const realmSlug = normalizeRealmSlug(c.realm.slug);
@@ -320,6 +329,55 @@ export const guildRouter = router({
           // Skip transient per-character failures — they'll be picked up on
           // the next sync.
         }
+      }
+    }
+
+    // Battle.net's /profile/user/wow doesn't expose the user's rank within
+    // each guild — only the guild's identity. To enable the rank-0 GM
+    // auto-claim path, we look up the guild roster (app credentials, no user
+    // OAuth needed) for each distinct guild observed and patch the matching
+    // characters' rosterRank into the observations before applyVerification.
+    type GuildKey = string;
+    const guildKey = (g: { realmSlug: string; name: string }): GuildKey =>
+      `${g.realmSlug}|${normalizeGuildSlug(g.name) ?? ""}`;
+    const distinctGuilds = new Map<
+      GuildKey,
+      { realmSlug: string; name: string }
+    >();
+    for (const obs of observations) {
+      if (!obs.guild) continue;
+      distinctGuilds.set(guildKey(obs.guild), obs.guild);
+    }
+
+    // characterName -> rosterRank, keyed by guild
+    const rankByCharacter = new Map<GuildKey, Map<string, number>>();
+    for (const [key, g] of distinctGuilds) {
+      const slug = normalizeGuildSlug(g.name);
+      if (!slug) continue;
+      try {
+        const roster = await client.request(
+          endpoints.guildRoster(region, g.realmSlug, slug),
+          { region, schema: guildRosterResponseSchema, auth: { kind: "app" } },
+        );
+        const ranks = new Map<string, number>();
+        for (const m of roster.members) {
+          ranks.set(m.character.name.toLowerCase(), m.rank);
+        }
+        rankByCharacter.set(key, ranks);
+      } catch {
+        // Roster fetch is best-effort. Without it, auto-claim won't fire for
+        // this guild, but the PENDING membership is still useful and an
+        // admin / Tier C run can claim it later.
+      }
+    }
+
+    for (const obs of observations) {
+      if (!obs.guild) continue;
+      const rank = rankByCharacter
+        .get(guildKey(obs.guild))
+        ?.get(obs.characterName.toLowerCase());
+      if (typeof rank === "number") {
+        obs.guild = { ...obs.guild, rosterRank: rank };
       }
     }
 

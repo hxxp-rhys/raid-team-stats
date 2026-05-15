@@ -22,9 +22,12 @@ export async function GET(req: Request) {
   await connection();
 
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
-  const expected = process.env.METRICS_TOKEN ?? null;
+  // Route through `env` so the empty-string-as-undefined transform applies and
+  // a stray `METRICS_TOKEN=""` doesn't accidentally enable token mode with an
+  // empty expected value.
+  const expected = env.METRICS_TOKEN ?? null;
 
-  const tokenOk = expected && bearer && bearer === expected;
+  const tokenOk = !!expected && !!bearer && bearer === expected;
   let sessionOk = false;
   if (!tokenOk) {
     const session = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;

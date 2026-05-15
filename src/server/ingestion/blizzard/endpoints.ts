@@ -22,7 +22,6 @@ export type BlizzardPath = {
 };
 
 const profileNamespace = (region: string) => `profile-${lowerRegion(region)}`;
-const dataNamespace = (region: string) => `dynamic-${lowerRegion(region)}`;
 
 export const endpoints = {
   /** GET — characters owned by the calling BattleTag. Requires user OAuth. */
@@ -81,7 +80,10 @@ export const endpoints = {
     }
     return {
       path: `/data/wow/guild/${realm}/${guild}/roster`,
-      namespace: dataNamespace(region),
+      // The /data/wow/guild/* endpoints use the profile namespace, not
+      // dynamic — despite living under /data/. Blizzard's own docs disagree
+      // with the actual gateway here; profile-{region} is what works.
+      namespace: profileNamespace(region),
     };
   },
 };

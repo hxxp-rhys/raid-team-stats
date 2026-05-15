@@ -191,13 +191,18 @@ function GuildDetailInner({ params }: { params: Params }) {
           {guild.raidTeams.length > 0 && (
             <ul className="divide-y divide-border">
               {guild.raidTeams.map((t) => (
-                <li key={t.id} className="py-3">
-                  <p className="font-medium">{t.name}</p>
-                  <p className="text-muted-foreground text-xs">
-                    {t._count.memberships} member
-                    {t._count.memberships === 1 ? "" : "s"} · visibility{" "}
-                    {t.visibility.toLowerCase()}
-                  </p>
+                <li key={t.id}>
+                  <Link
+                    href={{ pathname: `/guild/${guildId}/team/${t.id}` }}
+                    className="hover:bg-muted block rounded-md py-3 px-2 -mx-2 transition-colors"
+                  >
+                    <p className="font-medium">{t.name}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {t._count.memberships} member
+                      {t._count.memberships === 1 ? "" : "s"} · visibility{" "}
+                      {t.visibility.toLowerCase()}
+                    </p>
+                  </Link>
                 </li>
               ))}
             </ul>

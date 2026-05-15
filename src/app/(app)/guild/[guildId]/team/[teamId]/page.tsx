@@ -1,8 +1,9 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -78,6 +79,8 @@ export default function TeamDetailPage({ params }: { params: Params }) {
           Dashboards →
         </Link>
       </header>
+
+      <ManageMembers teamId={teamId} />
 
       <Card>
         <CardHeader>
@@ -157,5 +160,132 @@ export default function TeamDetailPage({ params }: { params: Params }) {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+function ManageMembers({ teamId }: { teamId: string }) {
+  const utils = api.useUtils();
+  const team = api.raidTeam.get.useQuery({ raidTeamId: teamId });
+  const eligible = api.raidTeam.eligibleCharacters.useQuery({ raidTeamId: teamId });
+  const [pick, setPick] = useState<string>("");
+  const [pickRole, setPickRole] = useState<"MEMBER" | "CO_LEADER">("MEMBER");
+
+  const invalidate = async () => {
+    await Promise.all([
+      utils.raidTeam.get.invalidate({ raidTeamId: teamId }),
+      utils.raidTeam.eligibleCharacters.invalidate({ raidTeamId: teamId }),
+    ]);
+  };
+
+  const add = api.raidTeam.addMember.useMutation({
+    onSuccess: async () => {
+      setPick("");
+      setPickRole("MEMBER");
+      await invalidate();
+    },
+  });
+  const remove = api.raidTeam.removeMember.useMutation({
+    onSuccess: invalidate,
+  });
+
+  // Permission check is server-side; if the user can't add, eligibleCharacters
+  // returns FORBIDDEN and we hide the add form. Members can still see roster.
+  const canManage = !eligible.error;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Members</CardTitle>
+        <CardDescription>
+          {canManage
+            ? "Add or remove characters tracked by this raid team. Characters must already be active members of the guild."
+            : "Active roster. Co-leaders and above can add or remove members."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {team.data && team.data.memberships.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No members yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {team.data?.memberships.map((m) => (
+              <li
+                key={m.id}
+                className="flex items-center justify-between py-2 text-sm"
+              >
+                <div>
+                  <span className="font-medium">{m.character.name}</span>
+                  <span className="text-muted-foreground ml-2">
+                    {m.character.realmSlug} · lvl {m.character.level ?? "—"} ·{" "}
+                    {m.role.toLowerCase()}
+                  </span>
+                </div>
+                {canManage && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() =>
+                      remove.mutate({
+                        raidTeamId: teamId,
+                        characterId: m.character.id,
+                      })
+                    }
+                    disabled={remove.isPending}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {canManage && (
+          <form
+            className="flex flex-wrap items-center gap-2 border-t border-border pt-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!pick) return;
+              add.mutate({ raidTeamId: teamId, characterId: pick, role: pickRole });
+            }}
+          >
+            <select
+              value={pick}
+              onChange={(e) => setPick(e.target.value)}
+              className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+              disabled={eligible.isPending || (eligible.data?.length ?? 0) === 0}
+            >
+              <option value="">
+                {eligible.isPending
+                  ? "Loading…"
+                  : (eligible.data?.length ?? 0) === 0
+                    ? "No eligible characters"
+                    : "Select a character"}
+              </option>
+              {eligible.data?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.realmSlug})
+                </option>
+              ))}
+            </select>
+            <select
+              value={pickRole}
+              onChange={(e) => setPickRole(e.target.value as "MEMBER" | "CO_LEADER")}
+              className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+            >
+              <option value="MEMBER">Member</option>
+              <option value="CO_LEADER">Co-leader</option>
+            </select>
+            <Button type="submit" disabled={!pick || add.isPending} size="sm">
+              {add.isPending ? "Adding…" : "Add to team"}
+            </Button>
+            {add.error && (
+              <p className="text-destructive text-sm" role="alert">
+                {add.error.message}
+              </p>
+            )}
+          </form>
+        )}
+      </CardContent>
+    </Card>
   );
 }

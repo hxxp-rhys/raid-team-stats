@@ -35,27 +35,39 @@ export type ManualRosterRefreshPayload = {
   triggeredByUserId: string;
 };
 
+export type EnqueueOptions = {
+  /**
+   * Platform admins bypass both per-user and per-guild rate limits. Set by
+   * the tRPC layer after checking env.ADMIN_USER_IDS — never trust client
+   * input.
+   */
+  bypassRateLimit?: boolean;
+};
+
 export type EnqueueResult =
   | { ok: true; jobId: string }
   | { ok: false; reason: "rate_limited"; retryAfterMs: number };
 
 export async function enqueueManualRosterRefresh(
   input: ManualRosterRefreshPayload,
+  options: EnqueueOptions = {},
 ): Promise<EnqueueResult> {
-  // Dual rate-limit: per-user (so one member can't burn the budget) and
-  // per-guild (so multiple members can't all kick off at once).
-  const userLimit = await consumeLimit(policies.manualSyncPerUser, input.triggeredByUserId);
-  const guildLimit = await consumeLimit(policies.manualSyncPerGuild, input.guildId);
-  if (!userLimit.allowed || !guildLimit.allowed) {
-    const retryAfterMs = Math.max(
-      userLimit.allowed ? 0 : userLimit.resetAt - Date.now(),
-      guildLimit.allowed ? 0 : guildLimit.resetAt - Date.now(),
-    );
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "Roster refresh is rate-limited. Try again later.",
-      cause: { retryAfterMs },
-    });
+  if (!options.bypassRateLimit) {
+    // Dual rate-limit: per-user (so one member can't burn the budget) and
+    // per-guild (so multiple members can't all kick off at once).
+    const userLimit = await consumeLimit(policies.manualSyncPerUser, input.triggeredByUserId);
+    const guildLimit = await consumeLimit(policies.manualSyncPerGuild, input.guildId);
+    if (!userLimit.allowed || !guildLimit.allowed) {
+      const retryAfterMs = Math.max(
+        userLimit.allowed ? 0 : userLimit.resetAt - Date.now(),
+        guildLimit.allowed ? 0 : guildLimit.resetAt - Date.now(),
+      );
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Roster refresh is rate-limited. Try again later.",
+        cause: { retryAfterMs },
+      });
+    }
   }
 
   const job = await queues.manualRosterRefresh.add(QUEUE_NAMES.manualRosterRefresh, input, {
