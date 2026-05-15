@@ -81,9 +81,11 @@ relaunch VSCode from inside itself.
     unblocks mplus_ladder + mplus_weekly
   - **vault_progress** is now derived from the M+ and raid snapshots
     we just persisted (see commit f4177e1).
-  - Result: **12 of 13 widgets** render real data for the seeded team.
-  - Still empty: wcl_parses only (needs the Warcraft Logs GraphQL
-    pipeline — separate API, separate auth, not safe to land cold).
+  - **wcl_parses** now ingests too (commit 9f32079) — zoneRankings
+    pulled per character against Manaforge Omega (zoneID 44 by default;
+    override with `WCL_RAID_ZONE_ID` env). 200 parse snapshots across
+    the 25-char seed.
+  - Result: **13 of 13 widgets** render real data for the seeded team.
 
 ## How to verify in the morning
 
