@@ -73,14 +73,15 @@ relaunch VSCode from inside itself.
 - **#5a click-through testing as you** — no credentials in the message.
   Substituted with SQL-seeded test data + Playwright-headless route
   smoke (every public route returns 200) + server-side smoke probes.
-- **M+/raid/vault/WCL ingestion** — currently `tracked-member-sync.ts`
-  only fetches summary + equipment (the Tier-A Phase-4.x plan marked
-  the rest as follow-up). Five widgets will show empty states until the
-  ingestion is extended:
-  - mplus_ladder, mplus_weekly, vault_progress, raid_completion, wcl_parses
-  - Seven widgets will show **real data** for the seeded team:
-  - ilvl_roster, ilvl_distribution, gear_audit, missing_fixes,
-    tier_set_tracker, class_composition, roster_freshness
+- **M+/raid/vault/WCL ingestion** — Tier-A originally only fetched
+  summary + equipment. Extended during the overnight pass to also write:
+  - **spec** (CharacterSnapshot.specName) → unblocks talent_loadouts
+  - **raid encounters** → unblocks raid_completion
+  - **M+ profile** (current rating + weekly highest + best runs) →
+    unblocks mplus_ladder + mplus_weekly
+  - Result: **11 of 13 widgets** render real data for the seeded team.
+  - Still empty: vault_progress (derived, needs M+ slot + raid combo
+    logic), wcl_parses (separate GraphQL pipeline).
 
 ## How to verify in the morning
 
