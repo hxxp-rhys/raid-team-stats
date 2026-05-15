@@ -47,20 +47,16 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Collect distinct encounter ids across all members so the column order is
-  // stable. Use first-seen as the column order (rare cases of mis-numbered
-  // encounters still render).
-  const encounterOrder: number[] = [];
-  const seenEncounters = new Set<number>();
+  // Collect distinct encounter ids across all members and sort ascending so
+  // the column order is stable regardless of how many parses each character
+  // has (lowest-id encounter == B1, etc).
+  const encounterSet = new Set<number>();
   for (const m of q.data.members) {
     for (const p of m.latest.wclParses ?? []) {
-      if (typeof p.encounterId !== "number") continue;
-      if (!seenEncounters.has(p.encounterId)) {
-        seenEncounters.add(p.encounterId);
-        encounterOrder.push(p.encounterId);
-      }
+      if (typeof p.encounterId === "number") encounterSet.add(p.encounterId);
     }
   }
+  const encounterOrder = [...encounterSet].sort((a, b) => a - b);
 
   if (encounterOrder.length === 0) {
     return (
@@ -98,14 +94,14 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
           <thead>
             <tr className="text-muted-foreground text-left uppercase">
               <th scope="col" className="py-1 pr-2 font-medium">Character</th>
-              {encounterOrder.map((eid) => (
+              {encounterOrder.map((eid, idx) => (
                 <th
                   key={eid}
                   scope="col"
                   className="py-1 pr-1 text-center font-medium"
-                  title={`Encounter ${eid}`}
+                  title={`Boss ${idx + 1} (encounter id ${eid})`}
                 >
-                  {String(eid).slice(-3)}
+                  B{idx + 1}
                 </th>
               ))}
               <th scope="col" className="py-1 pr-1 text-right font-medium">
