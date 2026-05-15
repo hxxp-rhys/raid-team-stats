@@ -13,6 +13,7 @@ import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
 import { RaidCompletionWidget } from "./raid-completion";
+import { RecentKillsWidget } from "./recent-kills";
 import { RosterFreshnessWidget } from "./roster-freshness";
 import { TalentLoadoutsWidget } from "./talent-loadouts";
 import { TierSetTrackerWidget } from "./tier-set-tracker";
@@ -50,6 +51,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   mplus_weekly: MplusWeeklyWidget,
   talent_loadouts: TalentLoadoutsWidget,
   parses_heatmap: ParsesHeatmapWidget,
+  recent_kills: RecentKillsWidget,
 };
 
 /**

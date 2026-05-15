@@ -28,6 +28,7 @@ export const WIDGET_TYPES = [
   "mplus_weekly",
   "talent_loadouts",
   "parses_heatmap",
+  "recent_kills",
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -183,5 +184,9 @@ export const WIDGET_META: Record<
     title: "Parses heatmap",
     description:
       "Per-character × per-encounter best-percentile heatmap from WCL.",
+  },
+  recent_kills: {
+    title: "Recent kills",
+    description: "Boss kills across the team in the last 7 days, newest first.",
   },
 };
