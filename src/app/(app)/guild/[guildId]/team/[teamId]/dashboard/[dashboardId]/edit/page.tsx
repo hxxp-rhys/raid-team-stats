@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/card";
 import { api } from "@/lib/trpc-client";
 import {
+  newTabId,
   parseLayout,
   WIDGET_META,
   WIDGET_TYPES,
@@ -59,6 +60,11 @@ export default function DashboardEditPage({ params }: { params: Params }) {
 const newId = () =>
   globalThis.crypto?.randomUUID?.() ?? `w-${Date.now()}-${Math.random()}`;
 
+const emptyLayout = (): DashboardLayout => ({
+  version: 2,
+  tabs: [{ id: "overview", name: "Overview", widgets: [] }],
+});
+
 function Inner({ params }: { params: Params }) {
   const { guildId, teamId, dashboardId } = use(params);
   const router = useRouter();
@@ -70,31 +76,91 @@ function Inner({ params }: { params: Params }) {
       router.push(`/guild/${guildId}/team/${teamId}/dashboard` as Route),
   });
 
-  const [layout, setLayout] = useState<DashboardLayout>({ widgets: [] });
+  const [layout, setLayout] = useState<DashboardLayout>(emptyLayout);
+  const [activeTabId, setActiveTabId] = useState<string>("overview");
   const [dirty, setDirty] = useState(false);
-  // Track which server snapshot we last initialised from; updating state
-  // *during render* (not in an effect) is the recommended React 19 pattern
-  // for derived-from-fetched-data state.
   const [initFromId, setInitFromId] = useState<string | null>(null);
   if (q.data && initFromId !== q.data.id) {
-    setLayout(parseLayout(q.data.layout));
+    const parsed = parseLayout(q.data.layout);
+    setLayout(parsed);
+    setActiveTabId(parsed.tabs[0]?.id ?? "overview");
     setDirty(false);
     setInitFromId(q.data.id);
   }
 
+  const totalWidgets = layout.tabs.reduce((s, t) => s + t.widgets.length, 0);
+  const activeIndex = Math.max(
+    0,
+    layout.tabs.findIndex((t) => t.id === activeTabId),
+  );
+  const activeTab = layout.tabs[activeIndex];
+
+  const updateActiveTab = (
+    fn: (widgets: WidgetInstance[]) => WidgetInstance[],
+  ) => {
+    setLayout((l) => ({
+      ...l,
+      tabs: l.tabs.map((t, i) =>
+        i === activeIndex ? { ...t, widgets: fn(t.widgets) } : t,
+      ),
+    }));
+    setDirty(true);
+  };
+
   const addWidget = (type: WidgetType) => {
     const next: WidgetInstance = { id: newId(), type };
-    setLayout((l) => ({ widgets: [...l.widgets, next] }));
-    setDirty(true);
+    updateActiveTab((ws) => [...ws, next]);
   };
-  const removeWidget = (id: string) => {
-    setLayout((l) => ({ widgets: l.widgets.filter((w) => w.id !== id) }));
-    setDirty(true);
-  };
-  const updateWidgetConfig = (id: string, config: Record<string, unknown>) => {
+  const removeWidget = (id: string) =>
+    updateActiveTab((ws) => ws.filter((w) => w.id !== id));
+  const updateWidgetConfig = (id: string, config: Record<string, unknown>) =>
+    updateActiveTab((ws) =>
+      ws.map((w) => (w.id === id ? { ...w, config } : w)),
+    );
+
+  const addTab = () => {
+    const id = newTabId();
     setLayout((l) => ({
-      widgets: l.widgets.map((w) => (w.id === id ? { ...w, config } : w)),
+      ...l,
+      tabs: [...l.tabs, { id, name: `Tab ${l.tabs.length + 1}`, widgets: [] }],
     }));
+    setActiveTabId(id);
+    setDirty(true);
+  };
+
+  const renameTab = (id: string, name: string) => {
+    setLayout((l) => ({
+      ...l,
+      tabs: l.tabs.map((t) => (t.id === id ? { ...t, name } : t)),
+    }));
+    setDirty(true);
+  };
+
+  const deleteTab = (id: string) => {
+    if (layout.tabs.length === 1) {
+      window.alert("A dashboard needs at least one tab.");
+      return;
+    }
+    const tab = layout.tabs.find((t) => t.id === id);
+    if (
+      tab &&
+      tab.widgets.length > 0 &&
+      !window.confirm(
+        `Tab "${tab.name}" has ${tab.widgets.length} widget${tab.widgets.length === 1 ? "" : "s"}. Delete anyway?`,
+      )
+    ) {
+      return;
+    }
+    setLayout((l) => {
+      const idx = l.tabs.findIndex((t) => t.id === id);
+      const tabs = l.tabs.filter((t) => t.id !== id);
+      return { ...l, tabs };
+    });
+    if (activeTabId === id) {
+      const fallback =
+        layout.tabs.find((t) => t.id !== id)?.id ?? "overview";
+      setActiveTabId(fallback);
+    }
     setDirty(true);
   };
 
@@ -106,13 +172,11 @@ function Inner({ params }: { params: Params }) {
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setLayout((l) => {
-      const oldIndex = l.widgets.findIndex((w) => w.id === active.id);
-      const newIndex = l.widgets.findIndex((w) => w.id === over.id);
-      if (oldIndex < 0 || newIndex < 0) return l;
-      return { widgets: arrayMove(l.widgets, oldIndex, newIndex) };
-    });
-    setDirty(true);
+    if (!activeTab) return;
+    const oldIndex = activeTab.widgets.findIndex((w) => w.id === active.id);
+    const newIndex = activeTab.widgets.findIndex((w) => w.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    updateActiveTab((ws) => arrayMove(ws, oldIndex, newIndex));
   };
 
   const save = () => {
@@ -163,10 +227,9 @@ function Inner({ params }: { params: Params }) {
             Editing: {q.data.name}
           </h1>
           <p className="text-muted-foreground text-sm">
-            {layout.widgets.length} widget{layout.widgets.length === 1 ? "" : "s"}
-            {dirty && (
-              <span className="text-amber-400"> · unsaved changes</span>
-            )}
+            {totalWidgets} widget{totalWidgets === 1 ? "" : "s"} across{" "}
+            {layout.tabs.length} tab{layout.tabs.length === 1 ? "" : "s"}
+            {dirty && <span className="text-amber-400"> · unsaved changes</span>}
           </p>
         </div>
         <div className="flex gap-2">
@@ -189,10 +252,69 @@ function Inner({ params }: { params: Params }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Add a widget</CardTitle>
+          <CardTitle>Tabs</CardTitle>
+          <CardDescription>
+            Group widgets into themed tabs (e.g. Readiness, Progression, M+).
+            Rename inline; delete with the ✕ button.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-2">
+            {layout.tabs.map((t) => {
+              const isActive = t.id === activeTab?.id;
+              return (
+                <div
+                  key={t.id}
+                  className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm transition-colors ${
+                    isActive
+                      ? "border-primary bg-muted"
+                      : "border-border bg-background"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setActiveTabId(t.id)}
+                    className="font-medium"
+                  >
+                    {t.name}{" "}
+                    <span className="text-muted-foreground text-xs">
+                      ({t.widgets.length})
+                    </span>
+                  </button>
+                  {isActive && (
+                    <>
+                      <input
+                        aria-label="Rename tab"
+                        value={t.name}
+                        onChange={(e) => renameTab(t.id, e.target.value)}
+                        className="bg-background border-border h-6 w-24 rounded border px-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => deleteTab(t.id)}
+                        className="text-muted-foreground hover:text-destructive ml-1 text-xs"
+                        aria-label={`Delete tab ${t.name}`}
+                      >
+                        ✕
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+            <Button size="sm" variant="outline" onClick={addTab}>
+              + Add tab
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Add a widget to “{activeTab?.name ?? "this tab"}”</CardTitle>
           <CardDescription>
             Each widget reads from the team&apos;s latest snapshot data. Drag
-            widgets in the list below to reorder.
+            widgets in the list below to reorder within the active tab.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -222,10 +344,12 @@ function Inner({ params }: { params: Params }) {
       </Card>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold tracking-tight">Current widgets</h2>
-        {layout.widgets.length === 0 ? (
+        <h2 className="text-lg font-semibold tracking-tight">
+          Widgets on “{activeTab?.name ?? "this tab"}”
+        </h2>
+        {(activeTab?.widgets.length ?? 0) === 0 ? (
           <p className="text-muted-foreground text-sm">
-            No widgets yet. Pick one from the palette above.
+            No widgets on this tab yet. Pick one from the palette above.
           </p>
         ) : (
           <DndContext
@@ -234,11 +358,11 @@ function Inner({ params }: { params: Params }) {
             onDragEnd={onDragEnd}
           >
             <SortableContext
-              items={layout.widgets.map((w) => w.id)}
+              items={(activeTab?.widgets ?? []).map((w) => w.id)}
               strategy={verticalListSortingStrategy}
             >
               <ul className="space-y-3">
-                {layout.widgets.map((w, i) => (
+                {activeTab?.widgets.map((w, i) => (
                   <SortableWidget
                     key={w.id}
                     widget={w}

@@ -4,11 +4,16 @@ import type { ComponentType } from "react";
 
 import type { WidgetInstance, WidgetType } from "@/lib/widgets/types";
 import { CharacterTimelineWidget } from "./character-timeline";
+import { ClassCompositionWidget } from "./class-composition";
 import { GearAuditWidget } from "./gear-audit";
+import { IlvlDistributionWidget } from "./ilvl-distribution";
 import { IlvlRosterWidget } from "./ilvl-roster";
+import { MissingFixesWidget } from "./missing-fixes";
 import { MplusLadderWidget } from "./mplus-ladder";
+import { MplusWeeklyWidget } from "./mplus-weekly";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RosterFreshnessWidget } from "./roster-freshness";
+import { TalentLoadoutsWidget } from "./talent-loadouts";
 import { TierSetTrackerWidget } from "./tier-set-tracker";
 import { VaultProgressWidget } from "./vault-progress";
 import { WclParsesWidget } from "./wcl-parses";
@@ -38,6 +43,11 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   wcl_parses: WclParsesWidget,
   character_timeline: TimelineHost,
   roster_freshness: RosterFreshnessWidget,
+  class_composition: ClassCompositionWidget,
+  ilvl_distribution: IlvlDistributionWidget,
+  missing_fixes: MissingFixesWidget,
+  mplus_weekly: MplusWeeklyWidget,
+  talent_loadouts: TalentLoadoutsWidget,
 };
 
 /**

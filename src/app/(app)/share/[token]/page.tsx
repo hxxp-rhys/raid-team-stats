@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use } from "react";
+import { Suspense, use, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -61,6 +61,12 @@ function Inner({ params }: { params: Params }) {
 
   const { dashboard, expiresAt } = q.data;
   const layout = parseLayout(dashboard.layout);
+  const totalWidgets = layout.tabs.reduce((s, t) => s + t.widgets.length, 0);
+  const [activeTabId, setActiveTabId] = useState<string>(
+    layout.tabs[0]?.id ?? "overview",
+  );
+  const activeTab =
+    layout.tabs.find((t) => t.id === activeTabId) ?? layout.tabs[0];
   const expires = new Date(expiresAt);
 
   return (
@@ -74,8 +80,8 @@ function Inner({ params }: { params: Params }) {
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">{dashboard.name}</h1>
         <p className="text-muted-foreground text-sm">
-          Shared view · {layout.widgets.length} widget
-          {layout.widgets.length === 1 ? "" : "s"} · expires{" "}
+          Shared view · {totalWidgets} widget
+          {totalWidgets === 1 ? "" : "s"} · expires{" "}
           {expires.toLocaleDateString(undefined, {
             year: "numeric",
             month: "short",
@@ -84,7 +90,33 @@ function Inner({ params }: { params: Params }) {
         </p>
       </header>
 
-      {layout.widgets.length === 0 ? (
+      {layout.tabs.length > 1 && (
+        <div className="border-b border-border" role="tablist">
+          <div className="flex flex-wrap gap-1">
+            {layout.tabs.map((t) => {
+              const isActive = t.id === activeTab?.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTabId(t.id)}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                    isActive
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {t.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {totalWidgets === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>This dashboard is empty</CardTitle>
@@ -92,7 +124,7 @@ function Inner({ params }: { params: Params }) {
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          {layout.widgets.map((w) => (
+          {activeTab?.widgets.map((w) => (
             <WidgetRender key={w.id} instance={w} raidTeamId={dashboard.raidTeamId} />
           ))}
         </div>

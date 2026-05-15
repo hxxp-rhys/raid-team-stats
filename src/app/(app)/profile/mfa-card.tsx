@@ -74,7 +74,7 @@ export function MfaCard() {
   };
 
   return (
-    <Card>
+    <Card id="mfa">
       <CardHeader>
         <CardTitle>Two-factor authentication</CardTitle>
         <CardDescription>

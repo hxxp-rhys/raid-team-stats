@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use } from "react";
+import { Suspense, use, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 
@@ -58,6 +58,12 @@ function Inner({ params }: { params: Params }) {
   }
   const dashboard = q.data;
   const layout = parseLayout(dashboard.layout);
+  const totalWidgets = layout.tabs.reduce((sum, t) => sum + t.widgets.length, 0);
+  const [activeTabId, setActiveTabId] = useState<string>(
+    layout.tabs[0]?.id ?? "overview",
+  );
+  const activeTab =
+    layout.tabs.find((t) => t.id === activeTabId) ?? layout.tabs[0];
 
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-12">
@@ -73,8 +79,9 @@ function Inner({ params }: { params: Params }) {
             {dashboard.name}
           </h1>
           <p className="text-muted-foreground text-sm">
-            {dashboard.visibility} · {layout.widgets.length} widget
-            {layout.widgets.length === 1 ? "" : "s"}
+            {dashboard.visibility} · {totalWidgets} widget
+            {totalWidgets === 1 ? "" : "s"} · {layout.tabs.length} tab
+            {layout.tabs.length === 1 ? "" : "s"}
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -93,7 +100,36 @@ function Inner({ params }: { params: Params }) {
         </div>
       </header>
 
-      {layout.widgets.length === 0 ? (
+      {layout.tabs.length > 1 && (
+        <div className="border-b border-border" role="tablist">
+          <div className="flex flex-wrap gap-1">
+            {layout.tabs.map((t) => {
+              const isActive = t.id === activeTab?.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTabId(t.id)}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                    isActive
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {t.name}{" "}
+                  <span className="text-muted-foreground text-xs">
+                    ({t.widgets.length})
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {totalWidgets === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>This dashboard is empty</CardTitle>
@@ -102,9 +138,18 @@ function Inner({ params }: { params: Params }) {
             </CardDescription>
           </CardHeader>
         </Card>
+      ) : (activeTab?.widgets.length ?? 0) === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>This tab is empty</CardTitle>
+            <CardDescription>
+              Switch tabs above, or open the editor to add widgets here.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          {layout.widgets.map((w) => (
+          {activeTab?.widgets.map((w) => (
             <WidgetRender key={w.id} instance={w} raidTeamId={teamId} />
           ))}
         </div>
