@@ -153,7 +153,14 @@ export const raidTeamRouter = router({
       return links
         .map((l) => l.character)
         .filter((c) => c.raidMemberships.length === 0)
-        .map(({ raidMemberships: _drop, ...rest }) => rest);
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          realmSlug: c.realmSlug,
+          region: c.region,
+          level: c.level,
+          classId: c.classId,
+        }));
     }),
 
   create: protectedProcedure

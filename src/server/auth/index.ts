@@ -208,7 +208,7 @@ const config: NextAuthConfig = {
   ],
 
   callbacks: {
-    async signIn({ user, account, profile }) {
+    async signIn({ account, profile }) {
       // Battle.net is a link-to-existing-account flow, not a primary identity.
       // The user must already be signed in (via Credentials) when they click
       // "Link Battle.net". We attach the Battle.net Account row to their
