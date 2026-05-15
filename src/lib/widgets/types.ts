@@ -27,6 +27,7 @@ export const WIDGET_TYPES = [
   "missing_fixes",
   "mplus_weekly",
   "talent_loadouts",
+  "parses_heatmap",
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -177,5 +178,10 @@ export const WIDGET_META: Record<
   talent_loadouts: {
     title: "Talent loadouts",
     description: "Current spec per character — quick off-meta spotcheck.",
+  },
+  parses_heatmap: {
+    title: "Parses heatmap",
+    description:
+      "Per-character × per-encounter best-percentile heatmap from WCL.",
   },
 };

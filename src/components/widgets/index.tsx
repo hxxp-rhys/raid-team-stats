@@ -11,6 +11,7 @@ import { IlvlRosterWidget } from "./ilvl-roster";
 import { MissingFixesWidget } from "./missing-fixes";
 import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
+import { ParsesHeatmapWidget } from "./parses-heatmap";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RosterFreshnessWidget } from "./roster-freshness";
 import { TalentLoadoutsWidget } from "./talent-loadouts";
@@ -48,6 +49,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   missing_fixes: MissingFixesWidget,
   mplus_weekly: MplusWeeklyWidget,
   talent_loadouts: TalentLoadoutsWidget,
+  parses_heatmap: ParsesHeatmapWidget,
 };
 
 /**
