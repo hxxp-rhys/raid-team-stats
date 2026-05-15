@@ -3,19 +3,25 @@
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
-type Completion = {
-  bossId?: number;
-  bossName?: string;
-  difficulty?: string;
-  kills?: number;
+/**
+ * Snapshot shape: array of per-instance / per-mode completion entries
+ * emitted by tracked-member-sync.ts after the spec+raid extension. Each
+ * entry's `encounters` carries the per-boss kill count.
+ */
+type CompletionEntry = {
+  instanceId?: number | null;
+  instanceName?: string | null;
+  difficultyType?: string | null;
+  completedCount?: number;
+  totalCount?: number;
+  encounters?: Array<{
+    id?: number | null;
+    name?: string | null;
+    kills?: number;
+  }>;
 };
 
-type RaidPayload =
-  | { bosses?: Completion[]; [k: string]: unknown }
-  | null
-  | undefined;
-
-const DIFF_ORDER = ["MYTHIC", "HEROIC", "NORMAL", "RAID_FINDER"];
+const DIFF_ORDER = ["MYTHIC", "HEROIC", "NORMAL", "LFR", "RAID_FINDER"];
 
 export function RaidCompletionWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
@@ -23,7 +29,7 @@ export function RaidCompletionWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Raid completion"
-      description="Per-character boss kills in the current tier."
+      description="Boss kills by difficulty across the latest raid tier."
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -34,12 +40,17 @@ export function RaidCompletionWidget({ raidTeamId }: { raidTeamId: string }) {
       ) : (
         <ul className="divide-border divide-y text-sm">
           {q.data.members.map((m) => {
-            const payload = m.latest.raid?.completions as RaidPayload;
-            const bosses = payload?.bosses ?? [];
+            const entries =
+              (m.latest.raid?.completions as CompletionEntry[] | null) ?? [];
             const byDiff: Record<string, number> = {};
-            for (const b of bosses) {
-              if (!b.difficulty || !(b.kills && b.kills > 0)) continue;
-              byDiff[b.difficulty] = (byDiff[b.difficulty] ?? 0) + 1;
+            for (const e of entries) {
+              const diff = e.difficultyType;
+              if (!diff) continue;
+              const killed = (e.encounters ?? []).filter(
+                (b) => (b.kills ?? 0) > 0,
+              ).length;
+              if (killed === 0) continue;
+              byDiff[diff] = Math.max(byDiff[diff] ?? 0, killed);
             }
             return (
               <li
