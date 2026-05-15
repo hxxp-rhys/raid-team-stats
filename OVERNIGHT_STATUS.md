@@ -85,7 +85,10 @@ relaunch VSCode from inside itself.
     pulled per character against Manaforge Omega (zoneID 44 by default;
     override with `WCL_RAID_ZONE_ID` env). 200 parse snapshots across
     the 25-char seed.
-  - Result: **13 of 13 widgets** render real data for the seeded team.
+  - Result: **15 of 15 widgets** render real data for the seeded team
+    (the original 13 plus two more added later this session:
+    `parses_heatmap` per-char × per-encounter best-percentile grid, and
+    `recent_kills` last-7-days kill feed).
 
 ## How to verify in the morning
 
