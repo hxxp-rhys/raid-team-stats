@@ -50,7 +50,17 @@ export const endpoints = {
     namespace: profileNamespace(region),
   }),
 
-  /** GET — M+ profile for the current season. */
+  /** GET — M+ index for a character (current overall rating + season list). */
+  characterMythicKeystoneIndex: (
+    region: string,
+    realmSlug: string,
+    characterName: string,
+  ): BlizzardPath => ({
+    path: `/profile/wow/character/${buildCharacterPath(realmSlug, characterName)}/mythic-keystone-profile`,
+    namespace: profileNamespace(region),
+  }),
+
+  /** GET — M+ profile for a specific season. */
   characterMythicKeystone: (
     region: string,
     realmSlug: string,

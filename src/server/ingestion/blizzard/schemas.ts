@@ -238,6 +238,70 @@ export const guildRosterResponseSchema = z
   .passthrough();
 export type GuildRosterResponse = z.infer<typeof guildRosterResponseSchema>;
 
+/**
+ * /profile/wow/character/{realmSlug}/{characterName}/mythic-keystone-profile
+ * — overall M+ index: current rating + list of seasons the character has any
+ * progress in. Each `seasons[n].href` ends in `/season/{id}` which we parse
+ * to locate the current season number.
+ */
+export const mythicKeystoneIndexResponseSchema = z
+  .object({
+    current_mythic_rating: z
+      .object({ rating: z.number().optional() })
+      .passthrough()
+      .optional(),
+    current_period: z
+      .object({ period: z.object({ id: z.number().int().optional() }).passthrough().optional() })
+      .passthrough()
+      .optional(),
+    seasons: z
+      .array(
+        z
+          .object({
+            id: z.number().int().optional(),
+            key: z.object({ href: z.string().optional() }).passthrough().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type MythicKeystoneIndexResponse = z.infer<typeof mythicKeystoneIndexResponseSchema>;
+
+/**
+ * /profile/wow/character/{realmSlug}/{characterName}/mythic-keystone-profile/season/{seasonId}
+ * — per-season detail: best runs (one per dungeon) + weekly highest.
+ */
+export const mythicKeystoneSeasonResponseSchema = z
+  .object({
+    season: z.object({ id: z.number().int() }).passthrough().optional(),
+    best_runs: z
+      .array(
+        z
+          .object({
+            keystone_level: z.number().int().nonnegative().optional(),
+            is_completed_within_time: z.boolean().optional(),
+            duration: z.number().optional(),
+            completed_timestamp: z.number().optional(),
+            dungeon: z
+              .object({
+                id: z.number().int(),
+                name: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    mythic_rating: z
+      .object({ rating: z.number().optional() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+export type MythicKeystoneSeasonResponse = z.infer<typeof mythicKeystoneSeasonResponseSchema>;
+
 export const FACTION_MAP: Record<string, "ALLIANCE" | "HORDE" | "NEUTRAL"> = {
   ALLIANCE: "ALLIANCE",
   HORDE: "HORDE",

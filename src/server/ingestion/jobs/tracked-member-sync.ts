@@ -5,11 +5,14 @@ import { blizzardClient } from "@/server/ingestion/blizzard/client";
 import { endpoints } from "@/server/ingestion/blizzard/endpoints";
 import {
   characterSummaryResponseSchema,
+  mythicKeystoneIndexResponseSchema,
+  mythicKeystoneSeasonResponseSchema,
   raidEncountersResponseSchema,
 } from "@/server/ingestion/blizzard/schemas";
 import {
   writeCharacterSnapshot,
   writeEquipmentSnapshot,
+  writeMplusSnapshot,
   writeRaidSnapshot,
   logSnapshotError,
 } from "@/server/ingestion/snapshots";
@@ -281,8 +284,89 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "raids", characterId: character.id });
   }
 
-  // Phase 4.x remaining: M+ profile (needs season selector), vault, WCL,
-  // Raider.IO.
+  // 4. Mythic+ profile. Blizzard's API needs a season id on the per-season
+  //    endpoint, so we hit the unsuffixed index first to discover the current
+  //    season and read the overall rating, then fetch /season/{id} for the
+  //    weekly highest + best-runs list.
+  try {
+    const mplusIndex = await client.request(
+      endpoints.characterMythicKeystoneIndex(
+        region,
+        character.realmSlug,
+        character.name,
+      ),
+      {
+        region,
+        schema: mythicKeystoneIndexResponseSchema,
+        auth: { kind: "app" },
+        minFloor: 5,
+      },
+    );
+
+    // "Current season" = max season id present in the index's seasons array.
+    // Each entry's id is either the literal id or the trailing number on the
+    // key.href URL (the older shape).
+    let currentSeasonId: number | null = null;
+    for (const s of mplusIndex.seasons ?? []) {
+      let id: number | null = null;
+      if (typeof s.id === "number") id = s.id;
+      else if (typeof s.key?.href === "string") {
+        const match = s.key.href.match(/\/season\/(\d+)/);
+        if (match) id = Number(match[1]);
+      }
+      if (id !== null && (currentSeasonId === null || id > currentSeasonId)) {
+        currentSeasonId = id;
+      }
+    }
+
+    if (currentSeasonId !== null) {
+      const season = await client.request(
+        endpoints.characterMythicKeystone(
+          region,
+          character.realmSlug,
+          character.name,
+          currentSeasonId,
+        ),
+        {
+          region,
+          schema: mythicKeystoneSeasonResponseSchema,
+          auth: { kind: "app" },
+          minFloor: 5,
+        },
+      );
+
+      const currentRating = mplusIndex.current_mythic_rating?.rating ?? null;
+      const bestRuns = season.best_runs ?? [];
+      const weeklyHighest = bestRuns.reduce(
+        (max, r) => Math.max(max, r.keystone_level ?? 0),
+        0,
+      );
+
+      await writeMplusSnapshot({
+        characterId: character.id,
+        source: "BLIZZARD",
+        capturedAt,
+        seasonId: currentSeasonId,
+        currentRating,
+        weeklyHighest: weeklyHighest || null,
+        runsThisWeek: bestRuns.map((r) => ({
+          level: r.keystone_level ?? null,
+          timed: r.is_completed_within_time ?? null,
+          dungeonId: r.dungeon?.id ?? null,
+          dungeonName:
+            typeof r.dungeon?.name === "string" ? r.dungeon.name : null,
+          completedAt: r.completed_timestamp ?? null,
+          durationMs: r.duration ?? null,
+        })),
+        rawPayload: { index: mplusIndex, season },
+      });
+    }
+  } catch (err) {
+    logSnapshotError(err, { stage: "mplus", characterId: character.id });
+  }
+
+  // Phase 4.x remaining: vault (derive from M+ slot eligibility + raid),
+  // WCL parses, Raider.IO.
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();
