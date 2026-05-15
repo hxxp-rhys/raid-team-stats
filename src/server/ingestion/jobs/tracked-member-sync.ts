@@ -14,6 +14,7 @@ import {
   writeEquipmentSnapshot,
   writeMplusSnapshot,
   writeRaidSnapshot,
+  writeVaultSnapshot,
   logSnapshotError,
 } from "@/server/ingestion/snapshots";
 import type { Region } from "@/generated/prisma/enums";
@@ -365,8 +366,78 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "mplus", characterId: character.id });
   }
 
-  // Phase 4.x remaining: vault (derive from M+ slot eligibility + raid),
-  // WCL parses, Raider.IO.
+  // 5. Great Vault — derived from the M+ and raid data we just persisted.
+  //    Vault eligibility rules (current expansion):
+  //      M+ track:    1 timed run = slot 1, 4 = slot 2, 8 = slot 3
+  //      Raid track:  2 boss kills (any difficulty) = slot 1, 4 = slot 2,
+  //                   6 = slot 3
+  //      World track: needs Delve/world-quest data we don't ingest yet —
+  //                   reported as 0/0.
+  //    Best-effort: we count distinct dungeon entries in best_runs and the
+  //    sum of boss kills in the latest raid completions. If the player has
+  //    repeats the count slightly underestimates; the widget treats this as
+  //    an approximate vault preview, not a guarantee.
+  try {
+    const [latestMplus, latestRaid] = await Promise.all([
+      db.mplusSnapshot.findFirst({
+        where: { characterId: character.id, source: "BLIZZARD" },
+        orderBy: { capturedAt: "desc" },
+        select: { runsThisWeek: true },
+      }),
+      db.raidSnapshot.findFirst({
+        where: { characterId: character.id, source: "BLIZZARD" },
+        orderBy: { capturedAt: "desc" },
+        select: { completions: true },
+      }),
+    ]);
+
+    const mplusRunsArray = Array.isArray(latestMplus?.runsThisWeek)
+      ? (latestMplus?.runsThisWeek as unknown[])
+      : [];
+    const mplusRuns = mplusRunsArray.length;
+    const mplusSlots =
+      mplusRuns >= 8 ? 3 : mplusRuns >= 4 ? 2 : mplusRuns >= 1 ? 1 : 0;
+
+    const completions = Array.isArray(latestRaid?.completions)
+      ? (latestRaid?.completions as Array<{ encounters?: Array<{ kills?: number }> }>)
+      : [];
+    // Total distinct boss kills across all difficulties — count each kill
+    // record where kills>0 in the latest expansion only (already filtered).
+    const raidKills = completions.reduce(
+      (sum, entry) =>
+        sum +
+        (entry.encounters?.filter((e) => (e.kills ?? 0) > 0).length ?? 0),
+      0,
+    );
+    const raidSlots =
+      raidKills >= 6 ? 3 : raidKills >= 4 ? 2 : raidKills >= 2 ? 1 : 0;
+
+    // weekStart: Tuesday 15:00 UTC of the current week (US reset). Cheap
+    // calc — find the previous Tuesday and pin to 15:00 UTC.
+    const now = new Date();
+    const weekStart = new Date(now);
+    const daysSinceTuesday = (now.getUTCDay() - 2 + 7) % 7;
+    weekStart.setUTCDate(now.getUTCDate() - daysSinceTuesday);
+    weekStart.setUTCHours(15, 0, 0, 0);
+    if (weekStart > now) weekStart.setUTCDate(weekStart.getUTCDate() - 7);
+
+    await writeVaultSnapshot({
+      characterId: character.id,
+      source: "BLIZZARD",
+      capturedAt,
+      weekStart,
+      slots: {
+        raid: { unlocked: raidSlots, total: 3 },
+        mythicPlus: { unlocked: mplusSlots, total: 3 },
+        world: { unlocked: 0, total: 0 },
+      },
+      rawPayload: { mplusRuns, raidKills, derivedAt: capturedAt.toISOString() },
+    });
+  } catch (err) {
+    logSnapshotError(err, { stage: "vault", characterId: character.id });
+  }
+
+  // Still deferred: WCL parses (separate GraphQL pipeline), Raider.IO.
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();
