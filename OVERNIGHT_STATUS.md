@@ -79,9 +79,11 @@ relaunch VSCode from inside itself.
   - **raid encounters** → unblocks raid_completion
   - **M+ profile** (current rating + weekly highest + best runs) →
     unblocks mplus_ladder + mplus_weekly
-  - Result: **11 of 13 widgets** render real data for the seeded team.
-  - Still empty: vault_progress (derived, needs M+ slot + raid combo
-    logic), wcl_parses (separate GraphQL pipeline).
+  - **vault_progress** is now derived from the M+ and raid snapshots
+    we just persisted (see commit f4177e1).
+  - Result: **12 of 13 widgets** render real data for the seeded team.
+  - Still empty: wcl_parses only (needs the Warcraft Logs GraphQL
+    pipeline — separate API, separate auth, not safe to land cold).
 
 ## How to verify in the morning
 
