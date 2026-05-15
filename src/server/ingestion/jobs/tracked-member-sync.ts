@@ -5,10 +5,12 @@ import { blizzardClient } from "@/server/ingestion/blizzard/client";
 import { endpoints } from "@/server/ingestion/blizzard/endpoints";
 import {
   characterSummaryResponseSchema,
+  raidEncountersResponseSchema,
 } from "@/server/ingestion/blizzard/schemas";
 import {
   writeCharacterSnapshot,
   writeEquipmentSnapshot,
+  writeRaidSnapshot,
   logSnapshotError,
 } from "@/server/ingestion/snapshots";
 import type { Region } from "@/generated/prisma/enums";
@@ -124,6 +126,18 @@ export async function handleTrackedMemberSync(
 
     const itemLevel =
       summary.equipped_item_level ?? summary.average_item_level ?? null;
+    // Blizzard returns `active_spec.name` as either a raw string or a
+    // locale-keyed object; coerce to the canonical English label when present.
+    const specName =
+      typeof summary.active_spec?.name === "string"
+        ? summary.active_spec.name
+        : typeof summary.active_spec?.name === "object"
+          ? (summary.active_spec.name.en_US ??
+            Object.values(summary.active_spec.name)[0] ??
+            null)
+          : null;
+    const specId =
+      typeof summary.active_spec?.id === "number" ? summary.active_spec.id : null;
 
     await writeCharacterSnapshot({
       characterId: character.id,
@@ -131,8 +145,8 @@ export async function handleTrackedMemberSync(
       capturedAt,
       itemLevel,
       level: summary.level ?? null,
-      specId: null,
-      specName: null,
+      specId,
+      specName,
       loadoutText: null,
       rawPayload: summary,
     });
@@ -204,7 +218,71 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "equipment", characterId: character.id });
   }
 
-  // Phase 4.x: M+ profile, raid encounters, vault, WCL parses, Raider.IO.
+  // 3. Raid encounters. Blizzard returns the full per-expansion → per-instance
+  //    → per-mode → per-encounter completion list. We persist a compact slice
+  //    keyed to the LATEST expansion the character has any progress in;
+  //    rawPayload retains the full payload for later replay.
+  try {
+    const raids = await client.request(
+      endpoints.characterRaids(region, character.realmSlug, character.name),
+      {
+        region,
+        schema: raidEncountersResponseSchema,
+        auth: { kind: "app" },
+        minFloor: 5,
+      },
+    );
+
+    // Pick the highest-id expansion (== most recent) that has progress.
+    const expansionsWithProgress = (raids.expansions ?? []).filter(
+      (e) => (e.instances?.length ?? 0) > 0,
+    );
+    let latestExpansionId: number | null = null;
+    let latestExpansionInstances: typeof expansionsWithProgress[number]["instances"] = [];
+    for (const e of expansionsWithProgress) {
+      const id = e.expansion?.id ?? -1;
+      if (latestExpansionId === null || id > latestExpansionId) {
+        latestExpansionId = id;
+        latestExpansionInstances = e.instances;
+      }
+    }
+
+    // Flatten into a compact completion list the raid_completion widget can
+    // render directly: [{ instanceId, difficulty, completedCount, totalCount }].
+    const completions = (latestExpansionInstances ?? []).flatMap((inst) =>
+      (inst.modes ?? []).map((m) => ({
+        instanceId: inst.instance?.id ?? null,
+        instanceName:
+          typeof inst.instance?.name === "string" ? inst.instance.name : null,
+        difficultyType: m.difficulty?.type ?? null,
+        completedCount: m.progress?.completed_count ?? 0,
+        totalCount: m.progress?.total_count ?? 0,
+        encounters:
+          m.progress?.encounters?.map((enc) => ({
+            id: enc.encounter?.id ?? null,
+            name:
+              typeof enc.encounter?.name === "string" ? enc.encounter.name : null,
+            kills: enc.completed_count ?? 0,
+            lastKillTimestamp: enc.last_kill_timestamp ?? null,
+          })) ?? [],
+      })),
+    );
+
+    await writeRaidSnapshot({
+      characterId: character.id,
+      source: "BLIZZARD",
+      capturedAt,
+      expansionId: latestExpansionId ?? null,
+      tierId: null, // Blizzard doesn't expose a "tier id" — derived elsewhere.
+      completions,
+      rawPayload: raids,
+    });
+  } catch (err) {
+    logSnapshotError(err, { stage: "raids", characterId: character.id });
+  }
+
+  // Phase 4.x remaining: M+ profile (needs season selector), vault, WCL,
+  // Raider.IO.
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();

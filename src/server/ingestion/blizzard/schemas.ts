@@ -103,9 +103,98 @@ export const characterSummaryResponseSchema = z
       .passthrough()
       .nullable()
       .optional(),
+    active_spec: z
+      .object({
+        id: z.number().int().optional(),
+        name: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 export type CharacterSummaryResponse = z.infer<typeof characterSummaryResponseSchema>;
+
+/**
+ * /profile/wow/character/{realmSlug}/{characterName}/encounters/raids
+ * — per-expansion → per-instance → per-mode → per-encounter completion list.
+ * Schema kept minimal; raw payload is preserved for replay.
+ */
+export const raidEncountersResponseSchema = z
+  .object({
+    character: z.object({ id: z.coerce.bigint() }).passthrough().optional(),
+    expansions: z
+      .array(
+        z
+          .object({
+            expansion: z
+              .object({ id: z.number().int(), name: z.union([z.string(), z.record(z.string(), z.string())]).optional() })
+              .passthrough()
+              .optional(),
+            instances: z
+              .array(
+                z
+                  .object({
+                    instance: z
+                      .object({
+                        id: z.number().int(),
+                        name: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+                      })
+                      .passthrough()
+                      .optional(),
+                    modes: z
+                      .array(
+                        z
+                          .object({
+                            difficulty: z
+                              .object({
+                                type: z.string(),
+                                name: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+                              })
+                              .passthrough()
+                              .optional(),
+                            status: z
+                              .object({ type: z.string() })
+                              .passthrough()
+                              .optional(),
+                            progress: z
+                              .object({
+                                completed_count: z.number().int().nonnegative().optional(),
+                                total_count: z.number().int().nonnegative().optional(),
+                                encounters: z
+                                  .array(
+                                    z
+                                      .object({
+                                        encounter: z
+                                          .object({
+                                            id: z.number().int(),
+                                            name: z.union([z.string(), z.record(z.string(), z.string())]).optional(),
+                                          })
+                                          .passthrough()
+                                          .optional(),
+                                        completed_count: z.number().int().nonnegative().optional(),
+                                        last_kill_timestamp: z.number().optional(),
+                                      })
+                                      .passthrough(),
+                                  )
+                                  .optional(),
+                              })
+                              .passthrough()
+                              .optional(),
+                          })
+                          .passthrough(),
+                      )
+                      .optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type RaidEncountersResponse = z.infer<typeof raidEncountersResponseSchema>;
 
 // /data/wow/guild/{realm}/{slug}/roster — paginated roster.
 export const guildRosterResponseSchema = z
