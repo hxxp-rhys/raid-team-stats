@@ -116,6 +116,124 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ───────────────────── Theme variants ───────────────────────────────────── */
+/* Each block overrides core CSS variables for the named theme. The default
+   neutral-dark theme is `default-dark` (== the .dark block above). The
+   `<html>` element gets data-theme="…" via a server-rendered cookie read in
+   src/app/layout.tsx — themes apply for the very first paint with no flash. */
+
+/* Alliance — royal blue + gold. Cool, high-contrast. */
+[data-theme="alliance"] {
+    --background: oklch(0.18 0.04 250);
+    --foreground: oklch(0.98 0.01 90);
+    --card: oklch(0.24 0.05 250);
+    --card-foreground: oklch(0.98 0.01 90);
+    --popover: oklch(0.24 0.05 250);
+    --popover-foreground: oklch(0.98 0.01 90);
+    --primary: oklch(0.78 0.16 88);          /* gold */
+    --primary-foreground: oklch(0.18 0.04 250);
+    --secondary: oklch(0.28 0.06 250);
+    --secondary-foreground: oklch(0.98 0.01 90);
+    --muted: oklch(0.28 0.06 250);
+    --muted-foreground: oklch(0.74 0.04 250);
+    --accent: oklch(0.35 0.10 250);
+    --accent-foreground: oklch(0.98 0.01 90);
+    --destructive: oklch(0.65 0.20 25);
+    --border: oklch(0.45 0.10 250 / 35%);
+    --input: oklch(0.45 0.10 250 / 35%);
+    --ring: oklch(0.78 0.16 88);
+}
+
+/* Horde — crimson + iron. Aggressive, warm. */
+[data-theme="horde"] {
+    --background: oklch(0.16 0.03 25);
+    --foreground: oklch(0.97 0.02 60);
+    --card: oklch(0.21 0.04 25);
+    --card-foreground: oklch(0.97 0.02 60);
+    --popover: oklch(0.21 0.04 25);
+    --popover-foreground: oklch(0.97 0.02 60);
+    --primary: oklch(0.62 0.22 25);          /* horde red */
+    --primary-foreground: oklch(0.97 0.02 60);
+    --secondary: oklch(0.26 0.05 25);
+    --secondary-foreground: oklch(0.97 0.02 60);
+    --muted: oklch(0.26 0.05 25);
+    --muted-foreground: oklch(0.72 0.03 50);
+    --accent: oklch(0.34 0.10 35);
+    --accent-foreground: oklch(0.97 0.02 60);
+    --destructive: oklch(0.65 0.22 15);
+    --border: oklch(0.50 0.10 25 / 35%);
+    --input: oklch(0.50 0.10 25 / 35%);
+    --ring: oklch(0.62 0.22 25);
+}
+
+/* Parchment — light beige + sepia. Classic-tabletop / spreadsheet feel. */
+[data-theme="parchment"] {
+    --background: oklch(0.95 0.025 80);
+    --foreground: oklch(0.24 0.04 50);
+    --card: oklch(0.97 0.02 80);
+    --card-foreground: oklch(0.24 0.04 50);
+    --popover: oklch(0.97 0.02 80);
+    --popover-foreground: oklch(0.24 0.04 50);
+    --primary: oklch(0.45 0.08 45);          /* dark sepia */
+    --primary-foreground: oklch(0.96 0.02 80);
+    --secondary: oklch(0.90 0.03 80);
+    --secondary-foreground: oklch(0.24 0.04 50);
+    --muted: oklch(0.92 0.03 80);
+    --muted-foreground: oklch(0.45 0.04 60);
+    --accent: oklch(0.88 0.05 70);
+    --accent-foreground: oklch(0.24 0.04 50);
+    --destructive: oklch(0.55 0.20 25);
+    --border: oklch(0.30 0.04 50 / 25%);
+    --input: oklch(0.30 0.04 50 / 25%);
+    --ring: oklch(0.55 0.08 45);
+}
+
+/* Void — deep purple + neon teal. Shadowlands-y. */
+[data-theme="void"] {
+    --background: oklch(0.13 0.04 300);
+    --foreground: oklch(0.94 0.03 200);
+    --card: oklch(0.19 0.06 300);
+    --card-foreground: oklch(0.94 0.03 200);
+    --popover: oklch(0.19 0.06 300);
+    --popover-foreground: oklch(0.94 0.03 200);
+    --primary: oklch(0.78 0.18 200);         /* neon teal */
+    --primary-foreground: oklch(0.13 0.04 300);
+    --secondary: oklch(0.24 0.08 300);
+    --secondary-foreground: oklch(0.94 0.03 200);
+    --muted: oklch(0.24 0.08 300);
+    --muted-foreground: oklch(0.72 0.06 280);
+    --accent: oklch(0.42 0.18 300);
+    --accent-foreground: oklch(0.94 0.03 200);
+    --destructive: oklch(0.62 0.22 0);
+    --border: oklch(0.50 0.12 300 / 35%);
+    --input: oklch(0.50 0.12 300 / 35%);
+    --ring: oklch(0.78 0.18 200);
+}
+
+/* Default-dark — explicit name so the selector can address it. Inherits the
+   .dark block when both classes are present, but the data-theme also stands
+   on its own for users who don't want the .dark class applied. */
+[data-theme="default-dark"] {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -40,10 +40,10 @@ export const authRouter = router({
   register: publicProcedure
     .input(registerSchema)
     .mutation(async ({ ctx, input }) => {
-      const rl = await consumeLimit(
-        policies.authSignupPerIp,
-        ctx.ip ?? input.email,
-      );
+      // Rate-limit key: prefer client IP, else collapse to a single shared
+      // bucket so an attacker can't sidestep the per-IP cap by rotating the
+      // submitted email.
+      const rl = await consumeLimit(policies.authSignupPerIp, ctx.ip ?? "no-ip");
       if (!rl.allowed) {
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
@@ -57,9 +57,11 @@ export const authRouter = router({
       });
 
       // Account enumeration: same shape whether the email is new or taken.
-      // If it's taken, send the existing user a "someone tried to sign up
-      // with your email" notice instead of registering a duplicate.
+      // Both branches do a dummy/real argon2id so response timing doesn't
+      // distinguish them.
       if (existing) {
+        // Equalize timing — argon2id is the slowest step on the happy path.
+        await hashPassword(input.password);
         await audit({
           event: "AUTH_LOGIN_FAILURE",
           actorUserId: existing.id,
@@ -98,6 +100,39 @@ export const authRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * Re-send the verification email for an already-registered, not-yet-verified
+   * account. Returns ok regardless of whether the email exists or has already
+   * been verified — same shape to prevent enumeration.
+   */
+  resendVerification: publicProcedure
+    .input(z.object({ email: emailSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const rl = await consumeLimit(policies.authSignupPerIp, ctx.ip ?? "no-ip");
+      if (!rl.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many attempts. Please try again later.",
+        });
+      }
+      const user = await ctx.db.user.findUnique({
+        where: { email: input.email },
+        select: { id: true, email: true, emailVerified: true },
+      });
+      if (user && !user.emailVerified) {
+        const { raw } = await issueToken("verify_email", user.id);
+        await sendVerificationEmail(user.email, buildVerifyUrl(raw));
+        await audit({
+          event: "USER_CREATED",
+          actorUserId: user.id,
+          metadata: { step: "verification_resent" },
+          ip: ctx.ip ?? undefined,
+          userAgent: ctx.userAgent ?? undefined,
+        });
+      }
+      return { ok: true };
+    }),
+
   verifyEmail: publicProcedure
     .input(tokenInput)
     .mutation(async ({ ctx, input }) => {
@@ -119,6 +154,7 @@ export const authRouter = router({
         event: "USER_CREATED", // verification effectively activates the account
         actorUserId: updated.id,
         ip: ctx.ip ?? undefined,
+        userAgent: ctx.userAgent ?? undefined,
         metadata: { step: "email_verified" },
       });
 
@@ -183,13 +219,20 @@ export const authRouter = router({
       const passwordHash = await hashPassword(input.password);
 
       // Prior credential may not exist if this user was OAuth-only — create
-      // or update accordingly. After reset, also clear any pending email
-      // verification challenge (the email-verified flag stays as-is).
-      await ctx.db.credential.upsert({
-        where: { userId },
-        update: { passwordHash, lastChangedAt: new Date(), failedLogins: 0 },
-        create: { userId, passwordHash },
-      });
+      // or update accordingly. Successful reset proves the user controls
+      // the email; if they hadn't verified yet, mark them verified now so
+      // they're not stuck in an unverified-but-credentialed limbo.
+      await ctx.db.$transaction([
+        ctx.db.credential.upsert({
+          where: { userId },
+          update: { passwordHash, lastChangedAt: new Date(), failedLogins: 0 },
+          create: { userId, passwordHash },
+        }),
+        ctx.db.user.updateMany({
+          where: { id: userId, emailVerified: null },
+          data: { emailVerified: new Date() },
+        }),
+      ]);
 
       await audit({
         event: "AUTH_PASSWORD_RESET_COMPLETE",

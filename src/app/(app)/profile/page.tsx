@@ -10,16 +10,27 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cookies } from "next/headers";
 import { ProfileActions } from "./actions";
 import { MfaCard } from "./mfa-card";
 import { DeleteAccountCard } from "./delete-account-card";
 import { OwnerMfaWarning } from "./owner-mfa-warning";
+import { ThemeSelector } from "./theme-selector";
+import {
+  DEFAULT_THEME,
+  isValidTheme,
+  THEME_COOKIE,
+  type ThemeId,
+} from "@/lib/theme";
 
 export default async function ProfilePage() {
   const session = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
   if (!session?.user?.id) {
     redirect("/signin?callbackUrl=/profile");
   }
+  const jar = await cookies();
+  const themeRaw = jar.get(THEME_COOKIE)?.value;
+  const theme: ThemeId = isValidTheme(themeRaw) ? themeRaw : DEFAULT_THEME;
 
   const user = await db.user.findUnique({
     where: { id: session.user.id },
@@ -95,6 +106,8 @@ export default async function ProfilePage() {
         </Card>
 
         <ProfileActions battlenetLinked={battlenetLinked} />
+
+        <ThemeSelector current={theme} />
 
         <MfaCard />
 
