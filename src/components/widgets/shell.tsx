@@ -21,13 +21,17 @@ export function WidgetShell({
   description?: string;
   children: ReactNode;
 }) {
+  // h-full so the card stretches to fill its (resizable) grid cell; the
+  // content region grows + scrolls instead of leaving empty space below.
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent>{children}</CardContent>
+      <CardContent className="min-h-0 flex-1 overflow-auto">
+        {children}
+      </CardContent>
     </Card>
   );
 }

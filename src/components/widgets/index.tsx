@@ -5,7 +5,7 @@ import type { ComponentType } from "react";
 import type { WidgetInstance, WidgetType } from "@/lib/widgets/types";
 import { CharacterTimelineWidget } from "./character-timeline";
 import { ClassCompositionWidget } from "./class-composition";
-import { GearAuditWidget } from "./gear-audit";
+import { DataRefreshWidget } from "./data-refresh";
 import { IlvlDistributionWidget } from "./ilvl-distribution";
 import { IlvlRosterWidget } from "./ilvl-roster";
 import { MissingFixesWidget } from "./missing-fixes";
@@ -39,7 +39,6 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   ilvl_roster: IlvlRosterWidget,
   mplus_ladder: MplusLadderWidget,
   vault_progress: VaultProgressWidget,
-  gear_audit: GearAuditWidget,
   raid_completion: RaidCompletionWidget,
   tier_set_tracker: TierSetTrackerWidget,
   wcl_parses: WclParsesWidget,
@@ -52,6 +51,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   talent_loadouts: TalentLoadoutsWidget,
   parses_heatmap: ParsesHeatmapWidget,
   recent_kills: RecentKillsWidget,
+  data_refresh: DataRefreshWidget,
 };
 
 /**

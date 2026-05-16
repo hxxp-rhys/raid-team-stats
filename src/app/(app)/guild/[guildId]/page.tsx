@@ -2,6 +2,8 @@
 
 import { Suspense, use, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { Route } from "next";
 
 import { api } from "@/lib/trpc-client";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,7 @@ export default function GuildDetailPage({ params }: { params: Params }) {
 
 function GuildDetailInner({ params }: { params: Params }) {
   const { guildId } = use(params);
+  const router = useRouter();
 
   const detail = api.guild.get.useQuery({ guildId });
   const utils = api.useUtils();
@@ -49,13 +52,25 @@ function GuildDetailInner({ params }: { params: Params }) {
     onSuccess: () => utils.guild.get.invalidate({ guildId }),
   });
 
-  const triggerSync = api.guild.triggerManualSync.useMutation();
+  // Job id of the currently-running manual sync (if any). Polling key for
+  // RefreshRosterButton — null when no run is in flight.
+  const [syncJobId, setSyncJobId] = useState<string | null>(null);
+  const triggerSync = api.guild.triggerManualSync.useMutation({
+    onSuccess: (res) => {
+      if (res.ok) setSyncJobId(res.jobId);
+    },
+  });
 
   const [teamName, setTeamName] = useState("");
   const createTeam = api.raidTeam.create.useMutation({
-    onSuccess: () => {
+    onSuccess: async (team) => {
       setTeamName("");
-      utils.guild.get.invalidate({ guildId });
+      await utils.guild.get.invalidate({ guildId });
+      // Drop the user straight into the new team's dashboard list so they can
+      // add widgets without hunting through the UI.
+      router.push(
+        `/guild/${guildId}/team/${team.id}/dashboard` as Route,
+      );
     },
   });
   const onCreateTeam = (e: FormEvent<HTMLFormElement>) => {
@@ -92,8 +107,8 @@ function GuildDetailInner({ params }: { params: Params }) {
     );
   }
 
-  const { guild, myRole, myStatus } = detail.data!;
-  const isStaff = myRole === "OWNER" || myRole === "OFFICER";
+  const { guild, myRole, myStatus, isAdmin } = detail.data!;
+  const isStaff = myRole === "OWNER" || myRole === "OFFICER" || isAdmin === true;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-12 space-y-8">
@@ -113,33 +128,33 @@ function GuildDetailInner({ params }: { params: Params }) {
         </p>
       </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Roster sync</CardTitle>
-          <CardDescription>
-            Manual roster refresh pulls the live member list from Battle.net.
-            Rate-limited to 1 per 5 minutes per guild.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            onClick={() => triggerSync.mutate({ guildId })}
-            disabled={triggerSync.isPending}
-          >
-            {triggerSync.isPending ? "Queueing…" : "Refresh roster now"}
-          </Button>
-          {triggerSync.data && triggerSync.data.ok && (
-            <p className="text-muted-foreground mt-2 text-sm">
-              Queued. Job id: {triggerSync.data.jobId}
-            </p>
-          )}
-          {triggerSync.error && (
-            <p className="text-destructive mt-2 text-sm" role="alert">
-              {triggerSync.error.message}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      {isStaff && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Roster sync</CardTitle>
+            <CardDescription>
+              Manual roster refresh pulls the live member list from Battle.net.
+              Rate-limited to 1 per 5 minutes per guild. To let raid-team
+              members refresh their own stats, add the{" "}
+              <em>Data refresh</em> widget to a team dashboard.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RefreshRosterButton
+              guildId={guildId}
+              jobId={syncJobId}
+              onClickRefresh={() => triggerSync.mutate({ guildId })}
+              isPending={triggerSync.isPending}
+              triggerError={triggerSync.error?.message ?? null}
+            />
+            {triggerSync.error && (
+              <p className="text-destructive mt-2 text-sm" role="alert">
+                {triggerSync.error.message}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -243,5 +258,110 @@ function GuildDetailInner({ params }: { params: Params }) {
 
       <WowauditConfigCard guildId={guildId} canEdit={isStaff} />
     </main>
+  );
+}
+
+/**
+ * Refresh Roster button with live progress. While a job is in flight the
+ * button is disabled and the label reflects the current BullMQ state
+ * (Queued → Running → Done/Failed). Polls every 2s while pending/active.
+ */
+function RefreshRosterButton({
+  guildId,
+  jobId,
+  onClickRefresh,
+  isPending,
+  triggerError,
+}: {
+  guildId: string;
+  jobId: string | null;
+  onClickRefresh: () => void;
+  isPending: boolean;
+  triggerError: string | null;
+}) {
+  const status = api.guild.manualSyncStatus.useQuery(
+    { guildId, jobId: jobId ?? "" },
+    {
+      enabled: !!jobId,
+      // Stop polling once the job has reached a terminal state. The query
+      // re-enables when a new jobId arrives (next click).
+      refetchInterval: (q) => {
+        const s = q.state.data?.state;
+        if (!s) return 2000;
+        return s === "completed" || s === "failed" || s === "unknown"
+          ? false
+          : 2000;
+      },
+      refetchOnWindowFocus: false,
+    },
+  );
+
+  // Render label + progress message based on current state.
+  let label = "Refresh Roster";
+  let progress: string | null = null;
+  if (isPending) {
+    label = "Queueing…";
+  } else if (jobId && status.data) {
+    const s = status.data.state;
+    if (s === "waiting" || s === "delayed" || s === "paused") {
+      label = "Refreshing…";
+      progress = "Waiting for worker to pick up the job…";
+    } else if (s === "active") {
+      label = "Refreshing…";
+      progress = "Fetching roster from Battle.net + matching characters…";
+    } else if (s === "completed") {
+      label = "Refresh Roster";
+      const r =
+        (status.data.returnValue as
+          | {
+              characters?: number;
+              guildMatches?: number;
+              autoClaims?: number;
+            }
+          | null
+          | undefined) ?? null;
+      progress = r
+        ? `Done — ${r.characters ?? 0} characters processed, ${r.guildMatches ?? 0} guild link${
+            (r.guildMatches ?? 0) === 1 ? "" : "s"
+          } updated.`
+        : "Done.";
+    } else if (s === "failed") {
+      label = "Refresh Roster";
+      progress = `Failed: ${status.data.failedReason ?? "unknown error"}`;
+    } else {
+      label = "Refresh Roster";
+    }
+  }
+
+  const inFlight =
+    isPending ||
+    (!!jobId &&
+      status.data &&
+      ["waiting", "delayed", "paused", "active"].includes(status.data.state));
+
+  return (
+    <div>
+      <Button onClick={onClickRefresh} disabled={!!inFlight}>
+        {label}
+      </Button>
+      {progress && (
+        <p
+          className={`mt-2 text-sm ${
+            status.data?.state === "failed"
+              ? "text-destructive"
+              : "text-muted-foreground"
+          }`}
+          aria-live="polite"
+          role="status"
+        >
+          {progress}
+        </p>
+      )}
+      {!progress && !triggerError && jobId && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Job id: <span className="font-mono">{jobId.split("_")[2] ?? jobId}</span>
+        </p>
+      )}
+    </div>
   );
 }

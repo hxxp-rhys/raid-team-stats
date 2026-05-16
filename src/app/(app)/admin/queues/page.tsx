@@ -30,28 +30,23 @@ export default function QueuesPage() {
 
   if (status.error || runs.error) {
     return (
-      <main className="mx-auto max-w-4xl px-4 py-12">
-        <Card>
-          <CardHeader>
-            <CardTitle>Not found</CardTitle>
-            <CardDescription>
-              {status.error?.message ?? runs.error?.message ?? "Unknown error"}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </main>
+      <Card>
+        <CardHeader>
+          <CardTitle>Not found</CardTitle>
+          <CardDescription>
+            {status.error?.message ?? runs.error?.message ?? "Unknown error"}
+          </CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
   return (
-    <main className="mx-auto max-w-5xl space-y-6 px-4 py-12">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Queue admin</h1>
-          <p className="text-muted-foreground text-sm">
-            BullMQ queues and recent SyncRuns. Auto-refreshes every 10s.
-          </p>
-        </div>
+    <section className="space-y-6">
+      <div className="flex items-baseline justify-between">
+        <p className="text-muted-foreground text-sm">
+          BullMQ queues and recent SyncRuns. Auto-refreshes every 10s.
+        </p>
         <Button
           size="sm"
           variant="outline"
@@ -63,7 +58,7 @@ export default function QueuesPage() {
         >
           Refresh now ({refreshTick})
         </Button>
-      </header>
+      </div>
 
       <section className="grid gap-4 sm:grid-cols-3">
         {status.data?.queues.map((q) => (
@@ -177,6 +172,6 @@ export default function QueuesPage() {
           )}
         </CardContent>
       </Card>
-    </main>
+    </section>
   );
 }

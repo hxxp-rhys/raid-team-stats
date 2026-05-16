@@ -47,16 +47,21 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Collect distinct encounter ids across all members and sort ascending so
-  // the column order is stable regardless of how many parses each character
-  // has (lowest-id encounter == B1, etc).
-  const encounterSet = new Set<number>();
+  // Collect distinct encounters (id + name) across all members. Pull the
+  // name from whichever parse row carries it. Sorted by encounter id so the
+  // column order is stable (== pull/boss order within the raid).
+  const encMap = new Map<number, string>();
   for (const m of q.data.members) {
     for (const p of m.latest.wclParses ?? []) {
-      if (typeof p.encounterId === "number") encounterSet.add(p.encounterId);
+      if (typeof p.encounterId !== "number") continue;
+      if (!encMap.has(p.encounterId) || (p.encounterName && !encMap.get(p.encounterId))) {
+        encMap.set(p.encounterId, p.encounterName ?? "");
+      }
     }
   }
-  const encounterOrder = [...encounterSet].sort((a, b) => a - b);
+  const encounterOrder = [...encMap.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.id - b.id);
 
   if (encounterOrder.length === 0) {
     return (
@@ -83,10 +88,22 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     byChar.set(m.character.id, cellByEnc);
   }
 
+  // Short column label: boss initials (e.g. "Soulbinder Naazindhri" → "SN").
+  // Full name is in the header title + a name row above the grid.
+  const shortLabel = (name: string, idx: number) =>
+    name
+      ? name
+          .split(/\s+/)
+          .map((w) => w[0])
+          .join("")
+          .slice(0, 3)
+          .toUpperCase()
+      : `B${idx + 1}`;
+
   return (
     <WidgetShell
       title="Parses heatmap"
-      description="Best percentile per character per encounter. Hover a cell for the value."
+      description="Best Mythic percentile per character per boss. Hover a cell or header for detail."
     >
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -94,14 +111,14 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
           <thead>
             <tr className="text-muted-foreground text-left uppercase">
               <th scope="col" className="py-1 pr-2 font-medium">Character</th>
-              {encounterOrder.map((eid, idx) => (
+              {encounterOrder.map((enc, idx) => (
                 <th
-                  key={eid}
+                  key={enc.id}
                   scope="col"
                   className="py-1 pr-1 text-center font-medium"
-                  title={`Boss ${idx + 1} (encounter id ${eid})`}
+                  title={enc.name || `Encounter ${enc.id}`}
                 >
-                  B{idx + 1}
+                  {shortLabel(enc.name, idx)}
                 </th>
               ))}
               <th scope="col" className="py-1 pr-1 text-right font-medium">
@@ -118,13 +135,17 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
               return (
                 <tr key={m.character.id}>
                   <td className="py-1.5 pr-2 font-medium">{m.character.name}</td>
-                  {encounterOrder.map((eid) => {
-                    const p = cells?.get(eid) ?? null;
+                  {encounterOrder.map((enc) => {
+                    const p = cells?.get(enc.id) ?? null;
                     return (
                       <td
-                        key={eid}
+                        key={enc.id}
                         className={`px-1 py-1 text-center font-mono ${colorFor(p)} ${textColorFor(p)}`}
-                        title={p == null ? "no parse" : `${p}%`}
+                        title={
+                          p == null
+                            ? `${enc.name || `Encounter ${enc.id}`}: no parse`
+                            : `${enc.name || `Encounter ${enc.id}`}: ${p}%`
+                        }
                       >
                         {p == null ? "—" : Math.round(p)}
                       </td>
@@ -140,7 +161,17 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
             })}
           </tbody>
         </table>
+        <ol className="text-muted-foreground mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] sm:grid-cols-3">
+          {encounterOrder.map((enc, idx) => (
+            <li key={enc.id}>
+              <span className="font-mono">{shortLabel(enc.name, idx)}</span>
+              {" — "}
+              {enc.name || `Encounter ${enc.id}`}
+            </li>
+          ))}
+        </ol>
       </div>
     </WidgetShell>
   );
 }
+

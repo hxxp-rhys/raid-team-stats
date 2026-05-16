@@ -43,12 +43,15 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
 
   const rows = q.data.members
     .map((m) => {
+      // Exact weekly completions (repeats included) when available; fall
+      // back to the per-dungeon best-runs array length for old snapshots.
       const runsRaw = m.latest.mplus?.runsThisWeek;
-      const runsCount = Array.isArray(runsRaw)
+      const fallback = Array.isArray(runsRaw)
         ? runsRaw.length
         : typeof runsRaw === "number"
           ? runsRaw
           : 0;
+      const runsCount = m.latest.mplus?.weeklyRunCount ?? fallback;
       const slots = slotsUnlocked(runsCount);
       const highest =
         typeof m.latest.mplus?.weeklyHighest === "number"
@@ -71,7 +74,9 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
             <th scope="col" className="py-1 pr-3 font-medium">Class</th>
             <th scope="col" className="py-1 pr-3 text-right font-medium">Runs</th>
             <th scope="col" className="py-1 pr-3 text-right font-medium">Highest</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Vault slots</th>
+            <th scope="col" className="py-1 pr-3 text-center font-medium">
+              Vault slots
+            </th>
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
@@ -90,7 +95,9 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
                 {m.highest ?? "—"}
               </td>
               <td className="py-1.5 pr-3">
-                <SlotPips filled={m.slots} />
+                <div className="flex justify-center">
+                  <SlotPips filled={m.slots} />
+                </div>
               </td>
             </tr>
           ))}
