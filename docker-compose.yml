@@ -22,7 +22,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - rts-pgdata:/var/lib/postgresql/data
+      - ./persistent_data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U raid_team_stats -d raid_team_stats"]
       interval: 5s
@@ -37,7 +37,7 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
-      - rts-redisdata:/data
+      - ./persistent_data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -73,9 +73,9 @@ services:
       # Named volumes shadow these paths so the container keeps its own copies
       # (Alpine-built native modules, generated Prisma client, Next dev cache)
       # rather than picking up host artifacts compiled for a different OS.
-      - rts-node-modules:/app/node_modules
-      - rts-next-cache:/app/.next
-      - rts-prisma-client:/app/src/generated
+      - ./persistent_data/web/node-modules:/app/node_modules
+      - ./persistent_data/web/next-cache:/app/.next
+      - ./persistent_data/web/prisma-client:/app/src/generated
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,8 +104,8 @@ services:
     volumes:
       - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
       - ./certs:/certs:ro
-      - rts-caddy-data:/data
-      - rts-caddy-config:/config
+      - ./persistent_data/caddy/data:/data
+      - ./persistent_data/caddy/config:/config
     ports:
       - "80:80"
       - "443:443"
@@ -127,11 +127,11 @@ services:
       DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
       REDIS_URL: redis://redis:6379
       METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
-    command: ["sh", "-c", "npx prisma generate && npx tsx src/server/ingestion/worker.ts"]
+    command: ["sh", "-c", "if [ ! -f /app/node_modules/.package-lock.json ]; then echo 'Bootstrapping node_modules (first run)...'; npm ci --no-audit --no-fund; fi && npx prisma generate && npx tsx src/server/ingestion/worker.ts"]
     volumes:
       - ./:/app
-      - rts-node-modules:/app/node_modules
-      - rts-prisma-client:/app/src/generated
+      - ./persistent_data/worker/node-modules:/app/node_modules
+      - ./persistent_data/worker/prisma-client:/app/src/generated
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,7 +154,7 @@ services:
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/prometheus/entrypoint.sh:/etc/prometheus/entrypoint.sh:ro
-      - rts-prometheus:/prometheus
+      - ./persistent_data/prometheus:/prometheus
     entrypoint: ["/bin/sh", "/etc/prometheus/entrypoint.sh"]
     ports:
       - "127.0.0.1:9090:9090"
@@ -169,7 +169,7 @@ services:
     command: ["-config.file=/etc/loki/loki-config.yml"]
     volumes:
       - ./ops/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
-      - rts-loki:/loki
+      - ./persistent_data/loki:/loki
     ports:
       - "127.0.0.1:3100:3100"
 
@@ -181,7 +181,7 @@ services:
     volumes:
       - ./ops/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - rts-promtail-positions:/tmp
+      - ./persistent_data/promtail-positions:/tmp
     depends_on:
       loki:
         condition: service_started
@@ -199,7 +199,7 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
-      - rts-grafana:/var/lib/grafana
+      - ./persistent_data/grafana:/var/lib/grafana
     ports:
       - "127.0.0.1:3001:3000"
     depends_on:
@@ -207,16 +207,3 @@ services:
         condition: service_started
       loki:
         condition: service_started
-
-volumes:
-  rts-pgdata:
-  rts-redisdata:
-  rts-node-modules:
-  rts-next-cache:
-  rts-prisma-client:
-  rts-prometheus:
-  rts-loki:
-  rts-promtail-positions:
-  rts-grafana:
-  rts-caddy-data:
-  rts-caddy-config:

@@ -21,7 +21,9 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 
 EXPOSE 3000
 
-# Generate Prisma client + apply pending migrations + start dev server.
-# `migrate deploy` is idempotent — it just applies any new migration files.
+# Bootstrap node_modules on first start if the bind mount shadowed the
+# image-baked install with an empty host dir (bind mounts don't copy image
+# content the way named volumes do). Then generate Prisma client, apply
+# migrations, and start dev server.
 # Schema changes during dev: `docker compose exec web npx prisma migrate dev --name <name>`
-CMD ["sh", "-c", "npx prisma generate && npx prisma migrate deploy && npm run dev -- -H 0.0.0.0 -p 3000"]
+CMD ["sh", "/app/scripts/dev-entrypoint.sh"]
