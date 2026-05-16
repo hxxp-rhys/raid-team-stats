@@ -46,22 +46,19 @@ export type CharacterZoneRankingsResponse = z.infer<
 >;
 
 /**
- * Lists every raid zone WCL knows, newest last. Used to auto-resolve the
- * CURRENT raid tier (highest id, with encounters) so the parses widgets
- * track the live raid (e.g. WoW Midnight) without a hardcoded zone id.
+ * Flat list of every WCL raid/zone (`worldData.zones`, the same shape
+ * scripts/wcl-smoke.ts uses). Used to auto-resolve the CURRENT raid tier:
+ * the highest-id zone that is NOT frozen and NOT a PTR/M+/Delve zone.
+ * (The earlier `worldData.expansions[].zones` variant was unreliable —
+ * WCL lumps Classic seasonal expansions in with large ids.)
  */
 export const WCL_RAID_ZONES_QUERY = /* GraphQL */ `
   query WclRaidZones {
     worldData {
-      expansions {
+      zones {
         id
         name
-        zones {
-          id
-          name
-          frozen
-          encounters { id name }
-        }
+        frozen
       }
     }
   }
@@ -71,35 +68,13 @@ export const wclRaidZonesResponseSchema = z
   .object({
     worldData: z
       .object({
-        expansions: z
+        zones: z
           .array(
             z
               .object({
                 id: z.number().int(),
                 name: z.string().optional(),
-                zones: z
-                  .array(
-                    z
-                      .object({
-                        id: z.number().int(),
-                        name: z.string().optional(),
-                        frozen: z.boolean().nullable().optional(),
-                        encounters: z
-                          .array(
-                            z
-                              .object({
-                                id: z.number().int(),
-                                name: z.string().optional(),
-                              })
-                              .passthrough(),
-                          )
-                          .nullable()
-                          .optional(),
-                      })
-                      .passthrough(),
-                  )
-                  .nullable()
-                  .optional(),
+                frozen: z.boolean().nullable().optional(),
               })
               .passthrough(),
           )

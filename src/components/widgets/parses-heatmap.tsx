@@ -47,13 +47,26 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Collect distinct encounters (id + name) across all members. Pull the
-  // name from whichever parse row carries it. Sorted by encounter id so the
-  // column order is stable (== pull/boss order within the raid).
+  // Only show the CURRENT raid tier. WCL zone ids increase per tier, so the
+  // highest zoneId present is the live raid (Midnight = 46); older parses
+  // (e.g. The War Within's Manaforge Omega = 44) are filtered out so the
+  // heatmap never mixes expansions.
+  let currentZone = -1;
+  for (const m of q.data.members) {
+    for (const p of m.latest.wclParses ?? []) {
+      if (typeof p.zoneId === "number" && p.zoneId > currentZone)
+        currentZone = p.zoneId;
+    }
+  }
+
+  // Collect distinct encounters (id + name) for the current zone only.
+  // Pull the name from whichever parse row carries it. Sorted by encounter
+  // id so the column order is stable (== pull/boss order within the raid).
   const encMap = new Map<number, string>();
   for (const m of q.data.members) {
     for (const p of m.latest.wclParses ?? []) {
       if (typeof p.encounterId !== "number") continue;
+      if (p.zoneId !== currentZone) continue;
       if (!encMap.has(p.encounterId) || (p.encounterName && !encMap.get(p.encounterId))) {
         encMap.set(p.encounterId, p.encounterName ?? "");
       }
@@ -80,6 +93,7 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     for (const p of m.latest.wclParses ?? []) {
       if (typeof p.encounterId !== "number") continue;
       if (typeof p.percentile !== "number") continue;
+      if (p.zoneId !== currentZone) continue; // current raid only
       const prior = cellByEnc.get(p.encounterId);
       if (prior === undefined || p.percentile > prior) {
         cellByEnc.set(p.encounterId, p.percentile);

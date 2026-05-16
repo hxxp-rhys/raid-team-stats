@@ -46,21 +46,20 @@ function Pips({
   tracked?: boolean;
 }) {
   if (total <= 0) return <span className="text-muted-foreground text-xs">—</span>;
-  // World vault: slots exist but progress isn't observable via the public
-  // API. Show dim dashed placeholders + a hint instead of a false 0/3.
+  // World (Delve) vault: Blizzard exposes NO Great Vault / Delve API
+  // (public or user-OAuth). It is only obtainable from an in-game addon
+  // upload — i.e. WoW Audit, per-guild. Until a guild configures WoW Audit
+  // (and members run its addon) this row is genuinely unavailable, so we
+  // label it explicitly rather than fake a 0/3.
   if (!tracked) {
     return (
       <span
-        className="inline-flex items-center gap-0.5"
-        title="World (Delve) vault progress isn't exposed by Blizzard's public API"
+        className="inline-flex items-center gap-1"
+        title="No Blizzard API exposes the Great Vault / Delve progress. The World row is only available via WoW Audit (per-guild key + the WoW Audit in-game addon)."
       >
-        {Array.from({ length: total }).map((_, i) => (
-          <span
-            key={i}
-            className="border-muted-foreground/30 inline-block size-2.5 rounded-full border border-dashed"
-          />
-        ))}
-        <span className="text-muted-foreground ml-1 text-[10px]">n/a</span>
+        <span className="border-muted-foreground/30 text-muted-foreground rounded border border-dashed px-1.5 py-0.5 text-[10px]">
+          WoW Audit only
+        </span>
       </span>
     );
   }
@@ -95,7 +94,7 @@ export function VaultProgressWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Great Vault progress"
-      description="Slots unlocked this reset (raid / M+ / world)."
+      description="Vault slots unlocked this reset. Raid + M+ are derived from Blizzard data; World (Delves) has no Blizzard API and shows only when the guild has WoW Audit configured."
     >
       {q.isPending ? (
         <WidgetLoading />

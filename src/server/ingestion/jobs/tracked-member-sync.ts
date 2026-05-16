@@ -649,17 +649,14 @@ export async function handleTrackedMemberSync(
   //    requested zoneID. We pull best-DPS rankings for the current raid tier
   //    and persist one WclParseSnapshot per (encounter, difficulty).
   //
-  //    Zone = the current live retail raid tier. WCL only has data for
-  //    content that's actually live (it's a real logging service), so this
-  //    tracks The War Within's current raid (Manaforge Omega = 44) today and
-  //    will move to Midnight's raid once that ships and is logged — set
-  //    `WCL_RAID_ZONE_ID` to the new zone when a tier launches (NEXT_STEPS).
-  //    NOTE: a fully-automatic resolver was tried but WCL's worldData lumps
-  //    Classic seasonal expansions in with high ids, so "newest expansion"
-  //    grabbed a Classic raid — an explicit env-pinned default is reliable.
+  //    Zone = the current live raid tier (WoW Midnight). Resolved via
+  //    `currentRaidZoneId()`: env WCL_RAID_ZONE_ID pin → Redis cache →
+  //    live worldData.zones (newest non-frozen, non-PTR/M+/Delve zone).
+  //    Prod pins WCL_RAID_ZONE_ID=46 (the live Midnight raid). Falls back
+  //    to 46 only if resolution somehow fails.
   try {
     const wcl = warcraftLogsClient();
-    const zoneID = Number(process.env.WCL_RAID_ZONE_ID ?? "44");
+    const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
     const rankings = await wcl.query({
       query: CHARACTER_ZONE_RANKINGS_QUERY,
       variables: {

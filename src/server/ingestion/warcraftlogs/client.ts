@@ -144,6 +144,57 @@ export class WarcraftLogsClient {
     }
   }
 
+  /**
+   * Resolve the CURRENT live raid tier's WCL zone id.
+   *
+   * Priority:
+   *   1. env.WCL_RAID_ZONE_ID — explicit pin (most reliable; what prod uses).
+   *   2. Redis cache (6h) — zones change ~once per content patch.
+   *   3. Live `worldData.zones`: highest-id zone that is NOT frozen and not
+   *      a PTR / Mythic+ / Delve zone (= the live raid tier, e.g. Midnight).
+   *
+   * Returns null only when WCL is unreachable and nothing is pinned/cached;
+   * callers fall back to their own default.
+   */
+  async currentRaidZoneId(): Promise<number | null> {
+    const pinned = process.env.WCL_RAID_ZONE_ID;
+    if (pinned && Number.isFinite(Number(pinned))) return Number(pinned);
+
+    const CACHE_KEY = "wcl:current-raid-zone";
+    const cached = await redis.get(CACHE_KEY);
+    if (cached && Number.isFinite(Number(cached))) return Number(cached);
+
+    try {
+      const { WCL_RAID_ZONES_QUERY, wclRaidZonesResponseSchema } =
+        await import("@/server/ingestion/warcraftlogs/queries");
+      const res = await this.query({
+        query: WCL_RAID_ZONES_QUERY,
+        schema: wclRaidZonesResponseSchema,
+        estimatedPoints: 2,
+      });
+      const zones = res.worldData?.zones ?? [];
+      // Exclude frozen (past tiers), PTR (next tier in testing), and the
+      // non-raid feature zones (Mythic+ seasons, Delves). The live raid is
+      // the highest-id zone left.
+      const isNonRaid = (n: string) =>
+        /\bPTR\b/i.test(n) ||
+        /mythic\+|m\+|season/i.test(n) ||
+        /delve/i.test(n);
+      const raid = zones
+        .filter((z) => z.frozen !== true && !isNonRaid(z.name ?? ""))
+        .sort((a, b) => b.id - a.id)[0];
+      if (!raid) return null;
+      await redis.set(CACHE_KEY, String(raid.id), "EX", 6 * 60 * 60);
+      logger.info(
+        { zoneId: raid.id, zoneName: raid.name },
+        "resolved current WCL raid zone",
+      );
+      return raid.id;
+    } catch (err) {
+      logger.warn({ err }, "currentRaidZoneId resolution failed");
+      return null;
+    }
+  }
 
   private async getAppToken(): Promise<string> {
     const cached = await redis.get(TOKEN_REDIS_KEY);
