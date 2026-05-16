@@ -35,8 +35,28 @@ export const raiderIOCharacterProfileSchema = z
       )
       .optional(),
 
-    // mythic_plus_weekly_highest_level_runs
+    // mythic_plus_weekly_highest_level_runs — highest run PER DUNGEON this
+    // week (deduplicated). Good for "highest key" but not a run count.
     mythic_plus_weekly_highest_level_runs: z
+      .array(
+        z
+          .object({
+            dungeon: z.string(),
+            short_name: z.string().optional(),
+            mythic_level: z.number().int().nonnegative(),
+            completed_at: z.string().optional(),
+            num_keystone_upgrades: z.number().int().nonnegative().optional(),
+            score: z.number().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+
+    // mythic_plus_recent_runs — the most recent individual runs (repeats
+    // included), each with an ISO `completed_at`. Counting those completed
+    // after the weekly reset gives the EXACT vault run count in the 0–8
+    // band that determines slot unlocks.
+    mythic_plus_recent_runs: z
       .array(
         z
           .object({

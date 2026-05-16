@@ -1,11 +1,13 @@
 import type { Region, Faction } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { normalizeRealmSlug, normalizeGuildSlug } from "@/lib/realm";
 import {
   recordGuildPresence,
   recordGuildAbsence,
 } from "@/server/guild-auth/lifecycle";
 import { claimByGm } from "@/server/guild-auth/claim";
+import { claimPendingAssetsForUser } from "@/server/guild-auth/ownership";
 
 /**
  * Phase 3 scaffolding: shape of one Blizzard-reported character + guild
@@ -35,12 +37,27 @@ type ApplyVerificationInput = {
   userId: string;
   observedAt: Date;
   characters: VerifiedCharacterObservation[];
+  /**
+   * When true (user-initiated Battle.net verify), the upsert UPDATE branch
+   * re-attributes Character.userId to the calling user — this is the entry
+   * point for "the real owner just claimed their character." Also triggers
+   * pending-asset transfer (raid teams + dashboards whose
+   * pendingLeaderCharacterId / pendingOwnerCharacterId matches).
+   *
+   * When false (Tier-C admin roster ingest), DO NOT re-attribute — we only
+   * have public roster data, no OAuth proof of ownership.
+   *
+   * Defaults to false to keep the safer behavior on existing callers.
+   */
+  verifiedOwnership?: boolean;
 };
 
 type ApplyVerificationResult = {
   upserted: number;
   guildMatches: number;
   autoClaims: number;
+  pendingTeamsClaimed: number;
+  pendingDashboardsClaimed: number;
 };
 
 /**
@@ -66,6 +83,11 @@ export async function applyVerification(
     if (!realmSlug) continue;
 
     // Upsert the character row by stable Blizzard ID.
+    //
+    // The update branch only re-attributes userId when the caller has OAuth
+    // proof of ownership (`verifiedOwnership=true`). Without that flag we
+    // leave the existing userId alone — public roster ingestion has no proof
+    // that the calling user actually owns the character.
     const character = await db.character.upsert({
       where: { blizzardCharacterId: obs.blizzardCharacterId },
       create: {
@@ -81,6 +103,7 @@ export async function applyVerification(
         lastSyncedAt: input.observedAt,
       },
       update: {
+        ...(input.verifiedOwnership ? { userId: input.userId } : {}),
         region: obs.region,
         realmSlug,
         name: obs.characterName,
@@ -149,7 +172,31 @@ export async function applyVerification(
   // when a tracked character changes guilds.
   await markUnobservedAbsences(input);
 
-  return { upserted, guildMatches, autoClaims };
+  // If the caller proved ownership, claim any pending raid teams /
+  // dashboards keyed off their newly-attributed characters. (The Blizzard
+  // sync paths use verifiedOwnership=false and skip this entirely.)
+  let pendingTeamsClaimed = 0;
+  let pendingDashboardsClaimed = 0;
+  if (input.verifiedOwnership) {
+    try {
+      const claimed = await claimPendingAssetsForUser(input.userId);
+      pendingTeamsClaimed = claimed.teamsClaimed;
+      pendingDashboardsClaimed = claimed.dashboardsClaimed;
+    } catch (err) {
+      logger.warn(
+        { err, userId: input.userId },
+        "claimPendingAssetsForUser failed",
+      );
+    }
+  }
+
+  return {
+    upserted,
+    guildMatches,
+    autoClaims,
+    pendingTeamsClaimed,
+    pendingDashboardsClaimed,
+  };
 }
 
 async function markUnobservedAbsences(

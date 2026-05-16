@@ -91,6 +91,7 @@ type EquipmentArgs = {
   missingGemsCount?: number | null;
   tierSetPiecesCount?: number | null;
   tierSetIds?: number[];
+  tierSlots?: unknown;
   items: unknown;
   rawPayload: unknown;
 };
@@ -122,6 +123,10 @@ export async function writeEquipmentSnapshot(args: EquipmentArgs): Promise<Resul
       missingGemsCount: args.missingGemsCount ?? null,
       tierSetPiecesCount: args.tierSetPiecesCount ?? null,
       tierSetIds: args.tierSetIds ?? [],
+      tierSlots:
+        args.tierSlots == null
+          ? undefined
+          : (toJsonValue(args.tierSlots) as Prisma.InputJsonValue),
       items: toJsonValue(args.items) as Prisma.InputJsonValue,
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },
@@ -136,6 +141,7 @@ type MplusArgs = {
   seasonId: number;
   currentRating?: number | null;
   weeklyHighest?: number | null;
+  weeklyRunCount?: number | null;
   runsThisWeek: unknown;
   rawPayload: unknown;
 };
@@ -145,6 +151,7 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
     season: args.seasonId,
     rating: args.currentRating ?? null,
     weekly: args.weeklyHighest ?? null,
+    weeklyCount: args.weeklyRunCount ?? null,
     runs: args.runsThisWeek,
   });
   const recent = await db.mplusSnapshot.findFirst({
@@ -168,6 +175,7 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
       currentRating:
         args.currentRating != null ? args.currentRating.toString() : null,
       weeklyHighest: args.weeklyHighest ?? null,
+      weeklyRunCount: args.weeklyRunCount ?? null,
       runsThisWeek: toJsonValue(args.runsThisWeek) as Prisma.InputJsonValue,
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },
@@ -272,6 +280,7 @@ type WclParseArgs = {
   capturedAt: Date;
   zoneId: number;
   encounterId: number;
+  encounterName?: string | null;
   difficulty: number;
   percentile?: number | null;
   metric?: string | null;
@@ -282,6 +291,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
   const sourceHash = canonicalHash({
     z: args.zoneId,
     e: args.encounterId,
+    n: args.encounterName ?? null,
     d: args.difficulty,
     p: args.percentile ?? null,
     m: args.metric ?? null,
@@ -306,6 +316,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
       sourceHash,
       zoneId: args.zoneId,
       encounterId: args.encounterId,
+      encounterName: args.encounterName ?? null,
       difficulty: args.difficulty,
       percentile: args.percentile ?? null,
       metric: args.metric ?? null,

@@ -29,7 +29,7 @@ export async function enqueueGuildRosterSyncForAllGuilds(): Promise<{ enqueued: 
     guilds.map((g) => ({
       name: QUEUE_NAMES.guildRosterSync,
       data: { guildId: g.id } satisfies GuildRosterSyncPayload,
-      opts: { jobId: `weekly:${g.id}:${weekKey()}` },
+      opts: { jobId: `weekly_${g.id}_${weekKey()}` },
     })),
   );
   return { enqueued: guilds.length };

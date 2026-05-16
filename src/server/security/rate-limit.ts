@@ -132,4 +132,9 @@ export const policies = {
   trpcMutationPerUser: { namespace: "trpc:mutation:user", limit: 120, windowMs: 60_000 },
   manualSyncPerUser: { namespace: "sync:manual:user", limit: 1, windowMs: 10 * 60_000 },
   manualSyncPerGuild: { namespace: "sync:manual:guild", limit: 1, windowMs: 5 * 60_000 },
+  // Team-level data refresh (Tier-A re-trigger). Same shape as manualSync but
+  // per-team and slightly more permissive — three per 10min for a leader who's
+  // iterating on a dashboard, five per hour for the team as a whole.
+  teamRefreshPerUser: { namespace: "team:refresh:user", limit: 3, windowMs: 10 * 60_000 },
+  teamRefreshPerTeam: { namespace: "team:refresh:team", limit: 5, windowMs: 60 * 60_000 },
 } as const satisfies Record<string, Limit>;

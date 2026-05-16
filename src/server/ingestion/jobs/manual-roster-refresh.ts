@@ -71,7 +71,7 @@ export async function enqueueManualRosterRefresh(
   }
 
   const job = await queues.manualRosterRefresh.add(QUEUE_NAMES.manualRosterRefresh, input, {
-    jobId: `manual:${input.guildId}:${Date.now()}`,
+    jobId: `manual_${input.guildId}_${Date.now()}`,
   });
   if (!job.id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   return { ok: true, jobId: job.id };

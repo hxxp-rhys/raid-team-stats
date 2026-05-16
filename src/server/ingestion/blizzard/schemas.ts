@@ -244,6 +244,24 @@ export type GuildRosterResponse = z.infer<typeof guildRosterResponseSchema>;
  * progress in. Each `seasons[n].href` ends in `/season/{id}` which we parse
  * to locate the current season number.
  */
+const keystoneRunSchema = z
+  .object({
+    keystone_level: z.number().int().nonnegative().optional(),
+    is_completed_within_time: z.boolean().optional(),
+    duration: z.number().optional(),
+    completed_timestamp: z.number().optional(),
+    dungeon: z
+      .object({
+        id: z.number().int(),
+        name: z
+          .union([z.string(), z.record(z.string(), z.string())])
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
 export const mythicKeystoneIndexResponseSchema = z
   .object({
     current_mythic_rating: z
@@ -251,7 +269,16 @@ export const mythicKeystoneIndexResponseSchema = z
       .passthrough()
       .optional(),
     current_period: z
-      .object({ period: z.object({ id: z.number().int().optional() }).passthrough().optional() })
+      .object({
+        period: z
+          .object({ id: z.number().int().optional() })
+          .passthrough()
+          .optional(),
+        // Runs completed in the CURRENT weekly M+ period — this is what
+        // drives Great Vault progress (1/4/8 runs → 1/2/3 slots). One entry
+        // per dungeon (best run for the period).
+        best_runs: z.array(keystoneRunSchema).optional(),
+      })
       .passthrough()
       .optional(),
     seasons: z

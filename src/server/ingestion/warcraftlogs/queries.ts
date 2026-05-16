@@ -44,3 +44,70 @@ export const characterZoneRankingsResponseSchema = z
 export type CharacterZoneRankingsResponse = z.infer<
   typeof characterZoneRankingsResponseSchema
 >;
+
+/**
+ * Lists every raid zone WCL knows, newest last. Used to auto-resolve the
+ * CURRENT raid tier (highest id, with encounters) so the parses widgets
+ * track the live raid (e.g. WoW Midnight) without a hardcoded zone id.
+ */
+export const WCL_RAID_ZONES_QUERY = /* GraphQL */ `
+  query WclRaidZones {
+    worldData {
+      expansions {
+        id
+        name
+        zones {
+          id
+          name
+          frozen
+          encounters { id name }
+        }
+      }
+    }
+  }
+`;
+
+export const wclRaidZonesResponseSchema = z
+  .object({
+    worldData: z
+      .object({
+        expansions: z
+          .array(
+            z
+              .object({
+                id: z.number().int(),
+                name: z.string().optional(),
+                zones: z
+                  .array(
+                    z
+                      .object({
+                        id: z.number().int(),
+                        name: z.string().optional(),
+                        frozen: z.boolean().nullable().optional(),
+                        encounters: z
+                          .array(
+                            z
+                              .object({
+                                id: z.number().int(),
+                                name: z.string().optional(),
+                              })
+                              .passthrough(),
+                          )
+                          .nullable()
+                          .optional(),
+                      })
+                      .passthrough(),
+                  )
+                  .nullable()
+                  .optional(),
+              })
+              .passthrough(),
+          )
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();

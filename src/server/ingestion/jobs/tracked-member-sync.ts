@@ -23,6 +23,11 @@ import {
   CHARACTER_ZONE_RANKINGS_QUERY,
   characterZoneRankingsResponseSchema,
 } from "@/server/ingestion/warcraftlogs/queries";
+import {
+  raiderIOClient,
+  characterProfileFields,
+} from "@/server/ingestion/raiderio/client";
+import { raiderIOCharacterProfileSchema } from "@/server/ingestion/raiderio/schemas";
 import type { Region } from "@/generated/prisma/enums";
 import { z } from "zod";
 
@@ -56,7 +61,7 @@ export async function enqueueTrackedMemberSyncForAll(): Promise<{ enqueued: numb
     characters.map((c) => ({
       name: QUEUE_NAMES.trackedMemberSync,
       data: { characterId: c.id } satisfies TrackedMemberSyncPayload,
-      opts: { jobId: `tier-a:${c.id}:${hourKey()}` },
+      opts: { jobId: `tier-a_${c.id}_${hourKey()}` },
     })),
   );
   return { enqueued: characters.length };
@@ -83,7 +88,21 @@ const equipmentItemSchema = z
     item: z.object({ id: z.number() }).passthrough().optional(),
     level: z.object({ value: z.number().optional() }).passthrough().optional(),
     enchantments: z.array(z.unknown()).optional(),
-    sockets: z.array(z.unknown()).optional(),
+    // A socketed item exposes one entry per socket. A FILLED socket has an
+    // `item` (the gem); an EMPTY socket has `socket_type` but no `item`.
+    sockets: z
+      .array(
+        z
+          .object({
+            socket_type: z
+              .object({ type: z.string() })
+              .passthrough()
+              .optional(),
+            item: z.object({ id: z.number() }).passthrough().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     set: z
       .object({
         item_set: z.object({ id: z.number().int() }).passthrough().optional(),
@@ -92,6 +111,21 @@ const equipmentItemSchema = z
       .optional(),
   })
   .passthrough();
+
+// Slots that actually take a permanent enchant in current retail (The War
+// Within). Everything else (helm, shoulders, gloves, waist, trinkets, neck,
+// shirt, tabard, ranged) does NOT — counting those as "missing" produced
+// the false positives the gear-audit widget was showing.
+const ENCHANTABLE_SLOTS = new Set([
+  "CHEST",
+  "WRIST",
+  "LEGS",
+  "FEET",
+  "BACK",
+  "FINGER_1",
+  "FINGER_2",
+  "MAIN_HAND",
+]);
 
 const equipmentResponseSchema = z
   .object({
@@ -185,32 +219,81 @@ export async function handleTrackedMemberSync(
       },
     );
 
-    // Audit aggregates: missing enchants on slots that conventionally take one
-    // (chest, wrist, back, weapon — kept conservative; the dashboard surfaces
-    // the per-slot detail).
-    const missingEnchantsCount = equipment.equipped_items.filter(
-      (i) => !i.enchantments || i.enchantments.length === 0,
-    ).length;
-    const missingGemsCount = equipment.equipped_items.filter(
-      (i) => i.sockets && i.sockets.length === 0,
-    ).length;
+    // Missing enchants: only count enchantable slots that have no
+    // enchantment. Non-enchantable slots are ignored entirely.
+    const missingEnchantsCount = equipment.equipped_items.filter((i) => {
+      const slot = i.slot?.type;
+      if (!slot || !ENCHANTABLE_SLOTS.has(slot)) return false;
+      return !i.enchantments || i.enchantments.length === 0;
+    }).length;
 
-    // Count distinct tier-set IDs across equipped pieces, then the dominant
-    // set's piece count. "Dominant" matters because Blizzard models legacy
-    // and current tier with the same set field — players can have 2pc of
-    // last season + 2pc of this one — and the tracker should report the
-    // highest active stack, not the sum.
-    const piecesByItemSet = new Map<number, number>();
+    // Missing gems: count EMPTY sockets across all equipped items. An item
+    // with N sockets contributes one "missing" per socket that has no gem
+    // (`item` absent). Items with no sockets contribute nothing.
+    const missingGemsCount = equipment.equipped_items.reduce((sum, i) => {
+      if (!i.sockets || i.sockets.length === 0) return sum;
+      return sum + i.sockets.filter((s) => !s.item).length;
+    }, 0);
+
+    // Tier set lives in exactly these five armor slots. Restricting the
+    // count to them avoids miscounting non-tier "sets" (e.g. ring/trinket
+    // sets) that Blizzard models with the same `set` field.
+    const TIER_SLOTS = ["HEAD", "SHOULDER", "CHEST", "HANDS", "LEGS"] as const;
+    type TierSlot = (typeof TIER_SLOTS)[number];
+
+    // ilvl → reward track band (TWW retail bands). Lower/squished test data
+    // buckets to veteran; production ilvls map correctly.
+    const ilvlTrack = (
+      ilvl: number | null | undefined,
+    ): "veteran" | "champion" | "hero" | "myth" | null => {
+      if (typeof ilvl !== "number" || ilvl <= 0) return null;
+      if (ilvl >= 707) return "myth";
+      if (ilvl >= 694) return "hero";
+      if (ilvl >= 681) return "champion";
+      return "veteran";
+    };
+
+    // Tally tier-set pieces per set id, but only across the five tier slots.
+    const tierPiecesBySet = new Map<number, number>();
     for (const item of equipment.equipped_items) {
+      const slot = item.slot?.type;
       const setId = item.set?.item_set?.id;
-      if (typeof setId === "number") {
-        piecesByItemSet.set(setId, (piecesByItemSet.get(setId) ?? 0) + 1);
+      if (
+        typeof setId === "number" &&
+        slot &&
+        (TIER_SLOTS as readonly string[]).includes(slot)
+      ) {
+        tierPiecesBySet.set(setId, (tierPiecesBySet.get(setId) ?? 0) + 1);
       }
     }
-    const tierSetIds = Array.from(piecesByItemSet.keys()).sort();
-    const tierSetPiecesCount = piecesByItemSet.size === 0
-      ? 0
-      : Math.max(...piecesByItemSet.values());
+    const tierSetIds = Array.from(tierPiecesBySet.keys()).sort();
+    const dominantSetId =
+      tierPiecesBySet.size === 0
+        ? null
+        : [...tierPiecesBySet.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+    const tierSetPiecesCount = dominantSetId
+      ? (tierPiecesBySet.get(dominantSetId) ?? 0)
+      : 0;
+
+    // Per-slot breakdown for the dominant set.
+    const slotItem = new Map<string, (typeof equipment.equipped_items)[number]>();
+    for (const item of equipment.equipped_items) {
+      if (item.slot?.type) slotItem.set(item.slot.type, item);
+    }
+    const tierSlots = TIER_SLOTS.map((slot: TierSlot) => {
+      const item = slotItem.get(slot);
+      const isTier =
+        !!item &&
+        dominantSetId != null &&
+        item.set?.item_set?.id === dominantSetId;
+      const itemLevel = isTier ? (item?.level?.value ?? null) : null;
+      return {
+        slot,
+        filled: isTier,
+        itemLevel,
+        track: isTier ? ilvlTrack(itemLevel) : null,
+      };
+    });
 
     await writeEquipmentSnapshot({
       characterId: character.id,
@@ -221,6 +304,7 @@ export async function handleTrackedMemberSync(
       missingGemsCount,
       tierSetPiecesCount,
       tierSetIds,
+      tierSlots,
       items: equipment.equipped_items,
       rawPayload: equipment,
     });
@@ -343,10 +427,64 @@ export async function handleTrackedMemberSync(
       );
 
       const currentRating = mplusIndex.current_mythic_rating?.rating ?? null;
-      const bestRuns = season.best_runs ?? [];
-      const weeklyHighest = bestRuns.reduce(
+      // Blizzard's current_period.best_runs is best-per-dungeon for the week
+      // (deduplicated) — a LOWER BOUND on the true run count. It's still the
+      // right source for each vault slot's item-level track (1st/4th/8th
+      // HIGHEST key), so we keep it as `runsThisWeek`.
+      const periodRuns = mplusIndex.current_period?.best_runs ?? [];
+      const blizzardDistinct = periodRuns.length;
+      const weeklyHighest = periodRuns.reduce(
         (max, r) => Math.max(max, r.keystone_level ?? 0),
         0,
+      );
+
+      // Weekly reset boundary for this character's region (US Tue 15:00 UTC,
+      // EU Wed 07:00 UTC, KR/TW Wed 09:00 UTC ≈ region maintenance windows).
+      const weekResetUtc = weeklyResetBefore(new Date(), character.region);
+
+      // Raider.IO recent runs are individual completions (repeats included).
+      // Counting those after the weekly reset yields the EXACT vault count in
+      // the 0–8 band that matters (≥8 → all 3 slots regardless of overflow).
+      // Best-effort: if Raider.IO is unavailable we fall back to the Blizzard
+      // distinct count (the lower bound).
+      let raiderioWeekCount = 0;
+      let raiderioWeekHighest = 0;
+      try {
+        const rio = raiderIOClient();
+        const profile = await rio.get({
+          path: "/characters/profile",
+          query: {
+            region: regionToCode(character.region),
+            realm: character.realmSlug,
+            name: character.name,
+            fields: characterProfileFields(
+              "mythic_plus_recent_runs",
+              "mythic_plus_weekly_highest_level_runs",
+            ),
+          },
+          schema: raiderIOCharacterProfileSchema,
+        });
+        const recent = profile.mythic_plus_recent_runs ?? [];
+        for (const r of recent) {
+          if (!r.completed_at) continue;
+          const t = Date.parse(r.completed_at);
+          if (Number.isNaN(t) || t < weekResetUtc.getTime()) continue;
+          raiderioWeekCount++;
+          raiderioWeekHighest = Math.max(raiderioWeekHighest, r.mythic_level);
+        }
+      } catch (err) {
+        logger.warn(
+          { err, character: character.name },
+          "raiderio recent-runs fetch failed; falling back to Blizzard distinct count",
+        );
+      }
+
+      // Both numbers are lower bounds on the true weekly completions; the max
+      // is the closest estimate and saturates correctly at the 8-run cap.
+      const weeklyRunCount = Math.max(blizzardDistinct, raiderioWeekCount);
+      const effectiveWeeklyHighest = Math.max(
+        weeklyHighest,
+        raiderioWeekHighest,
       );
 
       await writeMplusSnapshot({
@@ -355,8 +493,11 @@ export async function handleTrackedMemberSync(
         capturedAt,
         seasonId: currentSeasonId,
         currentRating,
-        weeklyHighest: weeklyHighest || null,
-        runsThisWeek: bestRuns.map((r) => ({
+        weeklyHighest: effectiveWeeklyHighest || null,
+        weeklyRunCount,
+        // Per-dungeon best (with keystone_level) — used for each vault slot's
+        // item-level track via the 1st/4th/8th highest key.
+        runsThisWeek: periodRuns.map((r) => ({
           level: r.keystone_level ?? null,
           timed: r.is_completed_within_time ?? null,
           dungeonId: r.dungeon?.id ?? null,
@@ -388,7 +529,7 @@ export async function handleTrackedMemberSync(
       db.mplusSnapshot.findFirst({
         where: { characterId: character.id, source: "BLIZZARD" },
         orderBy: { capturedAt: "desc" },
-        select: { runsThisWeek: true },
+        select: { runsThisWeek: true, weeklyRunCount: true },
       }),
       db.raidSnapshot.findFirst({
         where: { characterId: character.id, source: "BLIZZARD" },
@@ -397,26 +538,74 @@ export async function handleTrackedMemberSync(
       }),
     ]);
 
+    // Gear-track classification. Each unlocked vault slot rewards an item on
+    // one of four tracks; the widget colours pips by track.
+    //   M+ : key level → veteran(<2) / champion(2–5) / hero(6–9) / myth(10+)
+    //   Raid: difficulty → LFR=veteran, Normal=champion, Heroic=hero,
+    //         Mythic=myth
+    type Track = "veteran" | "champion" | "hero" | "myth";
+    const mplusTrack = (level: number): Track =>
+      level >= 10 ? "myth" : level >= 6 ? "hero" : level >= 2 ? "champion" : "veteran";
+    const raidTrack = (difficulty: string): Track => {
+      const d = difficulty.toUpperCase();
+      if (d === "MYTHIC") return "myth";
+      if (d === "HEROIC") return "hero";
+      if (d === "NORMAL") return "champion";
+      return "veteran"; // LFR / RAID_FINDER / anything else
+    };
+
     const mplusRunsArray = Array.isArray(latestMplus?.runsThisWeek)
-      ? (latestMplus?.runsThisWeek as unknown[])
+      ? (latestMplus?.runsThisWeek as Array<{ level?: number }>)
       : [];
-    const mplusRuns = mplusRunsArray.length;
+    // Exact weekly run count (repeats included) drives slot UNLOCKS. Fall
+    // back to the per-dungeon array length if the column is null (old rows).
+    const mplusRuns =
+      latestMplus?.weeklyRunCount ?? mplusRunsArray.length;
     const mplusSlots =
       mplusRuns >= 8 ? 3 : mplusRuns >= 4 ? 2 : mplusRuns >= 1 ? 1 : 0;
+    // Each slot's item-level TRACK is gated by the 1st / 4th / 8th highest
+    // key. Sort the per-dungeon best runs by level desc and read those.
+    const sortedLevels = mplusRunsArray
+      .map((r) => r.level ?? 0)
+      .sort((a, b) => b - a);
+    const mplusSlotIndexes = [0, 3, 7]; // 1st, 4th, 8th best
+    const mplusTracks: Track[] = [];
+    for (let s = 0; s < mplusSlots; s++) {
+      const lvl = sortedLevels[mplusSlotIndexes[s]!] ?? 0;
+      mplusTracks.push(mplusTrack(lvl));
+    }
 
     const completions = Array.isArray(latestRaid?.completions)
-      ? (latestRaid?.completions as Array<{ encounters?: Array<{ kills?: number }> }>)
+      ? (latestRaid?.completions as Array<{
+          difficultyType?: string;
+          encounters?: Array<{ kills?: number }>;
+        }>)
       : [];
-    // Total distinct boss kills across all difficulties — count each kill
-    // record where kills>0 in the latest expansion only (already filtered).
-    const raidKills = completions.reduce(
-      (sum, entry) =>
-        sum +
-        (entry.encounters?.filter((e) => (e.kills ?? 0) > 0).length ?? 0),
-      0,
-    );
+    // Flatten each boss kill into a per-kill difficulty list, then sort by
+    // difficulty rank desc — the vault's 2nd/4th/6th-best kills determine the
+    // three raid slots' reward tracks.
+    const diffRank: Record<string, number> = {
+      MYTHIC: 3,
+      HEROIC: 2,
+      NORMAL: 1,
+      LFR: 0,
+    };
+    const killDifficulties: string[] = [];
+    for (const entry of completions) {
+      const diff = (entry.difficultyType ?? "NORMAL").toUpperCase();
+      const killed = entry.encounters?.filter((e) => (e.kills ?? 0) > 0).length ?? 0;
+      for (let k = 0; k < killed; k++) killDifficulties.push(diff);
+    }
+    killDifficulties.sort((a, b) => (diffRank[b] ?? 0) - (diffRank[a] ?? 0));
+    const raidKills = killDifficulties.length;
     const raidSlots =
       raidKills >= 6 ? 3 : raidKills >= 4 ? 2 : raidKills >= 2 ? 1 : 0;
+    const raidSlotIndexes = [1, 3, 5]; // 2nd, 4th, 6th kill
+    const raidTracks: Track[] = [];
+    for (let s = 0; s < raidSlots; s++) {
+      const diff = killDifficulties[raidSlotIndexes[s]!] ?? "NORMAL";
+      raidTracks.push(raidTrack(diff));
+    }
 
     // weekStart: Tuesday 15:00 UTC of the current week (US reset). Cheap
     // calc — find the previous Tuesday and pin to 15:00 UTC.
@@ -433,11 +622,23 @@ export async function handleTrackedMemberSync(
       capturedAt,
       weekStart,
       slots: {
-        raid: { unlocked: raidSlots, total: 3 },
-        mythicPlus: { unlocked: mplusSlots, total: 3 },
-        world: { unlocked: 0, total: 0 },
+        raid: { unlocked: raidSlots, total: 3, tracks: raidTracks },
+        mythicPlus: { unlocked: mplusSlots, total: 3, tracks: mplusTracks },
+        // The Great Vault structurally always has 3 World slots (Delves /
+        // world content). Blizzard's public character API doesn't expose
+        // Delve vault progress (it needs the protected user-OAuth weekly-
+        // rewards endpoint), so we surface the 3 slots as present-but-
+        // unknown rather than a misleading "—". `tracked:false` lets the
+        // widget render an honest "not tracked" hint.
+        world: { unlocked: 0, total: 3, tracks: [], tracked: false },
       },
-      rawPayload: { mplusRuns, raidKills, derivedAt: capturedAt.toISOString() },
+      rawPayload: {
+        mplusRuns,
+        raidKills,
+        mplusTracks,
+        raidTracks,
+        derivedAt: capturedAt.toISOString(),
+      },
     });
   } catch (err) {
     logSnapshotError(err, { stage: "vault", characterId: character.id });
@@ -448,12 +649,17 @@ export async function handleTrackedMemberSync(
   //    requested zoneID. We pull best-DPS rankings for the current raid tier
   //    and persist one WclParseSnapshot per (encounter, difficulty).
   //
-  //    `WCL_RAID_ZONE_ID` overrides the default if set, otherwise we use the
-  //    most recently frozen Mythic raid tier (Manaforge Omega = zone 44) so
-  //    top-end raiders' historical parses still surface.
+  //    Zone = the current live retail raid tier. WCL only has data for
+  //    content that's actually live (it's a real logging service), so this
+  //    tracks The War Within's current raid (Manaforge Omega = 44) today and
+  //    will move to Midnight's raid once that ships and is logged — set
+  //    `WCL_RAID_ZONE_ID` to the new zone when a tier launches (NEXT_STEPS).
+  //    NOTE: a fully-automatic resolver was tried but WCL's worldData lumps
+  //    Classic seasonal expansions in with high ids, so "newest expansion"
+  //    grabbed a Classic raid — an explicit env-pinned default is reliable.
   try {
-    const zoneID = Number(process.env.WCL_RAID_ZONE_ID ?? "44");
     const wcl = warcraftLogsClient();
+    const zoneID = Number(process.env.WCL_RAID_ZONE_ID ?? "44");
     const rankings = await wcl.query({
       query: CHARACTER_ZONE_RANKINGS_QUERY,
       variables: {
@@ -468,7 +674,7 @@ export async function handleTrackedMemberSync(
     });
 
     type RawRanking = {
-      encounter?: { id?: number };
+      encounter?: { id?: number; name?: string };
       rankPercent?: number | null;
       bestPercent?: number | null;
       report?: { code?: string | null } | null;
@@ -487,6 +693,7 @@ export async function handleTrackedMemberSync(
         capturedAt,
         zoneId: zoneID,
         encounterId: r.encounter.id,
+        encounterName: r.encounter.name ?? null,
         difficulty: r.difficulty ?? zr?.difficulty ?? 5, // 5 = Mythic
         percentile: pct != null ? Math.round(pct * 100) / 100 : null,
         metric: "dps",
@@ -503,6 +710,39 @@ export async function handleTrackedMemberSync(
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();
+
+/**
+ * Most recent weekly-reset instant (UTC) at or before `now` for the region.
+ * Reset windows (approx, post-maintenance):
+ *   US     → Tuesday 15:00 UTC
+ *   EU     → Wednesday 07:00 UTC
+ *   KR/TW  → Wednesday 09:00 UTC
+ * Used to bound "this week's" M+ runs for exact Great Vault counting.
+ */
+function weeklyResetBefore(now: Date, region: Region): Date {
+  const cfg: Record<Region, { day: number; hour: number }> = {
+    US: { day: 2, hour: 15 }, // Tue
+    EU: { day: 3, hour: 7 }, // Wed
+    KR: { day: 3, hour: 9 }, // Wed
+    TW: { day: 3, hour: 9 }, // Wed
+  };
+  const { day, hour } = cfg[region] ?? cfg.US;
+  const d = new Date(now);
+  d.setUTCSeconds(0, 0);
+  d.setUTCMinutes(0);
+  // Walk back day-by-day to the most recent matching weekday at `hour`.
+  for (let i = 0; i < 8; i++) {
+    if (d.getUTCDay() === day) {
+      const reset = new Date(d);
+      reset.setUTCHours(hour, 0, 0, 0);
+      if (reset.getTime() <= now.getTime()) return reset;
+    }
+    d.setUTCDate(d.getUTCDate() - 1);
+    d.setUTCHours(23, 0, 0, 0);
+  }
+  // Fallback — 7 days ago (shouldn't be reached).
+  return new Date(now.getTime() - 7 * 24 * 3_600_000);
+}
 
 const hourKey = (): string => {
   const d = new Date();

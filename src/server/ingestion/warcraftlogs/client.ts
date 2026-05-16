@@ -144,6 +144,7 @@ export class WarcraftLogsClient {
     }
   }
 
+
   private async getAppToken(): Promise<string> {
     const cached = await redis.get(TOKEN_REDIS_KEY);
     if (cached) return cached;

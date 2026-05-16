@@ -71,6 +71,7 @@ export const snapshotRouter = router({
                 missingGemsCount: true,
                 tierSetPiecesCount: true,
                 tierSetIds: true,
+                tierSlots: true,
                 capturedAt: true,
               },
             }),
@@ -81,6 +82,7 @@ export const snapshotRouter = router({
                 seasonId: true,
                 currentRating: true,
                 weeklyHighest: true,
+                weeklyRunCount: true,
                 runsThisWeek: true,
                 capturedAt: true,
               },
@@ -107,10 +109,11 @@ export const snapshotRouter = router({
             ctx.db.wclParseSnapshot.findMany({
               where: { characterId: id },
               orderBy: { capturedAt: "desc" },
-              take: 12,
+              take: 30,
               select: {
                 zoneId: true,
                 encounterId: true,
+                encounterName: true,
                 difficulty: true,
                 percentile: true,
                 metric: true,

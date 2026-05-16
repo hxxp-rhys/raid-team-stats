@@ -150,14 +150,37 @@ export type GuildRole = "PENDING" | "MEMBER" | "OFFICER" | "OWNER";
 export type RaidTeamRole = "MEMBER" | "CO_LEADER" | "LEADER";
 
 /**
- * Platform admin override: any user whose id appears in env.ADMIN_USER_IDS is
- * treated as OWNER for every guild and LEADER for every raid team, regardless
- * of actual membership rows. Used for ops (claiming abandoned guilds, fixing
- * roster bugs, etc). The override is audited via the procedure-level audit
- * helpers, not here, so callers retain attribution.
+ * Platform admin override: a user is admin if EITHER (a) their id is in
+ * env.ADMIN_USER_IDS, (b) their email is in env.ADMIN_EMAILS, or (c) the
+ * User.isAdmin column is true. Admins are treated as OWNER for every guild
+ * and LEADER for every raid team, regardless of actual membership rows.
+ *
+ * env-only fast path — synchronous. Use when only the id is known and you
+ * don't want the DB hit. For the full check (including the DB column), call
+ * `isPlatformAdmin` which is async and hits the User row.
  */
-export const isPlatformAdmin = (userId: string | undefined): boolean =>
+export const isEnvAdmin = (userId: string | undefined): boolean =>
   typeof userId === "string" && env.ADMIN_USER_IDS.includes(userId);
+
+/**
+ * Full admin check. Returns true if any of the three sources says so. Always
+ * loads the user row (one query) to capture email + isAdmin; cheap enough for
+ * per-request use.
+ */
+export async function isPlatformAdmin(
+  userId: string | undefined,
+): Promise<boolean> {
+  if (!userId) return false;
+  if (env.ADMIN_USER_IDS.includes(userId)) return true;
+  const u = await db.user.findUnique({
+    where: { id: userId },
+    select: { email: true, isAdmin: true },
+  });
+  if (!u) return false;
+  if (u.isAdmin) return true;
+  if (env.ADMIN_EMAILS.includes(u.email.toLowerCase())) return true;
+  return false;
+}
 
 /**
  * Verifies the caller has at least `minRole` in the guild and the membership
@@ -172,7 +195,7 @@ export async function assertGuildRole(
   if (!ctx.session?.user?.id) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
-  if (isPlatformAdmin(ctx.session.user.id)) return;
+  if (await isPlatformAdmin(ctx.session.user.id)) return;
   const membership = await ctx.db.guildMembership.findUnique({
     where: { userId_guildId: { userId: ctx.session.user.id, guildId } },
     select: { role: true, status: true },
@@ -208,7 +231,7 @@ export async function assertRaidTeamRole(
   }
 
   // Platform admin override.
-  if (isPlatformAdmin(ctx.session.user.id)) {
+  if (await isPlatformAdmin(ctx.session.user.id)) {
     return { guildId: team.guildId };
   }
 

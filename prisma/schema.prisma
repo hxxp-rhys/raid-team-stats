@@ -24,6 +24,9 @@ model User {
   displayName   String?
   avatarUrl     String?
   mfaEnabled    Boolean   @default(false)
+  // Platform-wide admin flag. Authoritative source for "always admin" along
+  // with env.ADMIN_USER_IDS / env.ADMIN_EMAILS (see isPlatformAdmin).
+  isAdmin       Boolean   @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -133,6 +136,9 @@ enum AuditEvent {
   RAID_TEAM_MEMBER_ADDED
   RAID_TEAM_MEMBER_REMOVED
   RAID_TEAM_LEADERSHIP_TRANSFERRED
+  RAID_TEAM_SETTINGS_UPDATED
+  ADMIN_USER_PROMOTED
+  ADMIN_USER_DEMOTED
   DASHBOARD_EXPORTED
   SYNC_TRIGGERED
   SYNC_FAILED
@@ -244,6 +250,12 @@ model Character {
   raidSnapshots      RaidSnapshot[]
   vaultSnapshots     VaultSnapshot[]
   wclParseSnapshots  WclParseSnapshot[]
+  // Pending-ownership back-references. Filled when the team/dashboard's
+  // current owner has departed the guild and there is no on-site successor —
+  // the first user to claim this character via Battle.net verification gets
+  // ownership transferred (see applyVerification → claimPendingAssets).
+  pendingRaidTeams   RaidTeam[]           @relation("RaidTeamPendingLeader")
+  pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -321,18 +333,37 @@ model RaidTeam {
   guildId      String
   name         String
   slug         String
-  leaderUserId String
+  // Optional — null when the team's leader has departed the guild and the
+  // platform has no on-site account to transfer leadership to. In that case
+  // `pendingLeaderCharacterId` points to the Blizzard character that SHOULD
+  // own this team; the first real user to claim that character (via Battle.net
+  // verification) inherits leadership.
+  leaderUserId             String?
+  pendingLeaderCharacterId String?
   visibility   RaidTeamVisibility @default(TEAM)
+  // Team-self-service refresh: when true, any active team member can trigger
+  // a fresh Tier-A sync via the in-dashboard data_refresh widget. When false,
+  // only LEADER/CO_LEADER (or guild OWNER/OFFICER) can refresh.
+  memberCanRefresh Boolean        @default(false)
+  // Recurring auto-refresh policy. JSON shapes:
+  //   { kind: "interval", hours: 4|6|12|24|28|72 }
+  //   { kind: "weekly", dayOfWeek: 0..6, hour: 0..23, minute: 0..59 }
+  // null = no auto-refresh (Tier A still runs hourly globally for tracked
+  // members; this is a per-team additional opt-in trigger).
+  refreshSchedule Json?
+  lastRefreshAt   DateTime?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  guild       Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
-  leader      User                 @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: Restrict)
-  memberships RaidTeamMembership[]
-  dashboards  DashboardConfig[]
+  guild         Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  leader        User?                @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
+  pendingLeader Character?           @relation("RaidTeamPendingLeader", fields: [pendingLeaderCharacterId], references: [id], onDelete: SetNull)
+  memberships   RaidTeamMembership[]
+  dashboards    DashboardConfig[]
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
+  @@index([pendingLeaderCharacterId])
 }
 
 model RaidTeamMembership {
@@ -405,6 +436,10 @@ model EquipmentSnapshot {
   missingGemsCount     Int?
   tierSetPiecesCount   Int?
   tierSetIds           Int[]          @default([])
+  // Per-slot tier breakdown for the dominant tier set:
+  //   [{ slot: "HEAD"|"SHOULDER"|"CHEST"|"HANDS"|"LEGS",
+  //      filled: boolean, itemLevel: number|null, track: string|null }]
+  tierSlots            Json?
   items                Json
   rawPayload           Json
   createdAt            DateTime       @default(now())
@@ -423,6 +458,10 @@ model MplusSnapshot {
   seasonId      Int
   currentRating Decimal?       @db.Decimal(8, 2)
   weeklyHighest Int?
+  // Exact count of M+ completions since the weekly reset (repeats included),
+  // capped-accurate in the 0–8 band that drives Great Vault slot unlocks.
+  // null = not yet computed (pre-migration rows).
+  weeklyRunCount Int?
   runsThisWeek  Json
   rawPayload    Json
   createdAt     DateTime       @default(now())
@@ -473,14 +512,15 @@ model WclParseSnapshot {
   capturedAt  DateTime       @default(now())
   source      SnapshotSource
   sourceHash  String
-  zoneId      Int
-  encounterId Int
-  difficulty  Int
-  percentile  Int?
-  metric      String?
-  reportCode  String?
-  rawPayload  Json
-  createdAt   DateTime       @default(now())
+  zoneId        Int
+  encounterId   Int
+  encounterName String?
+  difficulty    Int
+  percentile    Int?
+  metric        String?
+  reportCode    String?
+  rawPayload    Json
+  createdAt     DateTime       @default(now())
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
@@ -517,7 +557,8 @@ model SyncRun {
 model DashboardConfig {
   id          String             @id @default(cuid())
   raidTeamId  String
-  ownerUserId String
+  ownerUserId             String?
+  pendingOwnerCharacterId String?
   name        String
   slug        String
   visibility  RaidTeamVisibility @default(TEAM)
@@ -525,10 +566,12 @@ model DashboardConfig {
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
-  raidTeam RaidTeam @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
-  owner    User     @relation("DashboardOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  raidTeam     RaidTeam   @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  owner        User?      @relation("DashboardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  pendingOwner Character? @relation("DashboardPendingOwner", fields: [pendingOwnerCharacterId], references: [id], onDelete: SetNull)
 
   @@unique([raidTeamId, slug])
   @@index([raidTeamId])
   @@index([ownerUserId])
+  @@index([pendingOwnerCharacterId])
 }

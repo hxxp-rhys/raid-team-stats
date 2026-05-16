@@ -6,6 +6,7 @@ import {
   protectedProcedure,
   assertGuildRole,
   assertRaidTeamRole,
+  isPlatformAdmin,
 } from "@/server/api/trpc";
 import { normalizeRaidTeamSlug } from "@/lib/realm";
 import { audit } from "@/server/security/audit";
@@ -13,6 +14,28 @@ import { audit } from "@/server/security/audit";
 const nameSchema = z.string().trim().min(2).max(60);
 const visibilitySchema = z.enum(["TEAM", "GUILD", "LINK"]);
 const teamRoleSchema = z.enum(["MEMBER", "CO_LEADER"]);
+
+// Discriminated union for the recurring auto-refresh schedule. Persisted as
+// JSON on RaidTeam.refreshSchedule. `null` = no recurring schedule.
+const intervalHourSchema = z.union([
+  z.literal(4),
+  z.literal(6),
+  z.literal(12),
+  z.literal(24),
+  z.literal(28),
+  z.literal(72),
+]);
+export const refreshScheduleSchema = z.union([
+  z.object({ kind: z.literal("interval"), hours: intervalHourSchema }),
+  z.object({
+    kind: z.literal("weekly"),
+    dayOfWeek: z.number().int().min(0).max(6),
+    hour: z.number().int().min(0).max(23),
+    minute: z.number().int().min(0).max(59),
+  }),
+  z.null(),
+]);
+export type RefreshSchedule = z.infer<typeof refreshScheduleSchema>;
 
 export const raidTeamRouter = router({
   /**
@@ -336,6 +359,172 @@ export const raidTeamRouter = router({
       });
 
       return { ok: true, membershipId: membership.id };
+    }),
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Team-level refresh + schedule controls
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Read the refresh settings + last-refresh timestamp. Visible to any active
+   * team member so the data_refresh widget can render its state.
+   */
+  refreshSettings: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          memberCanRefresh: true,
+          refreshSchedule: true,
+          lastRefreshAt: true,
+        },
+      });
+      if (!team) throw new TRPCError({ code: "NOT_FOUND" });
+      // Validate stored shape; if it's malformed (manual DB edit, old shape),
+      // return null instead of throwing — UI treats null as "no schedule".
+      const parsed = refreshScheduleSchema.safeParse(team.refreshSchedule);
+      return {
+        memberCanRefresh: team.memberCanRefresh,
+        refreshSchedule: parsed.success ? parsed.data : null,
+        lastRefreshAt: team.lastRefreshAt,
+      };
+    }),
+
+  /**
+   * Leader / co-leader (or guild OWNER/OFFICER, or admin) updates the team's
+   * member-can-refresh flag and recurring refresh schedule.
+   */
+  setRefreshSettings: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        memberCanRefresh: z.boolean().optional(),
+        refreshSchedule: refreshScheduleSchema.optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+      const { Prisma } = await import("@/generated/prisma/client");
+      // Prisma's JSON column accepts a non-null value or Prisma.JsonNull (a
+      // sentinel that becomes SQL `JSON null`). `undefined` keeps the column
+      // unchanged. We map: schedule === null → Prisma.JsonNull, schedule
+      // object → the object itself, schedule undefined → don't include the
+      // key at all.
+      const data: Record<string, unknown> = {};
+      if (typeof input.memberCanRefresh === "boolean") {
+        data.memberCanRefresh = input.memberCanRefresh;
+      }
+      if (input.refreshSchedule !== undefined) {
+        data.refreshSchedule =
+          input.refreshSchedule === null
+            ? Prisma.JsonNull
+            : input.refreshSchedule;
+      }
+      if (Object.keys(data).length === 0) {
+        return { ok: true, unchanged: true };
+      }
+      await ctx.db.raidTeam.update({
+        where: { id: input.raidTeamId },
+        data,
+      });
+      await audit({
+        event: "RAID_TEAM_SETTINGS_UPDATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: {
+          memberCanRefresh:
+            data.memberCanRefresh as boolean | undefined,
+          refreshSchedule: input.refreshSchedule ?? null,
+        },
+      });
+      return { ok: true, unchanged: false };
+    }),
+
+  /**
+   * Trigger a Tier-A re-sync for every active member of the team.
+   *
+   * Permissions:
+   *  - CO_LEADER+ (or guild OWNER/OFFICER, or admin) always allowed.
+   *  - Regular team MEMBERs allowed only when `memberCanRefresh` is true.
+   *  - Non-members denied with NOT_FOUND.
+   */
+  triggerTeamRefresh: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: { id: true, guildId: true, memberCanRefresh: true },
+      });
+      if (!team) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const admin = await isPlatformAdmin(userId);
+      let allowed = admin;
+
+      if (!allowed) {
+        // Guild OWNER/OFFICER override
+        const gm = await ctx.db.guildMembership.findUnique({
+          where: { userId_guildId: { userId, guildId: team.guildId } },
+          select: { role: true, status: true },
+        });
+        if (
+          gm?.status === "ACTIVE" &&
+          (gm.role === "OWNER" || gm.role === "OFFICER")
+        ) {
+          allowed = true;
+        }
+      }
+
+      let elevated = allowed;
+      if (!allowed) {
+        // Team-level role
+        const tm = await ctx.db.raidTeamMembership.findFirst({
+          where: {
+            raidTeamId: input.raidTeamId,
+            isActive: true,
+            character: { userId },
+          },
+          select: { role: true },
+        });
+        if (!tm) {
+          throw new TRPCError({ code: "NOT_FOUND" });
+        }
+        if (tm.role === "LEADER" || tm.role === "CO_LEADER") {
+          allowed = true;
+          elevated = true;
+        } else if (team.memberCanRefresh) {
+          allowed = true;
+        }
+      }
+
+      if (!allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only raid leaders can refresh this team's data. Ask a leader to enable member refresh.",
+        });
+      }
+
+      const { enqueueTeamRefresh } = await import(
+        "@/server/ingestion/jobs/team-refresh"
+      );
+      const result = await enqueueTeamRefresh(
+        { raidTeamId: input.raidTeamId, triggeredByUserId: userId, source: "manual" },
+        { bypassRateLimit: elevated && admin },
+      );
+
+      await audit({
+        event: "SYNC_TRIGGERED",
+        actorUserId: userId,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: { tier: "team_manual", elevated },
+      });
+
+      return result;
     }),
 
   removeMember: protectedProcedure

@@ -27,6 +27,7 @@ import {
   enqueueGuildRosterSyncForAllGuilds,
   type GuildRosterSyncPayload,
 } from "@/server/ingestion/jobs/guild-roster-sync";
+import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
 const workers: Worker[] = [];
@@ -127,6 +128,19 @@ const start = async () => {
       }
     }
   }, 15_000);
+
+  // Team-level recurring refresh sweeper. Runs every 5 minutes, checks each
+  // team's per-team schedule, and enqueues a refresh when due. Bypasses the
+  // user-trigger rate limit (the schedule is the limit).
+  setInterval(() => {
+    void runTeamScheduleSweep()
+      .then((r) => {
+        if (r.fired > 0) {
+          logger.info(r, "team schedule sweep");
+        }
+      })
+      .catch((err) => logger.warn({ err }, "team schedule sweep failed"));
+  }, 5 * 60_000);
 
   // QueueEvents emits completed/failed across the cluster — count + measure.
   for (const { name, q } of queueObjects) {

@@ -104,6 +104,20 @@ export const env = createEnv({
           .filter(Boolean),
       ),
 
+    // Comma-separated list of email addresses that are always treated as
+    // platform admin, in addition to ADMIN_USER_IDS and User.isAdmin. Email-
+    // based admin survives account deletion + recreation (the user.id changes
+    // but the email stays the same).
+    ADMIN_EMAILS: z
+      .string()
+      .default("")
+      .transform((v) =>
+        v
+          .split(",")
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+
     RATE_LIMIT_TRUST_PROXY: z
       .enum(["true", "false"])
       .default("false")
@@ -144,6 +158,7 @@ export const env = createEnv({
     SMTP_PASSWORD: process.env.SMTP_PASSWORD,
     SMTP_FROM: process.env.SMTP_FROM,
     ADMIN_USER_IDS: process.env.ADMIN_USER_IDS,
+    ADMIN_EMAILS: process.env.ADMIN_EMAILS,
     RATE_LIMIT_TRUST_PROXY: process.env.RATE_LIMIT_TRUST_PROXY,
     METRICS_TOKEN: process.env.METRICS_TOKEN,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,

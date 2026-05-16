@@ -2,6 +2,10 @@ import { GuildCharacterLinkStatus, GuildMembershipStatus } from "@/generated/pri
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { audit } from "@/server/security/audit";
+import {
+  reevaluateGuildClaim,
+  transferRaidTeamOwnershipOnDeparture,
+} from "@/server/guild-auth/ownership";
 
 /**
  * Number of consecutive missed sync observations before a character is marked
@@ -32,6 +36,10 @@ type Observation = {
  */
 export async function recordGuildPresence(observation: Observation): Promise<void> {
   const { characterId, guildId, observedAt, rosterRank } = observation;
+  // Track whether this observation might have moved rank 0 around (someone
+  // newly promoted to rank 0, or the current rank-0 character demoted). When
+  // true, we re-evaluate the guild's claim after the transaction commits.
+  let rankZeroChanged = false;
   await db.$transaction(async (tx) => {
     const existing = await tx.guildCharacterLink.findUnique({
       where: { characterId_guildId: { characterId, guildId } },
@@ -50,10 +58,16 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
         },
       });
       await ensureGuildMembership(tx, characterId, guildId);
+      if (rosterRank === 0) rankZeroChanged = true;
       return;
     }
 
     const wasReactivation = existing.status === GuildCharacterLinkStatus.DEPARTED;
+    const previousRank = existing.rosterRank;
+    const newRank = rosterRank ?? existing.rosterRank;
+    if (previousRank !== newRank && (previousRank === 0 || newRank === 0)) {
+      rankZeroChanged = true;
+    }
     await tx.guildCharacterLink.update({
       where: { id: existing.id },
       data: {
@@ -78,6 +92,21 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
       });
     }
   });
+
+  // Re-evaluate the guild's OWNER (claimedByUserId) when this observation
+  // changed who sits at rosterRank 0. Spec: a demotion-only change touches
+  // ONLY guild-level claim; raid teams + dashboards are left alone. The
+  // ownership helper does exactly that — it never reaches into RaidTeam.
+  if (rankZeroChanged) {
+    try {
+      await reevaluateGuildClaim(guildId);
+    } catch (err) {
+      logger.warn(
+        { err, guildId, characterId },
+        "reevaluateGuildClaim after rank change failed",
+      );
+    }
+  }
 }
 
 /**
@@ -119,7 +148,7 @@ export async function recordGuildAbsence(observation: Observation): Promise<void
 export async function applyDepartureCascade(observation: Observation): Promise<void> {
   const { characterId, guildId, observedAt } = observation;
   try {
-    const affectedTeams = await db.$transaction(async (tx) => {
+    const result = await db.$transaction(async (tx) => {
       // 1. Mark the character link departed.
       await tx.guildCharacterLink.updateMany({
         where: {
@@ -163,6 +192,7 @@ export async function applyDepartureCascade(observation: Observation): Promise<v
         where: { id: characterId },
         select: { userId: true },
       });
+      let userFullyDeparted = false;
       if (character) {
         const remainingActive = await tx.guildCharacterLink.count({
           where: {
@@ -180,10 +210,15 @@ export async function applyDepartureCascade(observation: Observation): Promise<v
             },
             data: { status: GuildMembershipStatus.DEPARTED, departedAt: observedAt },
           });
+          userFullyDeparted = true;
         }
       }
 
-      return teams.map((t) => t.raidTeamId);
+      return {
+        affectedTeams: teams.map((t) => t.raidTeamId),
+        departingUserId: character?.userId ?? null,
+        userFullyDeparted,
+      };
     });
 
     // Audit outside the transaction — audit failures must never roll back the
@@ -192,16 +227,52 @@ export async function applyDepartureCascade(observation: Observation): Promise<v
       event: "MEMBER_DEPARTED",
       subjectType: "character",
       subjectId: characterId,
-      metadata: { guildId, raidTeamsRemoved: affectedTeams },
+      metadata: { guildId, raidTeamsRemoved: result.affectedTeams },
     });
 
-    for (const raidTeamId of affectedTeams) {
+    for (const raidTeamId of result.affectedTeams) {
       await audit({
         event: "RAID_TEAM_MEMBER_REMOVED",
         subjectType: "raidTeam",
         subjectId: raidTeamId,
         metadata: { characterId, reason: "guild_departure" },
       });
+    }
+
+    // Ownership cascade — only fires when this departure took the user
+    // entirely out of the guild (last active character). Two paths:
+    //   a) Departing user led one or more raid teams → transfer those teams +
+    //      their dashboards to the guild's successor (or pending fallback).
+    //   b) Departing user was the guild's claimed OWNER → re-evaluate the
+    //      guild claim to the new rank-0 user.
+    if (result.userFullyDeparted && result.departingUserId) {
+      const departingUserId = result.departingUserId;
+      try {
+        await transferRaidTeamOwnershipOnDeparture({
+          guildId,
+          departingUserId,
+          reason: "guild_departure",
+        });
+      } catch (err) {
+        logger.error(
+          { err, guildId, departingUserId },
+          "raid-team ownership transfer failed during departure cascade",
+        );
+      }
+      try {
+        const guild = await db.guild.findUnique({
+          where: { id: guildId },
+          select: { claimedByUserId: true },
+        });
+        if (guild?.claimedByUserId === departingUserId) {
+          await reevaluateGuildClaim(guildId);
+        }
+      } catch (err) {
+        logger.error(
+          { err, guildId, departingUserId },
+          "guild claim reevaluation failed during departure cascade",
+        );
+      }
     }
   } catch (err) {
     logger.error({ err, characterId, guildId }, "departure cascade failed");

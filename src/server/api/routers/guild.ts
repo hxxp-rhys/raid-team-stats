@@ -44,6 +44,41 @@ export const guildRouter = router({
       },
       orderBy: { joinedAt: "desc" },
     });
+
+    // Platform admins see every guild even without a membership row. Synthesize
+    // entries for guilds the admin isn't already in so navigation lands on the
+    // detail page (which will likewise pass the admin override).
+    if (await isPlatformAdmin(ctx.session.user.id)) {
+      const ownedGuildIds = new Set(memberships.map((m) => m.guildId));
+      const others = await ctx.db.guild.findMany({
+        where: { id: { notIn: [...ownedGuildIds] } },
+        select: {
+          id: true,
+          region: true,
+          realmSlug: true,
+          guildSlug: true,
+          faction: true,
+          name: true,
+          claimStatus: true,
+        },
+        orderBy: { name: "asc" },
+      });
+      const adminUserId = ctx.session.user.id;
+      const synthetic = others.map((g) => ({
+        id: `admin-synthetic-${g.id}`,
+        userId: adminUserId,
+        guildId: g.id,
+        role: "OWNER" as const,
+        status: "ACTIVE" as const,
+        joinedAt: new Date(0),
+        approvedAt: null,
+        approvedByUserId: null,
+        departedAt: null,
+        guild: g,
+      }));
+      return [...memberships, ...synthetic];
+    }
+
     return memberships;
   }),
 
@@ -63,7 +98,9 @@ export const guildRouter = router({
         },
         select: { role: true, status: true },
       });
-      if (!membership) {
+
+      const isAdmin = await isPlatformAdmin(ctx.session.user.id);
+      if (!membership && !isAdmin) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
@@ -96,7 +133,12 @@ export const guildRouter = router({
       if (!guild) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
-      return { guild, myRole: membership.role, myStatus: membership.status };
+      // Admin without a membership row: synthesize OWNER/ACTIVE so the UI
+      // renders staff-only affordances. `isAdmin` flag lets the client
+      // distinguish synthesized admin access from real ownership.
+      const myRole = membership?.role ?? "OWNER";
+      const myStatus = membership?.status ?? "ACTIVE";
+      return { guild, myRole, myStatus, isAdmin };
     }),
 
   /**
@@ -207,8 +249,7 @@ export const guildRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const isAdmin = env.ADMIN_USER_IDS.includes(ctx.session.user.id);
-      if (!isAdmin) {
+      if (!(await isPlatformAdmin(ctx.session.user.id))) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
       return claimByAdmin({
@@ -223,6 +264,61 @@ export const guildRouter = router({
    * guild, 1/10min per user) — enforced inside the queued job. The job runs
    * inside the BullMQ worker process; this mutation just enqueues it.
    */
+  /**
+   * Poll the state of a previously-enqueued manual roster refresh job.
+   * Returns the BullMQ state ("waiting" | "active" | "completed" | "failed"
+   * | "delayed" | "unknown") plus, when terminal, the relevant SyncRun
+   * metrics or error message.
+   *
+   * Access: any active guild member. The job is identified by `jobId` returned
+   * from `triggerManualSync`; passing a foreign jobId returns "unknown".
+   */
+  manualSyncStatus: protectedProcedure
+    .input(
+      z.object({
+        guildId: z.string().cuid(),
+        jobId: z.string().min(1).max(120),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      await assertGuildRole(ctx, input.guildId, "MEMBER");
+      // Sanity-check that the jobId actually belongs to this guild — the
+      // enqueueManualRosterRefresh helper namespaces by guildId.
+      if (!input.jobId.startsWith(`manual_${input.guildId}_`)) {
+        return { state: "unknown" as const };
+      }
+      const { queues } = await import("@/server/ingestion/queues");
+      const job = await queues.manualRosterRefresh.getJob(input.jobId);
+      if (!job) {
+        return { state: "unknown" as const };
+      }
+      const state = (await job.getState()) as
+        | "waiting"
+        | "active"
+        | "completed"
+        | "failed"
+        | "delayed"
+        | "paused"
+        | "unknown"
+        | "waiting-children";
+      const out: {
+        state: typeof state;
+        attemptsMade: number;
+        startedAt: number | null;
+        finishedAt: number | null;
+        returnValue: unknown;
+        failedReason: string | null;
+      } = {
+        state,
+        attemptsMade: job.attemptsMade,
+        startedAt: job.processedOn ?? null,
+        finishedAt: job.finishedOn ?? null,
+        returnValue: state === "completed" ? job.returnvalue : null,
+        failedReason: state === "failed" ? job.failedReason ?? null : null,
+      };
+      return out;
+    }),
+
   triggerManualSync: protectedProcedure
     .input(z.object({ guildId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -238,7 +334,7 @@ export const guildRouter = router({
           guildId: input.guildId,
           triggeredByUserId: ctx.session.user.id,
         },
-        { bypassRateLimit: isPlatformAdmin(ctx.session.user.id) },
+        { bypassRateLimit: await isPlatformAdmin(ctx.session.user.id) },
       );
 
       await audit({
@@ -385,6 +481,9 @@ export const guildRouter = router({
       userId: ctx.session.user.id,
       observedAt: new Date(),
       characters: observations,
+      // OAuth proved the caller owns these characters → re-attribute any
+      // existing Character rows and run the pending-asset claim sweep.
+      verifiedOwnership: true,
     });
 
     await audit({
@@ -400,6 +499,8 @@ export const guildRouter = router({
       charactersObserved: observations.length,
       guildsMatched: result.guildMatches,
       autoClaims: result.autoClaims,
+      pendingTeamsClaimed: result.pendingTeamsClaimed,
+      pendingDashboardsClaimed: result.pendingDashboardsClaimed,
     };
   }),
 
