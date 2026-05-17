@@ -122,7 +122,7 @@ function installAddon() {
   }
 }
 
-// ── deferred: optional hidden logon task running the uploader --watch ──
+// ── deferred: optional hidden logon task + start it NOW ──
 function startup() {
   try {
     var d = caData(); // INSTALLFOLDER | RUNATSTARTUP
@@ -132,23 +132,48 @@ function startup() {
     var sh = new ActiveXObject("WScript.Shell");
     var vbs = dir + "\\run-hidden.vbs";
     var tr = 'wscript.exe //B "' + vbs + '"';
-    var cmd =
-      'schtasks /Create /F /SC ONLOGON /RL LIMITED ' +
-      '/TN "RaidTeamStatsUploader" /TR "' + tr.replace(/"/g, '\\"') + '"';
-    sh.Run('cmd /c ' + cmd, 0, true);
+    // Create the hidden logon task (runs at every Windows sign-in).
+    sh.Run(
+      'cmd /c schtasks /Create /F /SC ONLOGON /RL LIMITED ' +
+        '/TN "RaidTeamStatsUploader" /TR "' + tr.replace(/"/g, '\\"') + '"',
+      0,
+      true,
+    );
+    // ...and start it immediately so the user doesn't have to sign out
+    // first. Default MultipleInstances=IgnoreNew avoids a duplicate when
+    // the logon trigger fires later.
+    sh.Run('cmd /c schtasks /Run /TN "RaidTeamStatsUploader"', 0, true);
   } catch (e) {
     // best-effort: never fail the install over the optional autostart
   }
 }
 
-// ── deferred (ignored): uninstall cleanup ──
+// ── deferred (ignored): stop the agent BEFORE files are removed ──
+function stopAgent() {
+  try {
+    var sh = new ActiveXObject("WScript.Shell");
+    // Stop a running task instance, delete the task, then kill the
+    // watcher so RemoveFiles can delete the (otherwise locked) exe and
+    // the uploader stops immediately.
+    sh.Run('cmd /c schtasks /End /TN "RaidTeamStatsUploader"', 0, true);
+    sh.Run('cmd /c schtasks /Delete /F /TN "RaidTeamStatsUploader"', 0, true);
+    sh.Run('cmd /c taskkill /F /IM rts-companion.exe', 0, true);
+  } catch (e) {}
+}
+
+// ── deferred (ignored): deep uninstall cleanup ──
 function uninstallClean() {
   try {
-    var wow = trimSlash(caData()[0]);
-    var sh = new ActiveXObject("WScript.Shell");
-    sh.Run('cmd /c schtasks /Delete /F /TN "RaidTeamStatsUploader"', 0, true);
+    var d = caData(); // WOWPATH | INSTALLFOLDER
+    var wow = trimSlash(d[0]);
+    var dir = trimSlash(d[1]);
     var fso = new ActiveXObject("Scripting.FileSystemObject");
-    var dst = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
-    if (fso.FolderExists(dst)) fso.DeleteFolder(dst, true);
+    // 1. addon copied into the WoW folder (not an MSI component)
+    var addon = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
+    if (fso.FolderExists(addon)) fso.DeleteFolder(addon, true);
+    // 2. config.json + anything left in the install dir (config.json is
+    //    CA-written so MSI won't remove it; nuke the whole dir — it's all
+    //    ours — so nothing is left behind).
+    if (dir && fso.FolderExists(dir)) fso.DeleteFolder(dir, true);
   } catch (e) {}
 }

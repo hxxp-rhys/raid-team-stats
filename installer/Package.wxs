@@ -37,7 +37,41 @@
       <Component Id="ReadmeTxt">
         <File Id="README.txt" Source="installer\README.txt" KeyPath="yes" />
       </Component>
+      <Component Id="UploadNowCmd">
+        <File Id="upload_now.cmd" Source="installer\upload-now.cmd" KeyPath="yes" />
+      </Component>
     </ComponentGroup>
+
+    <!-- Desktop + Start Menu shortcuts so users never navigate to the
+         install dir. Both are MSI components → removed on uninstall. -->
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="A7E1D2C3-4B56-4789-9ABC-DEF012345678">
+        <Shortcut Id="DeskSc" Name="Raid Team Stats - Upload Now"
+                  Target="[INSTALLFOLDER]upload-now.cmd"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Upload your WoW Great Vault / M+ data now" />
+        <RemoveFolder Id="DesktopFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\raid-team-stats\Uploader"
+                       Name="desk" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuDir" Name="Raid Team Stats Uploader">
+        <Component Id="StartMenuShortcut"
+                   Guid="B8F2E3D4-5C67-489A-8BCD-EF0123456789">
+          <Shortcut Id="MenuSc" Name="Raid Team Stats - Upload Now"
+                    Target="[INSTALLFOLDER]upload-now.cmd"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Description="Upload your WoW Great Vault / M+ data now" />
+          <Shortcut Id="MenuReadme" Name="Read Me"
+                    Target="[INSTALLFOLDER]README.txt" />
+          <RemoveFolder Id="AppMenuDir" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\raid-team-stats\Uploader"
+                         Name="menu" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
 
     <ComponentGroup Id="AddonStageFiles" Directory="ADDONSTAGE">
       <Component Id="AddonToc">
@@ -55,6 +89,8 @@
     <Feature Id="Main" Title="Raid Team Stats Uploader" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentGroupRef Id="AddonStageFiles" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
     <!-- ───────── validation (immediate, on the config dialog's Next) ───────── -->
@@ -77,15 +113,20 @@
     <CustomAction Id="Startup" BinaryRef="RtsScript" JScriptCall="startup"
                   Execute="deferred" Impersonate="no" Return="check" />
 
-    <!-- uninstall cleanup -->
+    <!-- uninstall: stop the running agent + task FIRST (so RemoveFiles can
+         delete the locked exe and the watcher stops), then deep-clean. -->
+    <CustomAction Id="StopAgent" BinaryRef="RtsScript" JScriptCall="stopAgent"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="SetUninstallClean" Property="UninstallClean"
-                  Value="[WOWPATH]" />
+                  Value="[WOWPATH]|[INSTALLFOLDER]" />
     <CustomAction Id="UninstallClean" BinaryRef="RtsScript" JScriptCall="uninstallClean"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <Binary Id="RtsScript" SourceFile="installer\ca.js" />
 
     <InstallExecuteSequence>
+      <Custom Action="StopAgent" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot;" />
       <Custom Action="SetUninstallClean" Before="UninstallClean"
               Condition="REMOVE=&quot;ALL&quot;" />
       <Custom Action="UninstallClean" After="RemoveFiles"
