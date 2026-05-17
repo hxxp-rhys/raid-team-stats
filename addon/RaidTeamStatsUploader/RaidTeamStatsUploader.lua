@@ -1,19 +1,26 @@
--- RaidTeamStatsUploader.lua  (WoW Midnight 12.0 — Interface 120001)
+-- RaidTeamStatsUploader.lua  (WoW Midnight 12.0.5 — Interface 120005)
 --
 -- Reads the player's live data that has NO Blizzard web API (Great Vault
--- incl. the World/Delve row, exact M+ weekly runs, equipped enchants) plus
--- gear/talents, and writes it to SavedVariables. WoW addons cannot make
--- network requests, so the companion desktop uploader reads the saved file
--- and POSTs it to https://raiders.hxxp.io. A copy/paste export string is
--- also provided as a no-companion fallback.
+-- incl. the World/Delve row + per-row thresholds & reward previews, exact
+-- M+ weekly runs, held keystone, weekly raid lockouts, equipped enchants,
+-- catalyst charges & upgrade currencies, tier pieces sitting in bags, delve
+-- progression, raid consumable readiness) plus gear/talents, and writes it
+-- to SavedVariables. WoW addons cannot make network requests, so the
+-- companion desktop uploader reads the saved file and POSTs it to
+-- https://raiders.hxxp.io. A copy/paste export string is also provided as a
+-- no-companion fallback (/rts export).
 --
--- Every collector is pcall-guarded: one failing/renamed Blizzard API never
--- aborts the rest of the snapshot.
+-- Every collector is pcall-guarded (via safe()) AND feature-detects each
+-- Blizzard API before calling it: one missing/renamed API on a given 12.0.x
+-- patch never aborts the rest of the snapshot. Numeric enums/ids are dumped
+-- raw so the server maps them by name (stable across patches).
 
 local AddonName, ns = ...
 
-local SCHEMA_VERSION = 1
-local ADDON_VERSION = "1.0.0"
+-- SCHEMA 2: adds currencies, inventory (bag/bank), delves, lockouts,
+-- consumables, per-activity vault reward previews, and ownedKeystone.
+local SCHEMA_VERSION = 2
+local ADDON_VERSION = "1.1.0"
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -131,7 +138,7 @@ local function collectVault()
   local acts = C_WeeklyRewards.GetActivities()
   if type(acts) == "table" then
     for _, a in ipairs(acts) do
-      out.activities[#out.activities + 1] = {
+      local entry = {
         type = a.type,
         index = a.index,
         threshold = a.threshold,
@@ -144,6 +151,17 @@ local function collectVault()
           and type(a.threshold) == "number"
           and a.progress >= a.threshold) or false,
       }
+      -- Reward preview per row (the projected item the slot would grant —
+      -- useful even before the vault is claimable). itemLink encodes the
+      -- ilvl; the upgrade link (2nd return) is the post-upgrade preview.
+      if C_WeeklyRewards.GetExampleRewardItemHyperlinks and a.id ~= nil then
+        local ok, itemLink, upgradeLink =
+          pcall(C_WeeklyRewards.GetExampleRewardItemHyperlinks, a.id)
+        if ok and (itemLink or upgradeLink) then
+          entry.rewardExamples = { item = itemLink, upgrade = upgradeLink }
+        end
+      end
+      out.activities[#out.activities + 1] = entry
     end
   end
   return out
@@ -152,10 +170,28 @@ end
 -- Exact M+ runs THIS reset (repeats included) — Blizzard's web API only
 -- exposes the deduped best-per-dungeon, so this is the authoritative count.
 local function collectMythicPlus()
-  local out = { weeklyRuns = {}, season = nil }
+  local out = { weeklyRuns = {}, season = nil, ownedKeystone = nil }
   if C_MythicPlus then
     pcall(function() C_MythicPlus.RequestRewards() end)
     if C_MythicPlus.GetCurrentSeason then out.season = C_MythicPlus.GetCurrentSeason() end
+    -- The keystone currently in the player's bag (NOT exposed by the
+    -- Blizzard web API / Raider.IO — they only show completed runs).
+    if C_MythicPlus.GetOwnedKeystoneChallengeMapID then
+      local ok, mapId = pcall(C_MythicPlus.GetOwnedKeystoneChallengeMapID)
+      if ok and mapId then
+        local lvl
+        if C_MythicPlus.GetOwnedKeystoneLevel then
+          local ok2, l = pcall(C_MythicPlus.GetOwnedKeystoneLevel)
+          if ok2 then lvl = l end
+        end
+        local mapName
+        if C_ChallengeMode and C_ChallengeMode.GetMapUIInfo then
+          local ok3, n = pcall(C_ChallengeMode.GetMapUIInfo, mapId)
+          if ok3 then mapName = n end
+        end
+        out.ownedKeystone = { mapId = mapId, level = lvl, mapName = mapName }
+      end
+    end
     if C_MythicPlus.GetRunHistory then
       local runs = C_MythicPlus.GetRunHistory(false, true) -- not previous weeks, this week
       if type(runs) == "table" then
@@ -217,6 +253,206 @@ local function collectTalents()
   return out
 end
 
+-- Catalyst charges + all upgrade/seasonal currencies (crests, valorstones,
+-- coffer keys, sparks…). None are on the Blizzard web API. We dump the
+-- live currency list raw (id+name+quantities) so the server maps by name —
+-- stable when Blizzard renumbers currency ids between patches.
+local function collectCurrencies()
+  local out = {}
+  if not C_CurrencyInfo or not C_CurrencyInfo.GetCurrencyListSize then
+    return out
+  end
+  local size = C_CurrencyInfo.GetCurrencyListSize() or 0
+  for i = 1, size do
+    local info = C_CurrencyInfo.GetCurrencyListInfo
+      and C_CurrencyInfo.GetCurrencyListInfo(i)
+    if type(info) == "table" and not info.isHeader then
+      local id
+      if C_CurrencyInfo.GetCurrencyListLink and C_CurrencyInfo.GetCurrencyIDFromLink then
+        local link = C_CurrencyInfo.GetCurrencyListLink(i)
+        if link then
+          local ok, cid = pcall(C_CurrencyInfo.GetCurrencyIDFromLink, link)
+          if ok then id = cid end
+        end
+      end
+      out[#out + 1] = {
+        id = id,
+        name = info.name,
+        quantity = info.quantity,
+        maxQuantity = info.maxQuantity,
+        totalEarned = info.totalEarned,
+        earnedThisWeek = info.quantityEarnedThisWeek,
+      }
+    end
+  end
+  return out
+end
+
+-- Equippable armor/weapons sitting in bags (and bank, when open). The
+-- Blizzard API only sees EQUIPPED items, so this is the only way to know a
+-- tier piece is owned-but-not-equipped (server reuses its link→tier logic).
+local function collectInventory()
+  local items, n = {}, 0
+  if not C_Container or not C_Container.GetContainerNumSlots then
+    return { items = items, scanned = 0 }
+  end
+  local bags = { 0, 1, 2, 3, 4 }
+  if Enum and Enum.BagIndex then
+    local extra = {
+      Enum.BagIndex.ReagentBag,
+      Enum.BagIndex.Bank,
+      Enum.BagIndex.Reagentbank,
+    }
+    for _, b in ipairs(extra) do
+      if b then bags[#bags + 1] = b end
+    end
+    if Enum.BagIndex.BankBag_1 then
+      for b = Enum.BagIndex.BankBag_1, Enum.BagIndex.BankBag_1 + 6 do
+        bags[#bags + 1] = b
+      end
+    end
+  end
+  for _, bag in ipairs(bags) do
+    local slots = 0
+    pcall(function() slots = C_Container.GetContainerNumSlots(bag) or 0 end)
+    for slot = 1, slots do
+      local link
+      pcall(function() link = C_Container.GetContainerItemLink(bag, slot) end)
+      if link then
+        local _, _, _, equipLoc, _, classID = GetItemInfoInstant(link)
+        -- classID 2 = Weapon, 4 = Armor — where tier/embellishments live.
+        if equipLoc and equipLoc ~= "" and (classID == 2 or classID == 4) then
+          n = n + 1
+          if n <= 100 then
+            items[#items + 1] = { link = link, bag = bag, slot = slot }
+          end
+        end
+      end
+    end
+  end
+  return { items = items, scanned = n }
+end
+
+-- Delve progression. The Delve season feeds the World Great Vault row
+-- (already captured in `vault`). C_DelvesUI function names have moved
+-- across 12.0.x, so probe defensively and store whatever this client
+-- exposes — the server interprets it.
+local function collectDelves()
+  local out = {}
+  if not C_DelvesUI then return out end
+  out.api = {}
+  local getters = {
+    "GetCurrentDelvesSeasonNumber",
+    "GetDelvesSeasonNumber",
+    "HasActiveDelve",
+    "GetCurrentDelveTier",
+    "GetHighestRunForCurrentSeason",
+  }
+  for _, fn in ipairs(getters) do
+    if type(C_DelvesUI[fn]) == "function" then
+      local ok, v = pcall(C_DelvesUI[fn])
+      if ok and v ~= nil and type(v) ~= "table" then out.api[fn] = v end
+    end
+  end
+  if C_DelvesUI.GetCompanionInfo then
+    local ok, info = pcall(C_DelvesUI.GetCompanionInfo)
+    if ok and type(info) == "table" then
+      out.companion = { level = info.level, name = info.name, xp = info.xp }
+    end
+  end
+  return out
+end
+
+-- Weekly raid/dungeon lockouts incl. per-boss kill state THIS reset.
+-- Blizzard's web API only exposes season aggregates, not the live lockout.
+local function collectLockouts()
+  local out = {}
+  local num = 0
+  pcall(function() num = GetNumSavedInstances() or 0 end)
+  for i = 1, num do
+    local ok, name, _id, reset, diffId, locked, extended, _msig, isRaid,
+      maxPlayers, difficultyName, numEnc, encProgress =
+      pcall(GetSavedInstanceInfo, i)
+    if ok and name then
+      local bosses = {}
+      if numEnc and numEnc > 0 and GetSavedInstanceEncounterInfo then
+        for e = 1, numEnc do
+          local ok2, bossName, _fdid, isKilled =
+            pcall(GetSavedInstanceEncounterInfo, i, e)
+          if ok2 and bossName then
+            bosses[#bosses + 1] = {
+              name = bossName,
+              killed = isKilled and true or false,
+            }
+          end
+        end
+      end
+      out[#out + 1] = {
+        name = name,
+        isRaid = isRaid and true or false,
+        difficulty = difficultyName,
+        difficultyId = diffId,
+        maxPlayers = maxPlayers,
+        locked = locked and true or false,
+        extended = extended and true or false,
+        resetSeconds = reset,
+        encounters = numEnc,
+        progress = encProgress,
+        bosses = bosses,
+      }
+    end
+  end
+  return out
+end
+
+-- Raid-prep consumables in bags (flasks/phials, potions, food, weapon
+-- oils/runes, healthstones, augment runes…). Bag contents have no web API.
+-- Aggregated per itemID with the raw consumable subclass so the server can
+-- bucket "has flask / 2+ pots / food / weapon enhancement / healthstone".
+local function collectConsumables()
+  local byId = {}
+  if not C_Container or not C_Container.GetContainerNumSlots then
+    return { items = {} }
+  end
+  local bags = { 0, 1, 2, 3, 4 }
+  if Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag then
+    bags[#bags + 1] = Enum.BagIndex.ReagentBag
+  end
+  for _, bag in ipairs(bags) do
+    local slots = 0
+    pcall(function() slots = C_Container.GetContainerNumSlots(bag) or 0 end)
+    for slot = 1, slots do
+      local itemID
+      pcall(function() itemID = C_Container.GetContainerItemID(bag, slot) end)
+      if itemID then
+        local _, _, _, _, _, classID, subClassID = GetItemInfoInstant(itemID)
+        if classID == 0 then -- Enum.ItemClass.Consumable
+          local count = 1
+          local info = C_Container.GetContainerItemInfo
+            and C_Container.GetContainerItemInfo(bag, slot)
+          if type(info) == "table" and info.stackCount then
+            count = info.stackCount
+          end
+          local rec = byId[itemID]
+          if rec then
+            rec.count = rec.count + count
+          else
+            byId[itemID] = {
+              id = itemID,
+              name = (GetItemInfo(itemID)),
+              sub = subClassID,
+              count = count,
+            }
+          end
+        end
+      end
+    end
+  end
+  local items = {}
+  for _, rec in pairs(byId) do items[#items + 1] = rec end
+  return { items = items }
+end
+
 -- ─── assemble + persist ─────────────────────────────────────────────────
 local function safe(fn, fallback)
   local ok, res = pcall(fn)
@@ -234,6 +470,11 @@ local function collect()
     mythicPlus = safe(collectMythicPlus),
     gear = safe(collectGear),
     talents = safe(collectTalents),
+    currencies = safe(collectCurrencies),
+    inventory = safe(collectInventory),
+    delves = safe(collectDelves),
+    lockouts = safe(collectLockouts),
+    consumables = safe(collectConsumables),
   }
   local json = jsonEncode(payload)
   RaidTeamStatsUploaderDB = RaidTeamStatsUploaderDB or {}
@@ -300,19 +541,35 @@ local function showExport()
 end
 
 -- ─── slash command ──────────────────────────────────────────────────────
+local PREFIX = "|cff39c5bbRaid Team Stats|r: "
+local function printHelp()
+  print(PREFIX .. "commands —")
+  print("  /rts export  — collect a fresh snapshot and open the copy/paste export window")
+  print("  /rts now     — collect a fresh snapshot silently (the companion app uploads it)")
+  print("  /rts status  — show when the last snapshot was taken")
+  print("  /rts help    — show this list")
+end
+
 SlashCmdList["RTSUPLOAD"] = function(msg)
   local cmd = strtrim(msg or ""):lower()
   if cmd == "now" then
     local p = collect()
-    print("|cff39c5bbRaid Team Stats|r: snapshot collected for " ..
-      (p.character and p.character.name or "?") .. ". It uploads automatically; or /rtsupload show to copy it.")
+    print(PREFIX .. "snapshot collected for " ..
+      (p.character and p.character.name or "?") ..
+      ". It uploads automatically; use /rts export to copy it manually.")
   elseif cmd == "status" then
     local at = RaidTeamStatsUploaderDB and RaidTeamStatsUploaderDB.collectedAt
-    print("|cff39c5bbRaid Team Stats|r: last snapshot " ..
+    print(PREFIX .. "last snapshot " ..
       (at and date("%Y-%m-%d %H:%M", at) or "never") ..
       ". The companion app uploads the saved file.")
-  else
+  elseif cmd == "export" or cmd == "show" or cmd == "copy" then
+    -- Initiate a manual data export: collect a fresh snapshot, then open
+    -- the copy/paste window (also rewrites SavedVariables so the companion
+    -- picks it up immediately).
     showExport()
+    print(PREFIX .. "fresh snapshot exported — Ctrl+A, Ctrl+C, then paste it on the website.")
+  else
+    printHelp()
   end
 end
 SLASH_RTSUPLOAD1 = "/rtsupload"
@@ -335,7 +592,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     pcall(function() C_MythicPlus.RequestRewards() end)
     pcall(function() C_WeeklyRewards.CanClaimRewards() end)
     C_Timer.After(8, collect)
-    print("|cff39c5bbRaid Team Stats|r uploader loaded. /rtsupload to copy a manual export.")
+    print("|cff39c5bbRaid Team Stats|r uploader loaded. /rts export to copy a manual export, /rts help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()

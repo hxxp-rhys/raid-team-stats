@@ -17,6 +17,15 @@ const activitySchema = z
     progress: z.number().optional(),
     level: z.number().optional(),
     unlocked: z.boolean().optional(),
+    // SCHEMA 2: projected reward item link for this row (and its post-
+    // upgrade preview) — addon ≥ 1.1.0 only.
+    rewardExamples: z
+      .object({
+        item: z.string().nullable().optional(),
+        upgrade: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -57,11 +66,117 @@ export const addonPayloadSchema = z
           )
           .default([]),
         season: z.number().nullable().optional(),
+        // SCHEMA 2: the keystone currently in the player's bag (no web
+        // API exposes this — Blizzard/RIO only show completed runs).
+        ownedKeystone: z
+          .object({
+            mapId: z.number().nullable().optional(),
+            level: z.number().nullable().optional(),
+            mapName: z.string().nullable().optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
       })
       .passthrough()
       .default({ weeklyRuns: [] }),
     gear: z.unknown().optional(),
     talents: z.unknown().optional(),
+
+    // ─── SCHEMA 2 (addon ≥ 1.1.0) ──────────────────────────────────────
+    // All optional so v1 payloads still validate; root is .passthrough()
+    // so even unknown future keys survive into AddonUpload.payload. These
+    // explicit shapes document the contract for the future widgets that
+    // will consume them. The addon dumps raw ids/enums/subclass numbers
+    // for stable server-side mapping (same approach as the vault enum).
+    currencies: z
+      .array(
+        z
+          .object({
+            id: z.number().nullable().optional(),
+            name: z.string().optional(),
+            quantity: z.number().optional(),
+            maxQuantity: z.number().optional(),
+            totalEarned: z.number().optional(),
+            earnedThisWeek: z.number().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    inventory: z
+      .object({
+        items: z
+          .array(
+            z
+              .object({
+                link: z.string(),
+                bag: z.number().optional(),
+                slot: z.number().optional(),
+              })
+              .passthrough(),
+          )
+          .default([]),
+        scanned: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+    delves: z
+      .object({
+        api: z.record(z.string(), z.unknown()).optional(),
+        companion: z
+          .object({
+            level: z.number().nullable().optional(),
+            name: z.string().nullable().optional(),
+            xp: z.number().nullable().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    lockouts: z
+      .array(
+        z
+          .object({
+            name: z.string().optional(),
+            isRaid: z.boolean().optional(),
+            difficulty: z.string().nullable().optional(),
+            difficultyId: z.number().nullable().optional(),
+            locked: z.boolean().optional(),
+            extended: z.boolean().optional(),
+            encounters: z.number().nullable().optional(),
+            progress: z.number().nullable().optional(),
+            bosses: z
+              .array(
+                z
+                  .object({
+                    name: z.string().optional(),
+                    killed: z.boolean().optional(),
+                  })
+                  .passthrough(),
+              )
+              .default([]),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    consumables: z
+      .object({
+        items: z
+          .array(
+            z
+              .object({
+                id: z.number().optional(),
+                name: z.string().nullable().optional(),
+                sub: z.number().nullable().optional(),
+                count: z.number().optional(),
+              })
+              .passthrough(),
+          )
+          .default([]),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
