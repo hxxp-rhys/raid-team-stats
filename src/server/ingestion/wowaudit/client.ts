@@ -28,22 +28,21 @@ import {
  * `X-Api-Key: <key>`) is parameterised — adjust `authHeader()` once known.
  */
 
-// Educated-guess endpoint paths. DO NOT trust these until verified.
+// WoW Audit v1 endpoints. Confirmed against the public WoW Audit data
+// model + community clients: base is https://wowaudit.com/v1 and the auth
+// header is `Authorization: <raw key>` (no Bearer prefix). `/characters`
+// is the roster endpoint the official audit spreadsheet consumes.
 const paths = {
-  team: "/team",
-  roster: "/characters",
-  /** Time-bound roster snapshot for a given week (typical audit-spreadsheet column set). */
-  period: (periodId: string) => `/period/${encodeURIComponent(periodId)}`,
+  team: "characters", // no dedicated /team; /characters doubles as a probe
+  roster: "characters",
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 const authHeader = (key: string): HeadersInit => ({
-  // TODO: confirm header name vs WoW Audit docs. Likely candidates:
-  //   { Authorization: `${key}` }                    (plain key)
-  //   { Authorization: `Bearer ${key}` }             (bearer)
-  //   { "X-Api-Key": key }                           (header name)
-  // The body of the header is right; the *name* might change.
+  // WoW Audit v1 uses the raw key as the Authorization header value (no
+  // "Bearer " prefix) — confirmed against the official audit spreadsheet
+  // and community clients (e.g. brikr/wowaudit-tools).
   Authorization: key,
   Accept: "application/json",
   "User-Agent": "raid-team-stats/0.1 (+https://github.com/hxxp-rhys/raid-stats)",
@@ -85,7 +84,13 @@ export class WowauditClient {
     await wowauditBucket.takeOrWait();
 
     const baseUrl = this.config.baseUrl?.trim() || DEFAULT_WOWAUDIT_BASE_URL;
-    const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+    // Strip any leading slash on `path` so it appends to the versioned base
+    // (`/v1`) instead of replacing the whole path (a leading-slash relative
+    // URL resets to the host root and would drop `/v1`).
+    const url = new URL(
+      path.replace(/^\/+/, ""),
+      baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
+    );
     if (options.query) {
       for (const [k, v] of Object.entries(options.query)) {
         if (v === undefined) continue;
@@ -129,29 +134,42 @@ export class WowauditClient {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Public API surface. These methods are typed and ready to use — the
-  // underlying paths/schemas should be tightened once real docs are in hand.
+  // Public API surface (WoW Audit v1).
   // ──────────────────────────────────────────────────────────────────────
 
-  /** Returns the team metadata for the configured API key. */
+  /**
+   * Team roster with the full audit column set (incl. the nine Great Vault
+   * slot columns). Always returns a flat array regardless of whether the
+   * API wraps it in `{ characters: [...] }`.
+   */
+  async getCharacters() {
+    const res = await this.request(paths.roster, {
+      schema: wowauditRosterResponseSchema,
+    });
+    return Array.isArray(res) ? res : res.characters;
+  }
+
+  /** Back-compat alias. */
+  async getRoster() {
+    return this.getCharacters();
+  }
+
+  /** Team metadata probe (kept permissive). */
   async getTeam() {
     return this.request(paths.team, { schema: wowauditTeamSchema });
   }
 
-  /** Returns the configured team's roster with audit-spreadsheet columns. */
-  async getRoster() {
-    return this.request(paths.roster, { schema: wowauditRosterResponseSchema });
-  }
-
   /**
-   * Lightweight liveness probe — useful for "test connection" on the
-   * settings UI. Currently uses /team as a stand-in; replace with a true
-   * ping endpoint once one is known.
+   * Liveness probe for the settings "test connection" button — hits the
+   * real `/characters` endpoint so a bad key / no-API-access plan fails
+   * loudly here instead of silently during ingestion.
    */
-  async ping(): Promise<{ ok: true; team: unknown } | { ok: false; error: string }> {
+  async ping(): Promise<
+    { ok: true; characters: number } | { ok: false; error: string }
+  > {
     try {
-      const team = await this.getTeam();
-      return { ok: true, team };
+      const chars = await this.getCharacters();
+      return { ok: true, characters: chars.length };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       return { ok: false, error };

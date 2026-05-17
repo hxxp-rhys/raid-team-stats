@@ -5,9 +5,8 @@ import { wowClassColor, wowClassName } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
 /**
- * "Did everyone tap their vault this week?" view. Shows highest weekly key
- * and the M+ vault slots unlocked (1 run = slot 1, 4 runs = slot 2, 8 = slot 3).
- * Highlights members short of all three slots.
+ * "Did everyone run M+ this week?" view. Shows weekly run count and the
+ * highest key timed. Vault-slot progress lives on the Great Vault widget.
  */
 export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
@@ -34,13 +33,6 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  const slotsUnlocked = (runs: number): 0 | 1 | 2 | 3 => {
-    if (runs >= 8) return 3;
-    if (runs >= 4) return 2;
-    if (runs >= 1) return 1;
-    return 0;
-  };
-
   const rows = q.data.members
     .map((m) => {
       // Exact weekly completions (repeats included) when available; fall
@@ -52,19 +44,18 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
           ? runsRaw
           : 0;
       const runsCount = m.latest.mplus?.weeklyRunCount ?? fallback;
-      const slots = slotsUnlocked(runsCount);
       const highest =
         typeof m.latest.mplus?.weeklyHighest === "number"
           ? m.latest.mplus.weeklyHighest
           : null;
-      return { ...m, runsCount, slots, highest };
+      return { ...m, runsCount, highest };
     })
-    .sort((a, b) => b.slots - a.slots || b.runsCount - a.runsCount);
+    .sort((a, b) => b.runsCount - a.runsCount);
 
   return (
     <WidgetShell
       title="M+ this week"
-      description="Vault tracks fill after 1/4/8 timed runs. Anyone under 8 leaves rewards on the table."
+      description="Weekly M+ run count and the highest key timed. Vault-slot progress is on the Great Vault widget."
     >
       <table className="w-full text-sm">
         <caption className="sr-only">M+ progress this week</caption>
@@ -74,9 +65,6 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
             <th scope="col" className="py-1 pr-3 font-medium">Class</th>
             <th scope="col" className="py-1 pr-3 text-right font-medium">Runs</th>
             <th scope="col" className="py-1 pr-3 text-right font-medium">Highest</th>
-            <th scope="col" className="py-1 pr-3 text-center font-medium">
-              Vault slots
-            </th>
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
@@ -94,30 +82,10 @@ export function MplusWeeklyWidget({ raidTeamId }: { raidTeamId: string }) {
               <td className="py-1.5 pr-3 text-right tabular-nums">
                 {m.highest ?? "—"}
               </td>
-              <td className="py-1.5 pr-3">
-                <div className="flex justify-center">
-                  <SlotPips filled={m.slots} />
-                </div>
-              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </WidgetShell>
-  );
-}
-
-function SlotPips({ filled }: { filled: 0 | 1 | 2 | 3 }) {
-  return (
-    <div className="flex gap-1" role="img" aria-label={`${filled} of 3 slots`}>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className={`block h-3 w-3 rounded-sm ${
-            i < filled ? "bg-primary" : "bg-muted"
-          }`}
-        />
-      ))}
-    </div>
   );
 }

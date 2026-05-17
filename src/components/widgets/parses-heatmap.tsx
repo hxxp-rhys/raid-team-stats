@@ -47,15 +47,21 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Only show the CURRENT raid tier. WCL zone ids increase per tier, so the
-  // highest zoneId present is the live raid (Midnight = 46); older parses
-  // (e.g. The War Within's Manaforge Omega = 44) are filtered out so the
-  // heatmap never mixes expansions.
-  let currentZone = -1;
-  for (const m of q.data.members) {
-    for (const p of m.latest.wclParses ?? []) {
-      if (typeof p.zoneId === "number" && p.zoneId > currentZone)
-        currentZone = p.zoneId;
+  // Only show the CURRENT raid tier (WoW Midnight). The zone id is resolved
+  // server-side (env-pinned to the live raid) and returned with the query —
+  // we filter strictly to it so a stale past-expansion parse (e.g. The War
+  // Within's Manaforge Omega = zone 44) can never appear, even if such rows
+  // still exist in the DB. If the server couldn't resolve it, fall back to
+  // the highest zone id present in the data.
+  const MYTHIC = 5;
+  const serverZone = q.data.currentRaidZoneId;
+  let currentZone = serverZone ?? -1;
+  if (serverZone == null) {
+    for (const m of q.data.members) {
+      for (const p of m.latest.wclParses ?? []) {
+        if (typeof p.zoneId === "number" && p.zoneId > currentZone)
+          currentZone = p.zoneId;
+      }
     }
   }
 
@@ -67,6 +73,7 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     for (const p of m.latest.wclParses ?? []) {
       if (typeof p.encounterId !== "number") continue;
       if (p.zoneId !== currentZone) continue;
+      if (typeof p.difficulty === "number" && p.difficulty !== MYTHIC) continue;
       if (!encMap.has(p.encounterId) || (p.encounterName && !encMap.get(p.encounterId))) {
         encMap.set(p.encounterId, p.encounterName ?? "");
       }
@@ -94,6 +101,7 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
       if (typeof p.encounterId !== "number") continue;
       if (typeof p.percentile !== "number") continue;
       if (p.zoneId !== currentZone) continue; // current raid only
+      if (typeof p.difficulty === "number" && p.difficulty !== MYTHIC) continue;
       const prior = cellByEnc.get(p.encounterId);
       if (prior === undefined || p.percentile > prior) {
         cellByEnc.set(p.encounterId, p.percentile);

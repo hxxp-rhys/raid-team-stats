@@ -14,7 +14,6 @@ import { MplusWeeklyWidget } from "./mplus-weekly";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RecentKillsWidget } from "./recent-kills";
-import { RosterFreshnessWidget } from "./roster-freshness";
 import { TalentLoadoutsWidget } from "./talent-loadouts";
 import { TierSetTrackerWidget } from "./tier-set-tracker";
 import { VaultProgressWidget } from "./vault-progress";
@@ -43,7 +42,6 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   tier_set_tracker: TierSetTrackerWidget,
   wcl_parses: WclParsesWidget,
   character_timeline: TimelineHost,
-  roster_freshness: RosterFreshnessWidget,
   class_composition: ClassCompositionWidget,
   ilvl_distribution: IlvlDistributionWidget,
   missing_fixes: MissingFixesWidget,

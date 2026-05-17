@@ -20,7 +20,6 @@ export const WIDGET_TYPES = [
   "tier_set_tracker",
   "wcl_parses",
   "character_timeline",
-  "roster_freshness",
   "class_composition",
   "ilvl_distribution",
   "missing_fixes",
@@ -75,7 +74,6 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   tier_set_tracker: { cols: 6, rows: 3 },
   wcl_parses: { cols: 6, rows: 4 },
   character_timeline: { cols: 8, rows: 3 },
-  roster_freshness: { cols: 4, rows: 3 },
   class_composition: { cols: 4, rows: 3 },
   ilvl_distribution: { cols: 8, rows: 3 },
   missing_fixes: { cols: 6, rows: 3 },
@@ -295,10 +293,6 @@ export const WIDGET_META: Record<
   character_timeline: {
     title: "Character timeline",
     description: "iLvL progression over time for a single character.",
-  },
-  roster_freshness: {
-    title: "Roster freshness",
-    description: "When each character was last synced from Battle.net.",
   },
   class_composition: {
     title: "Class composition",

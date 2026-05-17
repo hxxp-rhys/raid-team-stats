@@ -5,6 +5,7 @@ import {
   protectedProcedure,
   assertRaidTeamRole,
 } from "@/server/api/trpc";
+import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 
 /**
  * Read-only access to the per-domain snapshot rows. Authorization rides on
@@ -120,6 +121,7 @@ export const snapshotRouter = router({
                 percentile: true,
                 metric: true,
                 reportCode: true,
+                reportStartTime: true,
                 capturedAt: true,
               },
             }),
@@ -127,7 +129,15 @@ export const snapshotRouter = router({
         ),
       );
 
+      // The live raid tier's WCL zone id, resolved server-side (env-pinned
+      // to the current Midnight raid → no network call). Widgets filter
+      // parses to exactly this zone so stale past-expansion rows (e.g. The
+      // War Within) can never leak into the current-tier views.
+      const currentRaidZoneId =
+        (await warcraftLogsClient().currentRaidZoneId()) ?? null;
+
       return {
+        currentRaidZoneId,
         members: memberships.map((m, i) => ({
           character: m.character,
           role: m.role,

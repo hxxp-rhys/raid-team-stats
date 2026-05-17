@@ -28,6 +28,7 @@ import {
   characterProfileFields,
 } from "@/server/ingestion/raiderio/client";
 import { raiderIOCharacterProfileSchema } from "@/server/ingestion/raiderio/schemas";
+import { resolveWorldVault } from "@/server/ingestion/wowaudit/world-vault";
 import type { Region } from "@/generated/prisma/enums";
 import { z } from "zod";
 
@@ -681,6 +682,45 @@ export async function handleTrackedMemberSync(
     weekStart.setUTCHours(15, 0, 0, 0);
     if (weekStart > now) weekStart.setUTCDate(weekStart.getUTCDate() - 7);
 
+    // World (Delve) Great Vault row. Blizzard's public character API does
+    // NOT expose Delve/World vault progress, so WoW Audit (fed by its
+    // in-game companion addon) is the only reliable source. Resolved per
+    // the character's active guild; stays `tracked:false` unless that
+    // guild has a WoW Audit key configured AND the character is in its
+    // WoW Audit roster with a usable vault signal.
+    let world: {
+      unlocked: number;
+      total: number;
+      tracks: Track[];
+      tracked: boolean;
+    } = { unlocked: 0, total: 3, tracks: [], tracked: false };
+    try {
+      const link = await db.guildCharacterLink.findFirst({
+        where: { characterId: character.id, status: "ACTIVE" },
+        select: { guildId: true },
+      });
+      if (link) {
+        const wv = await resolveWorldVault({
+          guildId: link.guildId,
+          name: character.name,
+          realmSlug: character.realmSlug,
+        });
+        if (wv) {
+          world = {
+            unlocked: wv.unlocked,
+            total: wv.total,
+            tracks: [],
+            tracked: true,
+          };
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { err, characterId: character.id },
+        "world-vault resolve failed; leaving World untracked",
+      );
+    }
+
     await writeVaultSnapshot({
       characterId: character.id,
       source: "BLIZZARD",
@@ -689,19 +729,14 @@ export async function handleTrackedMemberSync(
       slots: {
         raid: { unlocked: raidSlots, total: 3, tracks: raidTracks },
         mythicPlus: { unlocked: mplusSlots, total: 3, tracks: mplusTracks },
-        // The Great Vault structurally always has 3 World slots (Delves /
-        // world content). Blizzard's public character API doesn't expose
-        // Delve vault progress (it needs the protected user-OAuth weekly-
-        // rewards endpoint), so we surface the 3 slots as present-but-
-        // unknown rather than a misleading "—". `tracked:false` lets the
-        // widget render an honest "not tracked" hint.
-        world: { unlocked: 0, total: 3, tracks: [], tracked: false },
+        world,
       },
       rawPayload: {
         mplusRuns,
         raidKills,
         mplusTracks,
         raidTracks,
+        world,
         derivedAt: capturedAt.toISOString(),
       },
     });
@@ -722,6 +757,10 @@ export async function handleTrackedMemberSync(
   try {
     const wcl = warcraftLogsClient();
     const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
+    // Mythic only (WCL difficulty 5). The parses widgets are explicitly
+    // scoped to current-tier Mythic; requesting it directly keeps the
+    // payload small and avoids mixing in Heroic/Normal logs.
+    const MYTHIC_DIFFICULTY = 5;
     const rankings = await wcl.query({
       query: CHARACTER_ZONE_RANKINGS_QUERY,
       variables: {
@@ -730,6 +769,7 @@ export async function handleTrackedMemberSync(
         region: regionToCode(character.region).toUpperCase(),
         zoneID,
         metric: "dps",
+        difficulty: MYTHIC_DIFFICULTY,
       },
       schema: characterZoneRankingsResponseSchema,
       estimatedPoints: 5,
@@ -739,7 +779,7 @@ export async function handleTrackedMemberSync(
       encounter?: { id?: number; name?: string };
       rankPercent?: number | null;
       bestPercent?: number | null;
-      report?: { code?: string | null } | null;
+      report?: { code?: string | null; startTime?: number | null } | null;
       difficulty?: number;
     };
     const zr = rankings.characterData?.character?.zoneRankings as
@@ -750,16 +790,23 @@ export async function handleTrackedMemberSync(
     for (const r of list) {
       if (!r.encounter?.id) continue;
       const pct = r.rankPercent ?? r.bestPercent ?? null;
+      // WCL report startTime is epoch ms; surfaces "which raid week" so the
+      // widget can scope to the current Tue→Tue lockout.
+      const reportStart =
+        typeof r.report?.startTime === "number" && r.report.startTime > 0
+          ? new Date(r.report.startTime)
+          : null;
       await writeWclParseSnapshot({
         characterId: character.id,
         capturedAt,
         zoneId: zoneID,
         encounterId: r.encounter.id,
         encounterName: r.encounter.name ?? null,
-        difficulty: r.difficulty ?? zr?.difficulty ?? 5, // 5 = Mythic
+        difficulty: r.difficulty ?? zr?.difficulty ?? MYTHIC_DIFFICULTY,
         percentile: pct != null ? Math.round(pct * 100) / 100 : null,
         metric: "dps",
         reportCode: r.report?.code ?? null,
+        reportStartTime: reportStart,
         rawPayload: r,
       });
     }

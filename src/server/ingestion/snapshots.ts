@@ -297,6 +297,7 @@ type WclParseArgs = {
   percentile?: number | null;
   metric?: string | null;
   reportCode?: string | null;
+  reportStartTime?: Date | null;
   rawPayload: unknown;
 };
 export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result> {
@@ -308,6 +309,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
     p: args.percentile ?? null,
     m: args.metric ?? null,
     r: args.reportCode ?? null,
+    rt: args.reportStartTime ? args.reportStartTime.getTime() : null,
   });
   const recent = await db.wclParseSnapshot.findFirst({
     where: {
@@ -333,6 +335,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
       percentile: args.percentile ?? null,
       metric: args.metric ?? null,
       reportCode: args.reportCode ?? null,
+      reportStartTime: args.reportStartTime ?? null,
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },
   });

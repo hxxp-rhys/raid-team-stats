@@ -1,21 +1,55 @@
 import { z } from "zod";
 
 /**
- * Placeholder zod schemas for the WoW Audit API.
+ * WoW Audit v1 API schemas.
  *
- * NOTE — these are *deliberately permissive* until we have the real API docs.
- * Each schema uses `.passthrough()` and treats almost every field as optional
- * so the client can fetch and surface data without crashing on unfamiliar
- * shapes. Once the WoW Audit reference is shared, tighten the types and
- * remove the `passthrough` where it's not needed for forward compatibility.
+ * Grounded in the WoW Audit data model (github.com/wowaudit/core):
+ *   - The Great Vault is exposed as nine flat columns
+ *     `great_vault_slot_1` … `great_vault_slot_9`. WoW's vault has three
+ *     rows of three — Raid (1-3), Mythic+ (4-6), World/Delves (7-9). Each
+ *     value is the reward item level (0 / null / "" = slot not unlocked).
+ *   - `delve_info` carries per-tier Delve completion counts and a `total`
+ *     — a secondary source for the World row when the slot columns are
+ *     absent (older addon versions).
  *
- * The intent here is to make a single update path — change the schemas
- * below + the path constants in `client.ts` — to fully activate the
- * integration without touching the ingestion pipeline or the UI.
+ * Everything stays `.optional()` + `.passthrough()`: the API returns a wide
+ * row and we only need identity + the vault. The integration activates as
+ * soon as a guild's WoW Audit key is configured — no further code change.
  */
 
-// Team / guild metadata. Likely fields based on the public WoW Audit UI:
-// team name, realm, region, current period (week/raid).
+const slotValue = z.union([z.number(), z.string(), z.null()]).optional();
+
+export const wowauditDelveInfoSchema = z
+  .object({
+    total: z.number().optional(),
+  })
+  .passthrough();
+
+export const wowauditCharacterSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).optional(),
+    name: z.string(),
+    realm: z.string().optional(),
+    class: z.string().optional(),
+    role: z.string().optional(),
+
+    great_vault_slot_1: slotValue,
+    great_vault_slot_2: slotValue,
+    great_vault_slot_3: slotValue,
+    great_vault_slot_4: slotValue,
+    great_vault_slot_5: slotValue,
+    great_vault_slot_6: slotValue,
+    great_vault_slot_7: slotValue,
+    great_vault_slot_8: slotValue,
+    great_vault_slot_9: slotValue,
+
+    delve_info: wowauditDelveInfoSchema.optional(),
+  })
+  .passthrough();
+export type WowauditCharacter = z.infer<typeof wowauditCharacterSchema>;
+
+// Team / guild metadata (kept permissive — only used by the "test
+// connection" probe and status display).
 export const wowauditTeamSchema = z
   .object({
     id: z.union([z.string(), z.number()]).optional(),
@@ -27,40 +61,7 @@ export const wowauditTeamSchema = z
   .passthrough();
 export type WowauditTeam = z.infer<typeof wowauditTeamSchema>;
 
-// Single character record — superset of the typical audit-spreadsheet columns.
-// Real schema will narrow these once we know the field names.
-export const wowauditCharacterSchema = z
-  .object({
-    name: z.string(),
-    realm: z.string().optional(),
-    class: z.string().optional(),
-    spec: z.string().optional(),
-    role: z.string().optional(),
-    rank: z.union([z.string(), z.number()]).optional(),
-
-    // Gear / iLvL
-    item_level: z.number().optional(),
-    enchants_missing: z.number().optional(),
-    gems_missing: z.number().optional(),
-    tier_pieces: z.number().optional(),
-
-    // Mythic+
-    mplus_score: z.number().optional(),
-    mplus_weekly_highest: z.number().optional(),
-
-    // Vault
-    vault_options: z.number().optional(),
-    vault_slots: z.array(z.unknown()).optional(),
-
-    // Raid
-    raid_attendance: z.number().optional(),
-    raid_progress: z.record(z.string(), z.unknown()).optional(),
-  })
-  .passthrough();
-export type WowauditCharacter = z.infer<typeof wowauditCharacterSchema>;
-
-// Roster response. The exact wrapper shape (array vs `{ characters: [...] }`)
-// will be resolved once we have docs.
+// The /characters endpoint returns either a bare array or a wrapped object.
 export const wowauditRosterResponseSchema = z.union([
   z.array(wowauditCharacterSchema),
   z

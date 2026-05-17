@@ -41,7 +41,6 @@ export function IlvlDistributionWidget({ raidTeamId }: { raidTeamId: string }) {
   const min = Math.min(...ilvls);
   const max = Math.max(...ilvls);
   const avg = Math.round(ilvls.reduce((s, x) => s + x, 0) / ilvls.length);
-  const median = [...ilvls].sort((a, b) => a - b)[Math.floor(ilvls.length / 2)];
 
   // Bucketize into runs of BUCKET_SIZE ilvls, anchored at the floor.
   const floor = Math.floor(min / BUCKET_SIZE) * BUCKET_SIZE;
@@ -62,9 +61,8 @@ export function IlvlDistributionWidget({ raidTeamId }: { raidTeamId: string }) {
       description="Histogram of equipped item levels across the team."
     >
       <div className="space-y-3">
-        <div className="grid grid-cols-4 gap-2 text-xs">
+        <div className="grid grid-cols-3 gap-2 text-xs">
           <Stat label="Min" value={min} />
-          <Stat label="Median" value={median ?? avg} />
           <Stat label="Mean" value={avg} />
           <Stat label="Max" value={max} />
         </div>

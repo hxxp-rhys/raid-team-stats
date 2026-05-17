@@ -34,6 +34,17 @@ const newId = () =>
 
 const SAVE_DEBOUNCE_MS = 800;
 
+/** Compact relative-age label, e.g. "5m ago" / "3h ago" / "2d ago". */
+function relativeAge(fromMs: number, nowMs: number): string {
+  const diff = nowMs - fromMs;
+  if (diff < 60_000) return "just now";
+  const mins = Math.round(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 /**
  * The Dashboard Control Panel — the team-detail page now IS the control
  * panel for that team's dashboards.
@@ -95,6 +106,9 @@ export function ControlPanel({
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [activeTabId, setActiveTabId] = useState<string>("overview");
   const [mobile, setMobile] = useState(false);
+  // `Date.now()` is impure in render — capture once at mount so the
+  // "Last refresh" relative label stays pure (react-hooks/purity).
+  const [nowMs] = useState(() => Date.now());
   const [pendingFlush, setPendingFlush] = useState(false);
   // Tracks which dashboard id `layout` was initialized from. Using state
   // (not a ref) keeps this the supported "adjust state during render to
@@ -339,6 +353,18 @@ export function ControlPanel({
   }
   const t = team.data!;
 
+  // "Last refresh" = the most recent successful per-character sync across
+  // the active roster, falling back to the team-level manual-refresh stamp.
+  // This replaces the standalone Roster-freshness widget.
+  const lastRefreshMs = (() => {
+    let max = t.lastRefreshAt ? new Date(t.lastRefreshAt).getTime() : 0;
+    for (const m of t.memberships) {
+      const ts = m.character.lastSyncedAt;
+      if (ts) max = Math.max(max, new Date(ts).getTime());
+    }
+    return max > 0 ? max : null;
+  })();
+
   // No dashboards yet → show a one-shot create form rather than the empty
   // grid. Once a dashboard exists, the picker on the header navigates.
   if (dashboards.data && dashboards.data.length === 0) {
@@ -402,32 +428,47 @@ export function ControlPanel({
             {t.memberships.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <label
-            className={cn(
-              "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
-              mobile && "border-primary text-primary",
+        <div className="flex flex-col items-end gap-1.5 text-sm">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <label
+              className={cn(
+                "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
+                mobile && "border-primary text-primary",
+              )}
+              title="Toggle mobile-layout editing"
+            >
+              <input
+                type="checkbox"
+                checked={mobile}
+                onChange={(e) => setMobile(e.target.checked)}
+                className="sr-only"
+              />
+              <span aria-hidden>📱</span>
+              <span>Mobile view</span>
+            </label>
+            {pendingFlush ? (
+              <span className="text-amber-400 text-xs">Saving…</span>
+            ) : update.error ? (
+              <span className="text-destructive text-xs" role="alert">
+                Save failed
+              </span>
+            ) : (
+              <span className="text-muted-foreground text-xs">Auto-saved</span>
             )}
-            title="Toggle mobile-layout editing"
+          </div>
+          <span
+            className="text-muted-foreground text-xs"
+            title={
+              lastRefreshMs
+                ? new Date(lastRefreshMs).toLocaleString()
+                : "No sync recorded yet"
+            }
           >
-            <input
-              type="checkbox"
-              checked={mobile}
-              onChange={(e) => setMobile(e.target.checked)}
-              className="sr-only"
-            />
-            <span aria-hidden>📱</span>
-            <span>Mobile view</span>
-          </label>
-          {pendingFlush ? (
-            <span className="text-amber-400 text-xs">Saving…</span>
-          ) : update.error ? (
-            <span className="text-destructive text-xs" role="alert">
-              Save failed
+            Last refresh:{" "}
+            <span className="text-foreground font-medium">
+              {lastRefreshMs ? relativeAge(lastRefreshMs, nowMs) : "never"}
             </span>
-          ) : (
-            <span className="text-muted-foreground text-xs">Auto-saved</span>
-          )}
+          </span>
         </div>
       </header>
 

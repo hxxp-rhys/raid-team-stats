@@ -12,12 +12,13 @@ export const CHARACTER_ZONE_RANKINGS_QUERY = /* GraphQL */ `
     $region: String!
     $zoneID: Int!
     $metric: CharacterPageRankingMetricType
+    $difficulty: Int
   ) {
     characterData {
       character(name: $name, serverSlug: $server, serverRegion: $region) {
         id
         name
-        zoneRankings(zoneID: $zoneID, metric: $metric)
+        zoneRankings(zoneID: $zoneID, metric: $metric, difficulty: $difficulty)
       }
     }
   }

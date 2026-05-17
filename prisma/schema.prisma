@@ -526,6 +526,9 @@ model WclParseSnapshot {
   percentile    Int?
   metric        String?
   reportCode    String?
+  // Epoch of the WCL report behind this best parse — lets the UI scope to
+  // the current raid week (Tue→Tue) instead of all-time season bests.
+  reportStartTime DateTime?
   rawPayload    Json
   createdAt     DateTime       @default(now())
 
