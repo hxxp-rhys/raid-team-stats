@@ -1,8 +1,13 @@
 import { randomBytes } from "node:crypto";
 
+import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 
-import { router, protectedProcedure } from "@/server/api/trpc";
+import {
+  router,
+  protectedProcedure,
+  isPlatformAdmin,
+} from "@/server/api/trpc";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import { audit } from "@/server/security/audit";
 
@@ -72,13 +77,20 @@ export const accountRouter = router({
   refreshMyData: protectedProcedure.mutation(async ({ ctx }) => {
     const userId = ctx.session.user.id;
 
-    const rl = await consumeLimit(policies.manualSyncPerUser, userId);
-    if (!rl.allowed) {
-      const mins = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 60_000));
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: `Data refresh is rate-limited. Try again in about ${mins} minute(s).`,
-      });
+    // Platform admins are exempt from the manual-refresh rate limit.
+    const admin = await isPlatformAdmin(userId);
+    if (!admin) {
+      const rl = await consumeLimit(policies.manualSyncPerUser, userId);
+      if (!rl.allowed) {
+        const mins = Math.max(
+          1,
+          Math.ceil((rl.resetAt - Date.now()) / 60_000),
+        );
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Data refresh is rate-limited. Try again in about ${mins} minute(s).`,
+        });
+      }
     }
 
     const characters = await ctx.db.character.findMany({
@@ -93,9 +105,12 @@ export const accountRouter = router({
     const { queues, QUEUE_NAMES } = await import(
       "@/server/ingestion/queues"
     );
+    // Captured before the enqueue so the client can poll refreshProgress:
+    // a character's lastSyncedAt only moves >= this once its job finishes.
+    const triggeredAt = new Date();
     // Distinct jobId scheme so this batch isn't de-duped against the hourly
     // cron's `tier-a:{cid}:{hourKey}` jobs (BullMQ rejects ":" in ids).
-    const triggerKey = `account-manual_${userId}_${Date.now()}`;
+    const triggerKey = `account-manual_${userId}_${triggeredAt.getTime()}`;
     await queues.trackedMemberSync.addBulk(
       characters.map((c) => ({
         name: QUEUE_NAMES.trackedMemberSync,
@@ -109,9 +124,42 @@ export const accountRouter = router({
       actorUserId: userId,
       subjectType: "user",
       subjectId: userId,
-      metadata: { tier: "account_manual", enqueued: characters.length },
+      metadata: {
+        tier: "account_manual",
+        enqueued: characters.length,
+        admin,
+      },
     });
 
-    return { ok: true as const, enqueued: characters.length };
+    return {
+      ok: true as const,
+      enqueued: characters.length,
+      at: triggeredAt,
+    };
   }),
+
+  /**
+   * Live progress for an in-flight refreshMyData. `since` is the timestamp
+   * the batch was enqueued (returned as `at`). A character counts as synced
+   * once its trackedMemberSync job advances `lastSyncedAt` to/after it, so
+   * the UI can show a "synced X/Y" status indicator.
+   */
+  refreshProgress: protectedProcedure
+    .input(z.object({ since: z.date() }))
+    .query(async ({ ctx, input }) => {
+      const characters = await ctx.db.character.findMany({
+        where: { userId: ctx.session.user.id },
+        select: { lastSyncedAt: true },
+        take: 50,
+      });
+      const total = characters.length;
+      const synced = characters.reduce(
+        (n, c) =>
+          c.lastSyncedAt != null && c.lastSyncedAt >= input.since
+            ? n + 1
+            : n,
+        0,
+      );
+      return { total, synced };
+    }),
 });
