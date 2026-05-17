@@ -22,6 +22,8 @@ import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import {
   CHARACTER_ZONE_RANKINGS_QUERY,
   characterZoneRankingsResponseSchema,
+  buildCharacterEncounterRankingsQuery,
+  characterEncounterRankingsResponseSchema,
 } from "@/server/ingestion/warcraftlogs/queries";
 import {
   raiderIOClient,
@@ -744,29 +746,48 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "vault", characterId: character.id });
   }
 
-  // 6. Warcraft Logs parses. WCL's `characterData.character(...).zoneRankings`
-  //    returns a JSON scalar with per-encounter best-percentile data for the
-  //    requested zoneID. We pull best-DPS rankings for the current raid tier
-  //    and persist one WclParseSnapshot per (encounter, difficulty).
+  // 6. Warcraft Logs parses (Mythic, current raid tier).
   //
-  //    Zone = the current live raid tier (WoW Midnight). Resolved via
-  //    `currentRaidZoneId()`: env WCL_RAID_ZONE_ID pin → Redis cache →
-  //    live worldData.zones (newest non-frozen, non-PTR/M+/Delve zone).
-  //    Prod pins WCL_RAID_ZONE_ID=46 (the live Midnight raid). Falls back
-  //    to 46 only if resolution somehow fails.
+  //    Two facts about WCL's API drive the shape here:
+  //      • `zoneRankings` is a season/partition-cumulative aggregate with
+  //        NO per-kill timestamps — perfect for the heatmap's "best per
+  //        boss this tier" but it CANNOT answer "this week".
+  //      • `encounterRankings` exposes individual `ranks[]`, each with a
+  //        `startTime` — the only way to scope to the current lockout.
+  //
+  //    So we do both: zoneRankings → `percentile` (season best, heatmap),
+  //    and a single batched encounterRankings call → `weekPercentile` +
+  //    `reportStartTime` (current-week best, the parses widget).
+  //
+  //    Zone resolves via `currentRaidZoneId()` (env WCL_RAID_ZONE_ID pin →
+  //    Redis cache → live worldData.zones). Prod pins 46 (live Midnight).
   try {
     const wcl = warcraftLogsClient();
     const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
-    // Mythic only (WCL difficulty 5). The parses widgets are explicitly
-    // scoped to current-tier Mythic; requesting it directly keeps the
-    // payload small and avoids mixing in Heroic/Normal logs.
-    const MYTHIC_DIFFICULTY = 5;
-    const rankings = await wcl.query({
+    const MYTHIC_DIFFICULTY = 5; // WCL difficulty 5 = Mythic
+
+    // Current raid lockout window: US weekly reset is Tuesday 15:00 UTC
+    // (= "Tuesday 11:00" US Eastern, what the user specified). Matches the
+    // vault snapshot's weekStart anchor.
+    const wkNow = Date.now();
+    const wkStart = new Date(wkNow);
+    const daysSinceTue = (wkStart.getUTCDay() - 2 + 7) % 7;
+    wkStart.setUTCDate(wkStart.getUTCDate() - daysSinceTue);
+    wkStart.setUTCHours(15, 0, 0, 0);
+    if (wkStart.getTime() > wkNow)
+      wkStart.setUTCDate(wkStart.getUTCDate() - 7);
+    const weekStartMs = wkStart.getTime();
+    const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000;
+
+    const wclRegion = regionToCode(character.region).toUpperCase();
+
+    // (a) Season-best per encounter for the heatmap.
+    const zoneResp = await wcl.query({
       query: CHARACTER_ZONE_RANKINGS_QUERY,
       variables: {
         name: character.name,
         server: character.realmSlug,
-        region: regionToCode(character.region).toUpperCase(),
+        region: wclRegion,
         zoneID,
         metric: "dps",
         difficulty: MYTHIC_DIFFICULTY,
@@ -774,40 +795,97 @@ export async function handleTrackedMemberSync(
       schema: characterZoneRankingsResponseSchema,
       estimatedPoints: 5,
     });
-
-    type RawRanking = {
+    type ZoneRanking = {
       encounter?: { id?: number; name?: string };
       rankPercent?: number | null;
       bestPercent?: number | null;
-      report?: { code?: string | null; startTime?: number | null } | null;
-      difficulty?: number;
     };
-    const zr = rankings.characterData?.character?.zoneRankings as
-      | { rankings?: RawRanking[]; difficulty?: number }
+    const zr = zoneResp.characterData?.character?.zoneRankings as
+      | { rankings?: ZoneRanking[] }
       | null
       | undefined;
-    const list = zr?.rankings ?? [];
-    for (const r of list) {
-      if (!r.encounter?.id) continue;
-      const pct = r.rankPercent ?? r.bestPercent ?? null;
-      // WCL report startTime is epoch ms; surfaces "which raid week" so the
-      // widget can scope to the current Tue→Tue lockout.
-      const reportStart =
-        typeof r.report?.startTime === "number" && r.report.startTime > 0
-          ? new Date(r.report.startTime)
-          : null;
+    const seasonRankings = zr?.rankings ?? [];
+    const encounters: Array<{ id: number; name: string | null }> = [];
+    for (const r of seasonRankings) {
+      const id = r.encounter?.id;
+      if (typeof id === "number") {
+        encounters.push({ id, name: r.encounter?.name ?? null });
+      }
+    }
+
+    // (b) One batched encounterRankings call → per-kill ranks with times.
+    type Rank = {
+      startTime?: number | null;
+      rankPercent?: number | null;
+      percentile?: number | null;
+      report?: { code?: string | null; startTime?: number | null } | null;
+    };
+    let charEnc: Record<string, unknown> = {};
+    if (encounters.length > 0) {
+      const encResp = await wcl.query({
+        query: buildCharacterEncounterRankingsQuery(
+          encounters.map((e) => e.id),
+        ),
+        variables: {
+          name: character.name,
+          server: character.realmSlug,
+          region: wclRegion,
+          difficulty: MYTHIC_DIFFICULTY,
+        },
+        schema: characterEncounterRankingsResponseSchema,
+        estimatedPoints: Math.max(5, encounters.length),
+      });
+      charEnc = (encResp.characterData?.character ?? {}) as Record<
+        string,
+        unknown
+      >;
+    }
+
+    for (const enc of encounters) {
+      const season = seasonRankings.find((r) => r.encounter?.id === enc.id);
+      const seasonPct = season?.rankPercent ?? season?.bestPercent ?? null;
+
+      const er = charEnc[`e${enc.id}`] as
+        | { ranks?: Rank[] }
+        | null
+        | undefined;
+      const ranks = Array.isArray(er?.ranks) ? er.ranks : [];
+      let weekBest: number | null = null;
+      let weekBestStart: number | null = null;
+      let weekBestReport: string | null = null;
+      for (const rk of ranks) {
+        const t =
+          typeof rk.startTime === "number"
+            ? rk.startTime
+            : typeof rk.report?.startTime === "number"
+              ? rk.report.startTime
+              : null;
+        if (t == null || t < weekStartMs || t >= weekEndMs) continue;
+        const pct = rk.rankPercent ?? rk.percentile ?? null;
+        if (pct == null) continue;
+        if (weekBest == null || pct > weekBest) {
+          weekBest = pct;
+          weekBestStart = t;
+          weekBestReport = rk.report?.code ?? null;
+        }
+      }
+
       await writeWclParseSnapshot({
         characterId: character.id,
         capturedAt,
         zoneId: zoneID,
-        encounterId: r.encounter.id,
-        encounterName: r.encounter.name ?? null,
-        difficulty: r.difficulty ?? zr?.difficulty ?? MYTHIC_DIFFICULTY,
-        percentile: pct != null ? Math.round(pct * 100) / 100 : null,
+        encounterId: enc.id,
+        encounterName: enc.name ?? null,
+        difficulty: MYTHIC_DIFFICULTY,
+        percentile:
+          seasonPct != null ? Math.round(seasonPct * 100) / 100 : null,
+        weekPercentile:
+          weekBest != null ? Math.round(weekBest * 100) / 100 : null,
         metric: "dps",
-        reportCode: r.report?.code ?? null,
-        reportStartTime: reportStart,
-        rawPayload: r,
+        reportCode: weekBestReport,
+        reportStartTime:
+          weekBestStart != null ? new Date(weekBestStart) : null,
+        rawPayload: { season, weekRanks: ranks.length },
       });
     }
   } catch (err) {

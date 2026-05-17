@@ -87,3 +87,97 @@ export const wclRaidZonesResponseSchema = z
       .optional(),
   })
   .passthrough();
+
+/**
+ * Encounters (bosses) for a single zone — used to resolve the current
+ * raid tier's boss list so we can request per-encounter rankings.
+ */
+export const ZONE_ENCOUNTERS_QUERY = /* GraphQL */ `
+  query WclZoneEncounters($zoneID: Int!) {
+    worldData {
+      zone(id: $zoneID) {
+        id
+        name
+        encounters {
+          id
+          name
+        }
+      }
+    }
+  }
+`;
+
+export const wclZoneEncountersResponseSchema = z
+  .object({
+    worldData: z
+      .object({
+        zone: z
+          .object({
+            id: z.number().int(),
+            name: z.string().optional(),
+            encounters: z
+              .array(
+                z
+                  .object({ id: z.number().int(), name: z.string().optional() })
+                  .passthrough(),
+              )
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+/**
+ * Builds a single batched query that asks for `encounterRankings` (which —
+ * unlike `zoneRankings` — exposes individual `ranks[]` each with a
+ * `startTime`/`report`) for every current-tier encounter at one difficulty.
+ * Aliased per encounter (`e<id>`) so it's one HTTP request per character.
+ *
+ * `encounterRankings` is a JSON scalar in WCL's schema → passthrough.
+ */
+export const buildCharacterEncounterRankingsQuery = (
+  encounterIds: number[],
+): string => {
+  const fields = encounterIds
+    .map(
+      (id) =>
+        `e${id}: encounterRankings(encounterID: ${id}, difficulty: $difficulty, metric: dps)`,
+    )
+    .join("\n        ");
+  return /* GraphQL */ `
+    query CharEncounterRankings(
+      $name: String!
+      $server: String!
+      $region: String!
+      $difficulty: Int
+    ) {
+      characterData {
+        character(name: $name, serverSlug: $server, serverRegion: $region) {
+          id
+          name
+          ${fields}
+        }
+      }
+    }
+  `;
+};
+
+export const characterEncounterRankingsResponseSchema = z
+  .object({
+    characterData: z
+      .object({
+        character: z
+          .record(z.string(), z.unknown())
+          .nullable()
+          .optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();

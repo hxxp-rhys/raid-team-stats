@@ -523,12 +523,16 @@ model WclParseSnapshot {
   encounterId   Int
   encounterName String?
   difficulty    Int
+  // Season/partition best percentile for this (encounter,difficulty) —
+  // powers the heatmap (current-tier best per boss).
   percentile    Int?
+  // Best percentile among kills logged in the CURRENT raid week, plus the
+  // epoch of that kill's report. Null when there's no logged kill this
+  // week. Powers the "current week only" parses widget.
+  weekPercentile  Int?
+  reportStartTime DateTime?
   metric        String?
   reportCode    String?
-  // Epoch of the WCL report behind this best parse — lets the UI scope to
-  // the current raid week (Tue→Tue) instead of all-time season bests.
-  reportStartTime DateTime?
   rawPayload    Json
   createdAt     DateTime       @default(now())
 

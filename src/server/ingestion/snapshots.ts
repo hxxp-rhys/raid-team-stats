@@ -295,6 +295,7 @@ type WclParseArgs = {
   encounterName?: string | null;
   difficulty: number;
   percentile?: number | null;
+  weekPercentile?: number | null;
   metric?: string | null;
   reportCode?: string | null;
   reportStartTime?: Date | null;
@@ -307,6 +308,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
     n: args.encounterName ?? null,
     d: args.difficulty,
     p: args.percentile ?? null,
+    wp: args.weekPercentile ?? null,
     m: args.metric ?? null,
     r: args.reportCode ?? null,
     rt: args.reportStartTime ? args.reportStartTime.getTime() : null,
@@ -333,6 +335,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
       encounterName: args.encounterName ?? null,
       difficulty: args.difficulty,
       percentile: args.percentile ?? null,
+      weekPercentile: args.weekPercentile ?? null,
       metric: args.metric ?? null,
       reportCode: args.reportCode ?? null,
       reportStartTime: args.reportStartTime ?? null,

@@ -14,24 +14,7 @@ function percentileColor(p: number): string {
   return "text-muted-foreground";
 }
 
-// WCL Mythic raid difficulty.
-const MYTHIC = 5;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * Start (epoch ms) of the current raid lockout. The raid week runs from
- * Tuesday 11:00 → the following Tuesday 10:59 (local time). If "now" is a
- * Tuesday before 11:00, the current week is still the previous Tuesday's.
- */
-function currentWeekStartMs(now: number): number {
-  const d = new Date(now);
-  const daysSinceTue = (d.getDay() - 2 + 7) % 7; // Tue=2; 0 when today is Tue
-  const tue = new Date(d);
-  tue.setDate(d.getDate() - daysSinceTue);
-  tue.setHours(11, 0, 0, 0); // Tuesday 11:00 local
-  if (tue.getTime() > now) tue.setDate(tue.getDate() - 7);
-  return tue.getTime();
-}
+const MYTHIC = 5; // WCL difficulty 5 = Mythic
 
 function relativeAge(fromMs: number, nowMs: number): string {
   const diff = nowMs - fromMs;
@@ -45,18 +28,24 @@ function relativeAge(fromMs: number, nowMs: number): string {
   return `${days}d ago`;
 }
 
+/**
+ * Best Mythic DPS percentile per character for the CURRENT raid lockout.
+ *
+ * The server computes `weekPercentile` + `reportStartTime` from WCL's
+ * `encounterRankings` (per-kill ranks scoped to the Tue-reset week — WCL's
+ * `zoneRankings` aggregate has no timestamps and can't answer "this week").
+ * A character with no Mythic kill this lockout shows "—".
+ */
 export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
   // Capture "now" once at mount so render stays pure (Date.now() in render
   // trips react-hooks/purity in React 19).
   const [nowMs] = useState(() => Date.now());
-  const weekStart = currentWeekStartMs(nowMs);
-  const weekEnd = weekStart + WEEK_MS;
 
   return (
     <WidgetShell
       title="Warcraft Logs parses"
-      description="Best DPS percentile on Mythic for the CURRENT raid tier, this lockout only (Tue 11:00 → Tue 10:59). Bosses = Mythic encounters with a ranked log this week; Age = time since that log was recorded."
+      description="Best Mythic DPS percentile this raid lockout only (Tue reset → Tue reset). Bosses = Mythic encounters killed this week with a ranked log; Age = time since that kill's log."
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -67,7 +56,7 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
       ) : (
         <table className="w-full text-sm">
           <caption className="sr-only">
-            Best current-week Mythic Warcraft Logs percentile per character
+            Best current-lockout Mythic Warcraft Logs percentile per character
           </caption>
           <thead>
             <tr className="text-muted-foreground text-left text-xs uppercase">
@@ -80,39 +69,29 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
           </thead>
           <tbody className="divide-border divide-y">
             {q.data.members.map((m) => {
-              // Current raid tier only (server-resolved zone), Mythic only,
-              // and only logs recorded in THIS lockout. A parse with no
-              // report timestamp can't be proven to be this week → excluded.
+              // Current raid tier (server-resolved zone) + Mythic + a
+              // logged kill THIS lockout (server-set weekPercentile).
               const zone = q.data.currentRaidZoneId;
-              const parses = (m.latest.wclParses ?? []).filter((p) => {
-                if (zone != null && p.zoneId !== zone) return false;
-                if (p.difficulty !== MYTHIC) return false;
-                if (!p.reportStartTime) return false;
-                const t = new Date(p.reportStartTime).getTime();
-                return t >= weekStart && t < weekEnd;
-              });
-              const ranked = parses.filter(
-                (p) => typeof p.percentile === "number",
+              const parses = (m.latest.wclParses ?? []).filter(
+                (p) =>
+                  (zone == null || p.zoneId === zone) &&
+                  p.difficulty === MYTHIC &&
+                  p.weekPercentile != null,
               );
-              const best = ranked.reduce<
-                | { percentile: number; encounterName: string | null }
-                | null
+              const best = parses.reduce<
+                { pct: number; name: string | null } | null
               >(
                 (acc, p) =>
-                  acc === null || (p.percentile ?? 0) > acc.percentile
+                  acc === null || (p.weekPercentile ?? 0) > acc.pct
                     ? {
-                        percentile: p.percentile ?? 0,
-                        encounterName: p.encounterName ?? null,
+                        pct: p.weekPercentile ?? 0,
+                        name: p.encounterName ?? null,
                       }
                     : acc,
                 null,
               );
-              const bossesParsed = new Set(ranked.map((p) => p.encounterId))
-                .size;
-              const tierLabel = best ? "Mythic" : "—";
-              // Data age = newest report time across this char's in-week
-              // Mythic parses.
-              const newestReport = parses.reduce<number | null>((acc, p) => {
+              const bosses = new Set(parses.map((p) => p.encounterId)).size;
+              const newest = parses.reduce<number | null>((acc, p) => {
                 const t = p.reportStartTime
                   ? new Date(p.reportStartTime).getTime()
                   : null;
@@ -123,16 +102,16 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
                 <tr key={m.character.id}>
                   <td className="py-1.5 pr-3">
                     <span className="font-medium">{m.character.name}</span>
-                    {best?.encounterName && (
+                    {best?.name && (
                       <span className="text-muted-foreground ml-2 text-xs">
-                        best: {best.encounterName}
+                        best: {best.name}
                       </span>
                     )}
                   </td>
                   <td className="py-1.5 pr-3 text-right font-mono">
                     {best ? (
-                      <span className={percentileColor(best.percentile)}>
-                        {best.percentile}
+                      <span className={percentileColor(best.pct)}>
+                        {best.pct}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">—</span>
@@ -140,18 +119,16 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
                   </td>
                   <td className="py-1.5 pr-3">
                     {best ? (
-                      tierLabel
+                      "Mythic"
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {bossesParsed > 0 ? bossesParsed : "—"}
+                    {bosses > 0 ? bosses : "—"}
                   </td>
                   <td className="text-muted-foreground py-1.5 pr-3 text-right text-xs">
-                    {newestReport != null
-                      ? relativeAge(newestReport, nowMs)
-                      : "—"}
+                    {newest != null ? relativeAge(newest, nowMs) : "—"}
                   </td>
                 </tr>
               );

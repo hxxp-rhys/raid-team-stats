@@ -119,6 +119,7 @@ export const snapshotRouter = router({
                 encounterName: true,
                 difficulty: true,
                 percentile: true,
+                weekPercentile: true,
                 metric: true,
                 reportCode: true,
                 reportStartTime: true,
