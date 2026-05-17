@@ -60,39 +60,35 @@ export function AddonUploaderCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 text-sm">
-        <ol className="text-muted-foreground list-decimal space-y-1 pl-5">
-          <li>
+        <div className="space-y-2">
+          <a
+            href="/uploader/installer"
+            className="bg-primary text-primary-foreground inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:opacity-90"
+          >
+            ⬇ Download Windows installer (.msi)
+          </a>
+          <p className="text-muted-foreground text-xs">
+            The installer bundles everything (no Node needed): pick your WoW
+            folder, paste the token below, choose run-at-startup. It installs
+            the addon for you and verifies the folder + token before
+            finishing. Then in WoW enable the{" "}
+            <code className="bg-muted/50 rounded px-1">
+              Raid Team Stats Uploader
+            </code>{" "}
+            addon and{" "}
+            <code className="bg-muted/50 rounded px-1">/reload</code> once.
+          </p>
+          <p className="text-muted-foreground text-xs">
+            Advanced / no installer:{" "}
             <a
               href="/uploader/download"
-              className="text-primary font-medium hover:underline"
+              className="text-primary hover:underline"
             >
-              Download the addon + companion
+              download the addon + companion zip
             </a>{" "}
-            (one zip).
-          </li>
-          <li>
-            Drop the <code className="bg-muted/50 rounded px-1">
-              RaidTeamStatsUploader
-            </code>{" "}
-            folder into <code className="bg-muted/50 rounded px-1">
-              Interface/AddOns
-            </code>
-            , enable it, log in, <code className="bg-muted/50 rounded px-1">
-              /reload
-            </code>
-            .
-          </li>
-          <li>
-            Put the token below into{" "}
-            <code className="bg-muted/50 rounded px-1">
-              companion/config.json
-            </code>{" "}
-            and run <code className="bg-muted/50 rounded px-1">
-              node upload.mjs --watch
-            </code>
-            .
-          </li>
-        </ol>
+            and run it manually with Node.
+          </p>
+        </div>
 
         <div>
           <p className="text-muted-foreground mb-1 text-xs font-medium uppercase">

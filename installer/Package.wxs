@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Raid Team Stats Uploader"
+           Manufacturer="raid-team-stats"
+           Version="1.0.0.0"
+           UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPHELPLINK" Value="https://raiders.hxxp.io" />
+
+    <!-- User inputs (set via the custom dialog; sensible defaults). -->
+    <Property Id="WOWPATH" Value="C:\Program Files (x86)\World of Warcraft" />
+    <Property Id="APIKEY" Secure="yes" />
+    <Property Id="RUNATSTARTUP" Value="1" />
+    <Property Id="APIBASE" Value="https://raiders.hxxp.io" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RaidTeamStatsUploader">
+        <Directory Id="ADDONSTAGE" Name="addon" />
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="CompanionExe">
+        <File Id="rts_companion.exe" Source="installer\dist\rts-companion.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="RunHiddenVbs">
+        <File Id="run_hidden.vbs" Source="installer\run-hidden.vbs" KeyPath="yes" />
+      </Component>
+      <Component Id="ReadmeTxt">
+        <File Id="README.txt" Source="installer\README.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="AddonStageFiles" Directory="ADDONSTAGE">
+      <Component Id="AddonToc">
+        <File Id="RaidTeamStatsUploader.toc"
+              Source="addon\RaidTeamStatsUploader\RaidTeamStatsUploader.toc"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="AddonLua">
+        <File Id="RaidTeamStatsUploader.lua"
+              Source="addon\RaidTeamStatsUploader\RaidTeamStatsUploader.lua"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Raid Team Stats Uploader" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="AddonStageFiles" />
+    </Feature>
+
+    <!-- ───────── validation (immediate, on the config dialog's Next) ───────── -->
+    <CustomAction Id="VerifyInputs" BinaryRef="RtsScript" JScriptCall="verifyInputs"
+                  Execute="immediate" Return="check" />
+
+    <!-- ───────── deferred work (elevated, after files are laid down) ───────── -->
+    <CustomAction Id="SetWriteConfig" Property="WriteConfig"
+                  Value="[INSTALLFOLDER]|[APIKEY]|[WOWPATH]|[APIBASE]" />
+    <CustomAction Id="WriteConfig" BinaryRef="RtsScript" JScriptCall="writeConfig"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <CustomAction Id="SetInstallAddon" Property="InstallAddon"
+                  Value="[INSTALLFOLDER]|[WOWPATH]" />
+    <CustomAction Id="InstallAddon" BinaryRef="RtsScript" JScriptCall="installAddon"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <CustomAction Id="SetStartup" Property="Startup"
+                  Value="[INSTALLFOLDER]|[RUNATSTARTUP]" />
+    <CustomAction Id="Startup" BinaryRef="RtsScript" JScriptCall="startup"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <!-- uninstall cleanup -->
+    <CustomAction Id="SetUninstallClean" Property="UninstallClean"
+                  Value="[WOWPATH]" />
+    <CustomAction Id="UninstallClean" BinaryRef="RtsScript" JScriptCall="uninstallClean"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <Binary Id="RtsScript" SourceFile="installer\ca.js" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetUninstallClean" Before="UninstallClean"
+              Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="UninstallClean" After="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot;" />
+
+      <Custom Action="SetWriteConfig" Before="WriteConfig"
+              Condition="NOT REMOVE" />
+      <Custom Action="WriteConfig" After="InstallFiles"
+              Condition="NOT REMOVE" />
+
+      <Custom Action="SetInstallAddon" Before="InstallAddon"
+              Condition="NOT REMOVE" />
+      <Custom Action="InstallAddon" After="WriteConfig"
+              Condition="NOT REMOVE" />
+
+      <Custom Action="SetStartup" Before="Startup"
+              Condition="NOT REMOVE" />
+      <Custom Action="Startup" After="InstallAddon"
+              Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+
+    <!-- WixUI_InstallDir gives Welcome/License/InstallDir/Verify/Progress.
+         The custom RtsConfigDlg (RtsUI.wxs) is chained in after the
+         install-location dialog and runs VerifyInputs on its Next. -->
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <UIRef Id="RtsCustomUI" />
+    <WixVariable Id="WixUILicenseRtf" Value="installer\License.rtf" />
+
+  </Package>
+</Wix>

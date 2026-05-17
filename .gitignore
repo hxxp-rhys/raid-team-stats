@@ -62,3 +62,7 @@ $RECYCLE.BIN/
 
 # companion uploader local config (contains the user upload token)
 companion/config.json
+
+# installer build artifacts (built by installer/build.ps1; deployed out-of-band)
+installer/dist/
+companion/sea-prep.blob

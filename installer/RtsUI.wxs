@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI Id="RtsCustomUI">
+
+      <!-- flow: ...InstallDirDlg -> RtsConfigDlg -> VerifyReadyDlg
+           Higher Order with a true condition wins over the WixUI default
+           NewDialog publishes, so the config dialog is inserted. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog"
+               Value="RtsConfigDlg" Order="10" Condition="1" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog"
+               Value="RtsConfigDlg" Order="10" Condition="1" />
+
+      <Publish Dialog="RtsConfigDlg" Control="Back" Event="NewDialog"
+               Value="InstallDirDlg" Order="1" Condition="1" />
+      <Publish Dialog="RtsConfigDlg" Control="Browse" Property="_BrowseProperty"
+               Value="WOWPATH" Order="1" Condition="1" />
+      <Publish Dialog="RtsConfigDlg" Control="Browse" Event="SpawnDialog"
+               Value="BrowseDlg" Order="2" Condition="1" />
+      <Publish Dialog="RtsConfigDlg" Control="Next" Event="DoAction"
+               Value="VerifyInputs" Order="1" Condition="1" />
+      <Publish Dialog="RtsConfigDlg" Control="Next" Event="SpawnDialog"
+               Value="RtsErrorDlg" Order="2"
+               Condition="RTS_ERR &lt;&gt; &quot;&quot;" />
+      <Publish Dialog="RtsConfigDlg" Control="Next" Event="NewDialog"
+               Value="VerifyReadyDlg" Order="3"
+               Condition="RTS_ERR = &quot;&quot;" />
+
+      <!-- the configuration dialog -->
+      <Dialog Id="RtsConfigDlg" Width="370" Height="270"
+              Title="Raid Team Stats Uploader Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370"
+                 Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Setup options" />
+        <Control Id="Desc" Type="Text" X="25" Y="23" Width="320" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="Point at your WoW install, paste your upload token, and choose startup." />
+
+        <Control Id="WowLabel" Type="Text" X="20" Y="58" Width="330" Height="12"
+                 NoPrefix="yes" Text="World of Warcraft folder (the one containing _retail_):" />
+        <Control Id="WowEdit" Type="PathEdit" X="20" Y="72" Width="270" Height="18"
+                 Property="WOWPATH" Indirect="no" />
+        <Control Id="Browse" Type="PushButton" X="295" Y="72" Width="55" Height="18"
+                 Text="Browse..." />
+
+        <Control Id="KeyLabel" Type="Text" X="20" Y="104" Width="330" Height="12"
+                 NoPrefix="yes" Text="Upload token (from the website Account page):" />
+        <Control Id="KeyEdit" Type="Edit" X="20" Y="118" Width="330" Height="18"
+                 Property="APIKEY" />
+
+        <Control Id="StartChk" Type="CheckBox" X="20" Y="150" Width="330" Height="18"
+                 Property="RUNATSTARTUP" CheckBoxValue="1"
+                 Text="Run the uploader automatically at Windows startup (hidden, recommended)" />
+
+        <Control Id="Hint" Type="Text" X="20" Y="178" Width="330" Height="40"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="The addon is installed into your WoW AddOns folder automatically. Clicking Next verifies the folder and the token with the server before continuing." />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="Back" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="Next" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- modal validation-error dialog -->
+      <Dialog Id="RtsErrorDlg" Width="270" Height="105" Title="Cannot continue"
+              NoMinimize="yes">
+        <Control Id="Icon" Type="Text" X="15" Y="15" Width="24" Height="24"
+                 Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!" />
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="205" Height="60"
+                 NoPrefix="yes" Text="[RTS_ERR]" />
+        <Control Id="OK" Type="PushButton" X="105" Y="80" Width="60" Height="17"
+                 Default="yes" Cancel="yes" Text="OK">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+    </UI>
+  </Fragment>
+</Wix>
