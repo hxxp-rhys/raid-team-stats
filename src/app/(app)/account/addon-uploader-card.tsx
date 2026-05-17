@@ -78,16 +78,6 @@ export function AddonUploaderCard() {
             addon and{" "}
             <code className="bg-muted/50 rounded px-1">/reload</code> once.
           </p>
-          <p className="text-muted-foreground text-xs">
-            Advanced / no installer:{" "}
-            <a
-              href="/uploader/download"
-              className="text-primary hover:underline"
-            >
-              download the addon + companion zip
-            </a>{" "}
-            and run it manually with Node.
-          </p>
         </div>
 
         <div className="border-border bg-muted/40 space-y-1.5 rounded-md border p-3 text-xs">

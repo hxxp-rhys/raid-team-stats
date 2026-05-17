@@ -9,7 +9,7 @@ import { db } from "@/lib/db";
  * "Verified — N characters" before finishing. No payload, no side effects.
  *
  * Deliberately NOT under /api/ (Cloudflare 404s new /api paths on this
- * zone — sibling of /uploader/ingest + /uploader/download which work).
+ * zone — sibling of /uploader/ingest which works).
  *
  * Accepts the token via `Authorization: Bearer <t>` (preferred) or a
  * JSON/form body `{ "token": "..." }`. GET and POST both allowed so a
