@@ -34,7 +34,14 @@ export type EnqueueTeamRefreshOptions = {
 };
 
 export type EnqueueTeamRefreshResult =
-  | { ok: true; enqueued: number; trigger: "manual" | "scheduled" }
+  | {
+      ok: true;
+      enqueued: number;
+      trigger: "manual" | "scheduled";
+      /** When the batch was enqueued — the baseline the UI uses to count
+       *  how many characters have synced since (raidTeam.syncProgress). */
+      at: Date;
+    }
   | { ok: false; reason: "rate_limited"; retryAfterMs: number }
   | { ok: false; reason: "no_members" };
 
@@ -80,8 +87,12 @@ export async function enqueueTeamRefresh(
     return { ok: false, reason: "no_members" };
   }
 
+  // Captured before the enqueue so it's the baseline for "synced since":
+  // a character's lastSyncedAt only moves >= this once its job completes.
+  const triggeredAt = new Date();
+
   // BullMQ rejects ":" in custom job ids — use "_" as the field separator.
-  const triggerKey = `team-${input.source}_${input.raidTeamId}_${Date.now()}`;
+  const triggerKey = `team-${input.source}_${input.raidTeamId}_${triggeredAt.getTime()}`;
   await queues.trackedMemberSync.addBulk(
     team.memberships.map((m) => ({
       name: QUEUE_NAMES.trackedMemberSync,
@@ -94,7 +105,7 @@ export async function enqueueTeamRefresh(
 
   await db.raidTeam.update({
     where: { id: input.raidTeamId },
-    data: { lastRefreshAt: new Date() },
+    data: { lastRefreshAt: triggeredAt },
   });
 
   logger.info(
@@ -111,5 +122,6 @@ export async function enqueueTeamRefresh(
     ok: true,
     enqueued: team.memberships.length,
     trigger: input.source,
+    at: triggeredAt,
   };
 }

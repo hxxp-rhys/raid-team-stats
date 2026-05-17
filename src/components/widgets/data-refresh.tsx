@@ -6,6 +6,10 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetError, WidgetLoading } from "./shell";
 
+// Stable identity for the disabled-query placeholder so the query key
+// doesn't churn while no refresh is in flight.
+const EPOCH = new Date(0);
+
 type Schedule =
   | { kind: "interval"; hours: number }
   | { kind: "weekly"; dayOfWeek: number; hour: number; minute: number }
@@ -71,9 +75,39 @@ function formatCountdown(ms: number): string {
 export function DataRefreshWidget({ raidTeamId }: { raidTeamId: string }) {
   const settings = api.raidTeam.refreshSettings.useQuery({ raidTeamId });
   const utils = api.useUtils();
+
+  // Baseline + total for the in-flight refresh. Set only on a successful
+  // trigger that actually enqueued work; cleared on no-op/rate-limit.
+  const [progress, setProgress] = useState<{
+    since: Date;
+    total: number;
+  } | null>(null);
+
   const trigger = api.raidTeam.triggerTeamRefresh.useMutation({
-    onSuccess: () => utils.raidTeam.refreshSettings.invalidate({ raidTeamId }),
+    onSuccess: (data) => {
+      void utils.raidTeam.refreshSettings.invalidate({ raidTeamId });
+      setProgress(
+        data.ok && data.enqueued > 0
+          ? { since: data.at, total: data.enqueued }
+          : null,
+      );
+    },
   });
+
+  // Poll synced/total while a refresh is in flight; stop once complete.
+  const sync = api.raidTeam.syncProgress.useQuery(
+    { raidTeamId, since: progress?.since ?? EPOCH },
+    {
+      enabled: progress != null,
+      refetchInterval: (query) => {
+        const d = query.state.data;
+        return d && d.synced >= d.total ? false : 2000;
+      },
+    },
+  );
+  const syncedCount = progress
+    ? Math.min(sync.data?.synced ?? 0, progress.total)
+    : 0;
 
   // Tick every 30s so the countdown stays live without hammering the server.
   const [now, setNow] = useState(() => new Date());
@@ -137,10 +171,20 @@ export function DataRefreshWidget({ raidTeamId }: { raidTeamId: string }) {
         </div>
 
         {trigger.data?.ok && (
-          <p className="text-muted-foreground text-xs">
-            Queued {trigger.data.enqueued} character{" "}
-            {trigger.data.enqueued === 1 ? "sync" : "syncs"}.
-          </p>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">
+            <span className="text-muted-foreground">
+              Queued {trigger.data.enqueued} character{" "}
+              {trigger.data.enqueued === 1 ? "sync" : "syncs"}.
+            </span>
+            {progress && (
+              <span
+                className="text-foreground font-medium tabular-nums"
+                aria-live="polite"
+              >
+                Sync completion: {syncedCount}/{progress.total}
+              </span>
+            )}
+          </div>
         )}
         {trigger.data && trigger.data.ok === false && (
           <p className="text-muted-foreground text-xs">

@@ -393,6 +393,35 @@ export const raidTeamRouter = router({
     }),
 
   /**
+   * Live progress for an in-flight manual refresh. `since` is the timestamp
+   * the refresh batch was enqueued (returned as `at` by triggerTeamRefresh).
+   * A character counts as synced once its `lastSyncedAt` advances to/after
+   * that baseline (set by the trackedMemberSync job on completion). Visible
+   * to any active member so the data_refresh widget can poll it.
+   */
+  syncProgress: protectedProcedure
+    .input(
+      z.object({ raidTeamId: z.string().cuid(), since: z.date() }),
+    )
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      const memberships = await ctx.db.raidTeamMembership.findMany({
+        where: { raidTeamId: input.raidTeamId, isActive: true },
+        select: { character: { select: { lastSyncedAt: true } } },
+      });
+      const total = memberships.length;
+      const synced = memberships.reduce(
+        (n, m) =>
+          m.character.lastSyncedAt != null &&
+          m.character.lastSyncedAt >= input.since
+            ? n + 1
+            : n,
+        0,
+      );
+      return { total, synced };
+    }),
+
+  /**
    * Leader / co-leader (or guild OWNER/OFFICER, or admin) updates the team's
    * member-can-refresh flag and recurring refresh schedule.
    */

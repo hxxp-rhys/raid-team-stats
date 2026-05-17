@@ -5,10 +5,11 @@ import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
 /**
  * Per-character tier-set tracker. Five fixed armor slots (head, shoulder,
- * chest, hands, legs). Each slot shows a small armor icon above a circle:
- * the circle is filled + coloured by the piece's gear track (same palette
- * as the Great Vault widget) when tier is equipped there, or an empty
- * outline when the slot still needs a tier piece.
+ * chest, hands, legs) are the COLUMN HEADERS — one armor icon each, shown
+ * once at the top. Every character is a row; each cell is a circle,
+ * filled + coloured by the piece's gear track (same palette as the Great
+ * Vault widget) when tier is equipped in that slot, or an empty outline
+ * when the slot still needs a tier piece.
  */
 
 type Track = "veteran" | "champion" | "hero" | "myth";
@@ -90,7 +91,7 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Tier-set tracker"
-      description="Tier pieces equipped per slot, coloured by gear track."
+      description="Tier pieces equipped per slot — slots are the column headers, coloured by gear track."
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -99,21 +100,47 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
       ) : q.data.members.length === 0 ? (
         <WidgetEmpty>No tracked members yet.</WidgetEmpty>
       ) : (
-        <ul className="divide-border divide-y text-sm">
-          {q.data.members.map((m) => {
-            const slots =
-              (m.latest.equipment?.tierSlots as TierSlotRow[] | null) ?? null;
-            const bySlot = new Map<string, TierSlotRow>();
-            for (const s of slots ?? []) bySlot.set(s.slot, s);
-            return (
-              <li
-                key={m.character.id}
-                className="flex items-center justify-between gap-3 py-2"
+        <table className="w-full text-sm">
+          <caption className="sr-only">
+            Tier pieces equipped per character; each column is an armor
+            slot, coloured by gear track.
+          </caption>
+          <thead>
+            <tr className="border-border border-b">
+              <th
+                scope="col"
+                className="text-muted-foreground py-1 pr-3 text-left text-xs font-medium uppercase"
               >
-                <span className="min-w-0 truncate font-medium">
-                  {m.character.name}
-                </span>
-                <span className="flex shrink-0 items-end gap-3">
+                Character
+              </th>
+              {SLOT_ORDER.map((slot) => (
+                <th key={slot} scope="col" className="px-2 py-1">
+                  <span
+                    className="text-muted-foreground mx-auto flex w-4 justify-center"
+                    title={SLOT_LABEL[slot]}
+                    aria-label={SLOT_LABEL[slot]}
+                  >
+                    <SlotIcon slot={slot} />
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-border divide-y">
+            {q.data.members.map((m) => {
+              const slots =
+                (m.latest.equipment?.tierSlots as TierSlotRow[] | null) ??
+                null;
+              const bySlot = new Map<string, TierSlotRow>();
+              for (const s of slots ?? []) bySlot.set(s.slot, s);
+              return (
+                <tr key={m.character.id}>
+                  <th
+                    scope="row"
+                    className="max-w-[10rem] truncate py-2 pr-3 text-left font-medium"
+                  >
+                    {m.character.name}
+                  </th>
                   {SLOT_ORDER.map((slot) => {
                     const s = bySlot.get(slot);
                     const filled = !!s?.filled;
@@ -121,41 +148,29 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
                     const fill =
                       filled && track ? TRACK_FILL[track] : null;
                     return (
-                      <span
-                        key={slot}
-                        className="flex flex-col items-center gap-1"
-                        title={
-                          filled
-                            ? `${SLOT_LABEL[slot]} — ${track ?? "tier"}${
-                                s?.itemLevel ? ` (ilvl ${s.itemLevel})` : ""
-                              }`
-                            : `${SLOT_LABEL[slot]} — no tier piece`
-                        }
-                      >
-                        <span
-                          className={
-                            filled
-                              ? "text-foreground"
-                              : "text-muted-foreground/40"
-                          }
-                        >
-                          <SlotIcon slot={slot} />
-                        </span>
+                      <td key={slot} className="px-2 py-2">
                         <span
                           className={
                             fill
-                              ? `${fill} size-3 rounded-full`
-                              : "border-muted-foreground/40 size-3 rounded-full border"
+                              ? `${fill} mx-auto block size-3 rounded-full`
+                              : "border-muted-foreground/40 mx-auto block size-3 rounded-full border"
+                          }
+                          title={
+                            filled
+                              ? `${SLOT_LABEL[slot]} — ${track ?? "tier"}${
+                                  s?.itemLevel ? ` (ilvl ${s.itemLevel})` : ""
+                                }`
+                              : `${SLOT_LABEL[slot]} — no tier piece`
                           }
                         />
-                      </span>
+                      </td>
                     );
                   })}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       )}
     </WidgetShell>
   );
