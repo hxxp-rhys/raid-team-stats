@@ -57,9 +57,9 @@
                  Property="RUNATSTARTUP" CheckBoxValue="1"
                  Text="Run the uploader automatically at Windows startup (hidden, recommended)" />
 
-        <Control Id="Hint" Type="Text" X="20" Y="178" Width="330" Height="40"
+        <Control Id="Hint" Type="Text" X="20" Y="172" Width="330" Height="58"
                  Transparent="yes" NoPrefix="yes"
-                 Text="The addon is installed into your WoW AddOns folder automatically. Clicking Next verifies the folder and the token with the server before continuing." />
+                 Text="Next verifies the folder and token with the server. When you then click Install, Windows will ask for Administrator permission - this is normal and is used ONLY to: (1) install this small uploader, (2) copy the in-game addon into your World of Warcraft folder (Windows protects the Program Files area), and (3) set up the optional background sync. Nothing else on your PC is changed, and uninstalling removes all of it." />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
                  Text="Back" />

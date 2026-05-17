@@ -90,6 +90,38 @@ export function AddonUploaderCard() {
           </p>
         </div>
 
+        <div className="border-border bg-muted/40 space-y-1.5 rounded-md border p-3 text-xs">
+          <p className="text-foreground font-medium">
+            Before you install — what it does &amp; permissions
+          </p>
+          <p className="text-muted-foreground">
+            This is a tiny background helper. WoW addons can&apos;t use the
+            internet, so it reads <em>only</em> your own characters&apos;
+            Great Vault / Delve, weekly M+, gear and talent data that the
+            in-game addon saves, and uploads it here over HTTPS. It changes
+            nothing else and is fully removable from Add/Remove Programs.
+          </p>
+          <p className="text-muted-foreground">
+            <span className="text-foreground font-medium">
+              It will ask for Administrator permission.
+            </span>{" "}
+            That&apos;s expected: Windows protects the Program Files area, so
+            admin is needed only to install the helper, copy the addon into
+            your World of Warcraft folder, and set up the optional automatic
+            background sync.
+          </p>
+          <p className="text-muted-foreground">
+            <span className="text-foreground font-medium">
+              Windows may show a blue &ldquo;Windows protected your PC&rdquo;
+              / unknown-publisher warning.
+            </span>{" "}
+            That&apos;s because the installer isn&apos;t code-signed yet (not
+            because it&apos;s unsafe). Click{" "}
+            <em>More info → Run anyway</em> to proceed. Code signing to remove
+            this is planned.
+          </p>
+        </div>
+
         <div>
           <p className="text-muted-foreground mb-1 text-xs font-medium uppercase">
             Upload token
