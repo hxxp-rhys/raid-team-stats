@@ -142,6 +142,7 @@ type MplusArgs = {
   currentRating?: number | null;
   weeklyHighest?: number | null;
   weeklyRunCount?: number | null;
+  rioScore?: unknown;
   runsThisWeek: unknown;
   rawPayload: unknown;
 };
@@ -152,6 +153,7 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
     rating: args.currentRating ?? null,
     weekly: args.weeklyHighest ?? null,
     weeklyCount: args.weeklyRunCount ?? null,
+    rio: args.rioScore ?? null,
     runs: args.runsThisWeek,
   });
   const recent = await db.mplusSnapshot.findFirst({
@@ -176,6 +178,10 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
         args.currentRating != null ? args.currentRating.toString() : null,
       weeklyHighest: args.weeklyHighest ?? null,
       weeklyRunCount: args.weeklyRunCount ?? null,
+      rioScore:
+        args.rioScore == null
+          ? undefined
+          : (toJsonValue(args.rioScore) as Prisma.InputJsonValue),
       runsThisWeek: toJsonValue(args.runsThisWeek) as Prisma.InputJsonValue,
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },
@@ -190,6 +196,7 @@ type RaidArgs = {
   expansionId?: number | null;
   tierId?: number | null;
   completions: unknown;
+  seasonProgress?: unknown;
   rawPayload: unknown;
 };
 export async function writeRaidSnapshot(args: RaidArgs): Promise<Result> {
@@ -198,6 +205,7 @@ export async function writeRaidSnapshot(args: RaidArgs): Promise<Result> {
     exp: args.expansionId ?? null,
     tier: args.tierId ?? null,
     comp: args.completions,
+    sp: args.seasonProgress ?? null,
   });
   const recent = await db.raidSnapshot.findFirst({
     where: { characterId: args.characterId, source: args.source },
@@ -215,6 +223,10 @@ export async function writeRaidSnapshot(args: RaidArgs): Promise<Result> {
       expansionId: args.expansionId ?? null,
       tierId: args.tierId ?? null,
       completions: toJsonValue(args.completions) as Prisma.InputJsonValue,
+      seasonProgress:
+        args.seasonProgress == null
+          ? undefined
+          : (toJsonValue(args.seasonProgress) as Prisma.InputJsonValue),
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },
   });

@@ -156,6 +156,37 @@ export async function handleTrackedMemberSync(
   const client = blizzardClient();
   const capturedAt = new Date();
 
+  // 0. Raider.IO profile — fetched ONCE up-front (rate-limit friendly) and
+  // reused by the raid (season progression) and M+ (canonical score + exact
+  // weekly runs) steps below. Raider.IO is the authoritative source for the
+  // community M+ score and a clean season raid_progression summary.
+  type RioProfile = z.infer<typeof raiderIOCharacterProfileSchema> | null;
+  let rioProfile: RioProfile = null;
+  try {
+    const rio = raiderIOClient();
+    rioProfile = await rio.get({
+      path: "/characters/profile",
+      query: {
+        region: regionToCode(character.region),
+        realm: character.realmSlug,
+        name: character.name,
+        fields: characterProfileFields(
+          "mythic_plus_scores_by_season:current",
+          "mythic_plus_recent_runs",
+          "mythic_plus_weekly_highest_level_runs",
+          "raid_progression",
+          "gear",
+        ),
+      },
+      schema: raiderIOCharacterProfileSchema,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, character: character.name },
+      "raiderio profile fetch failed; Blizzard-only fallbacks apply",
+    );
+  }
+
   // 1. Character summary (gives current level + class + iLvL).
   try {
     const summary = await client.request(
@@ -362,6 +393,46 @@ export async function handleTrackedMemberSync(
       })),
     );
 
+    // Raider.IO season-cumulative raid_progression. Keyed by raid slug; pick
+    // the entry with the most kills (= the current/most-progressed raid) so
+    // the widget gets one clean season summary alongside the weekly view.
+    let seasonProgress: {
+      raid: string;
+      summary: string | null;
+      total: number | null;
+      normal: number | null;
+      heroic: number | null;
+      mythic: number | null;
+    } | null = null;
+    const rp = rioProfile?.raid_progression;
+    if (rp && typeof rp === "object") {
+      for (const [slug, v] of Object.entries(
+        rp as Record<string, Record<string, unknown>>,
+      )) {
+        const n = Number(v?.normal_bosses_killed ?? 0);
+        const h = Number(v?.heroic_bosses_killed ?? 0);
+        const m = Number(v?.mythic_bosses_killed ?? 0);
+        const score = m * 1_000_000 + h * 1_000 + n; // prefer higher diff
+        const prevScore = seasonProgress
+          ? (seasonProgress.mythic ?? 0) * 1_000_000 +
+            (seasonProgress.heroic ?? 0) * 1_000 +
+            (seasonProgress.normal ?? 0)
+          : -1;
+        if (score > prevScore) {
+          seasonProgress = {
+            raid: slug,
+            summary:
+              typeof v?.summary === "string" ? v.summary : null,
+            total:
+              v?.total_bosses != null ? Number(v.total_bosses) : null,
+            normal: n,
+            heroic: h,
+            mythic: m,
+          };
+        }
+      }
+    }
+
     await writeRaidSnapshot({
       characterId: character.id,
       source: "BLIZZARD",
@@ -369,6 +440,7 @@ export async function handleTrackedMemberSync(
       expansionId: latestExpansionId ?? null,
       tierId: null, // Blizzard doesn't expose a "tier id" — derived elsewhere.
       completions,
+      seasonProgress,
       rawPayload: raids,
     });
   } catch (err) {
@@ -426,7 +498,15 @@ export async function handleTrackedMemberSync(
         },
       );
 
-      const currentRating = mplusIndex.current_mythic_rating?.rating ?? null;
+      // Prefer the Raider.IO community season score (the canonical "M+
+      // score" players quote); fall back to Blizzard's internal rating
+      // only when RIO is unavailable.
+      const rioSeasonScores =
+        rioProfile?.mythic_plus_scores_by_season?.[0]?.scores ?? null;
+      const currentRating =
+        rioSeasonScores?.all ??
+        mplusIndex.current_mythic_rating?.rating ??
+        null;
       // Blizzard's current_period.best_runs is best-per-dungeon for the week
       // (deduplicated) — a LOWER BOUND on the true run count. It's still the
       // right source for each vault slot's item-level track (1st/4th/8th
@@ -447,36 +527,18 @@ export async function handleTrackedMemberSync(
       // the 0–8 band that matters (≥8 → all 3 slots regardless of overflow).
       // Best-effort: if Raider.IO is unavailable we fall back to the Blizzard
       // distinct count (the lower bound).
+      // Raider.IO recent runs were already fetched once at the top of this
+      // job (step 0) — reuse that payload, no second HTTP round-trip. If RIO
+      // was unavailable we fall back to the Blizzard distinct count.
       let raiderioWeekCount = 0;
       let raiderioWeekHighest = 0;
-      try {
-        const rio = raiderIOClient();
-        const profile = await rio.get({
-          path: "/characters/profile",
-          query: {
-            region: regionToCode(character.region),
-            realm: character.realmSlug,
-            name: character.name,
-            fields: characterProfileFields(
-              "mythic_plus_recent_runs",
-              "mythic_plus_weekly_highest_level_runs",
-            ),
-          },
-          schema: raiderIOCharacterProfileSchema,
-        });
-        const recent = profile.mythic_plus_recent_runs ?? [];
-        for (const r of recent) {
-          if (!r.completed_at) continue;
-          const t = Date.parse(r.completed_at);
-          if (Number.isNaN(t) || t < weekResetUtc.getTime()) continue;
-          raiderioWeekCount++;
-          raiderioWeekHighest = Math.max(raiderioWeekHighest, r.mythic_level);
-        }
-      } catch (err) {
-        logger.warn(
-          { err, character: character.name },
-          "raiderio recent-runs fetch failed; falling back to Blizzard distinct count",
-        );
+      const recentRuns = rioProfile?.mythic_plus_recent_runs ?? [];
+      for (const r of recentRuns) {
+        if (!r.completed_at) continue;
+        const t = Date.parse(r.completed_at);
+        if (Number.isNaN(t) || t < weekResetUtc.getTime()) continue;
+        raiderioWeekCount++;
+        raiderioWeekHighest = Math.max(raiderioWeekHighest, r.mythic_level);
       }
 
       // Both numbers are lower bounds on the true weekly completions; the max
@@ -493,6 +555,9 @@ export async function handleTrackedMemberSync(
         capturedAt,
         seasonId: currentSeasonId,
         currentRating,
+        // Full Raider.IO season score breakdown (all / dps / healer / tank /
+        // per-spec) — powers the M+ ladder role split.
+        rioScore: rioSeasonScores,
         weeklyHighest: effectiveWeeklyHighest || null,
         weeklyRunCount,
         // Per-dungeon best (with keystone_level) — used for each vault slot's

@@ -462,6 +462,9 @@ model MplusSnapshot {
   // capped-accurate in the 0–8 band that drives Great Vault slot unlocks.
   // null = not yet computed (pre-migration rows).
   weeklyRunCount Int?
+  // Raider.IO current-season M+ score breakdown (the canonical community
+  // number): { all, dps, healer, tank, spec_0.. } — null if RIO unavailable.
+  rioScore      Json?
   runsThisWeek  Json
   rawPayload    Json
   createdAt     DateTime       @default(now())
@@ -481,6 +484,10 @@ model RaidSnapshot {
   expansionId Int?
   tierId      Int?
   completions Json
+  // Raider.IO season-cumulative raid_progression for the current raid:
+  // { summary, total_bosses, normal_bosses_killed, heroic_bosses_killed,
+  //   mythic_bosses_killed } — distinct from `completions` (weekly lockout).
+  seasonProgress Json?
   rawPayload  Json
   createdAt   DateTime       @default(now())
 

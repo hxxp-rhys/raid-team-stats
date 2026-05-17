@@ -81,6 +81,7 @@ export const snapshotRouter = router({
               select: {
                 seasonId: true,
                 currentRating: true,
+                rioScore: true,
                 weeklyHighest: true,
                 weeklyRunCount: true,
                 runsThisWeek: true,
@@ -103,6 +104,7 @@ export const snapshotRouter = router({
                 tierId: true,
                 expansionId: true,
                 completions: true,
+                seasonProgress: true,
                 capturedAt: true,
               },
             }),
