@@ -62,6 +62,13 @@ services:
       REDIS_URL: redis://redis:6379
       HOSTNAME: 0.0.0.0
       PORT: "3000"
+      # Docker bind-mount on Linux does NOT deliver host inotify events into
+      # the container, so Next/Turbopack's file watcher never sees code
+      # changes synced from the host (git pull/reset) — stale compiled
+      # chunks get served until a manual cache-clear+rebuild. Force polling
+      # so dev hot-reload actually works on code-only deploys.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
       # Web + prometheus share the same default so /api/metrics is reachable
       # immediately after `docker compose up` without further config.
       METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
