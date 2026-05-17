@@ -4,9 +4,6 @@ import { join } from "node:path";
 import { buildStoreZip, type ZipEntry } from "@/lib/zip";
 import { logger } from "@/lib/logger";
 
-// Reads files from disk at request time — never prerender.
-export const dynamic = "force-dynamic";
-
 /**
  * One-click download bundling the in-game addon + the companion uploader
  * (zero-dependency STORE zip — no archiver dep). Public: the download
