@@ -21,26 +21,63 @@ function formatSlots(slots: string[]): string {
     .join(", ");
 }
 
-function GearIcon({ ok, title }: { ok: boolean; title: string }) {
+function CogSvg() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+      className="inline-block shrink-0"
+    >
+      <path
+        fill="currentColor"
+        d="M19.14 12.94a7.9 7.9 0 0 0 .05-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.43h-3.84a.5.5 0 0 0-.5.43l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.66 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.9 7.9 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.43h3.84a.5.5 0 0 0 .5-.43l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.21.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"
+      />
+    </svg>
+  );
+}
+
+/**
+ * One enchant/gem status cell. Cog is green when nothing's missing, red
+ * with the count otherwise. On hover/focus it reveals the exact slot list
+ * INLINE (normal flow) so it can't be clipped by the widget cell's
+ * `overflow-hidden` / scroll area the way a floating tooltip or the native
+ * `title` tooltip would. Keyboard- and touch-accessible (focusable).
+ */
+function StatusCell({
+  ok,
+  count,
+  slots,
+  okText,
+  missLabel,
+}: {
+  ok: boolean;
+  count: number;
+  slots: string[];
+  okText: string;
+  missLabel: string;
+}) {
+  const detail = ok ? okText : `${missLabel}: ${formatSlots(slots)}`;
   return (
     <span
-      title={title}
-      className={ok ? "text-green-500" : "text-destructive"}
-      aria-label={title}
+      tabIndex={0}
+      title={detail}
+      aria-label={detail}
+      className="group/cell inline-flex items-center gap-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
     >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        aria-hidden
-        className="inline-block"
-      >
-        <path
-          fill="currentColor"
-          d="M19.14 12.94a7.9 7.9 0 0 0 .05-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.43h-3.84a.5.5 0 0 0-.5.43l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.66 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.9 7.9 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.43h3.84a.5.5 0 0 0 .5-.43l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.21.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"
-        />
-      </svg>
+      <span className={ok ? "text-green-500" : "text-destructive"}>
+        <CogSvg />
+      </span>
+      {!ok && (
+        <span className="text-destructive text-xs tabular-nums">{count}</span>
+      )}
+      {!ok && (
+        <span className="text-muted-foreground ml-1 hidden whitespace-nowrap text-xs group-hover/cell:inline group-focus-within/cell:inline">
+          {formatSlots(slots)}
+        </span>
+      )}
     </span>
   );
 }
@@ -128,42 +165,26 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
                 {!m.hasEquip ? (
                   <span className="text-muted-foreground text-xs">—</span>
                 ) : (
-                  <span className="inline-flex items-center gap-1">
-                    <GearIcon
-                      ok={m.missingEnchants === 0}
-                      title={
-                        m.missingEnchants === 0
-                          ? "All enchants applied"
-                          : `Missing enchant${m.missingEnchants === 1 ? "" : "s"}: ${formatSlots(m.enchSlots)}`
-                      }
-                    />
-                    {m.missingEnchants > 0 && (
-                      <span className="text-destructive text-xs tabular-nums">
-                        {m.missingEnchants}
-                      </span>
-                    )}
-                  </span>
+                  <StatusCell
+                    ok={m.missingEnchants === 0}
+                    count={m.missingEnchants}
+                    slots={m.enchSlots}
+                    okText="All enchants applied"
+                    missLabel={`Missing enchant${m.missingEnchants === 1 ? "" : "s"}`}
+                  />
                 )}
               </td>
               <td className="py-1.5 pr-3 text-center">
                 {!m.hasEquip ? (
                   <span className="text-muted-foreground text-xs">—</span>
                 ) : (
-                  <span className="inline-flex items-center gap-1">
-                    <GearIcon
-                      ok={m.missingGems === 0}
-                      title={
-                        m.missingGems === 0
-                          ? "All sockets gemmed"
-                          : `Empty socket${m.missingGems === 1 ? "" : "s"}: ${formatSlots(m.gemSlots)}`
-                      }
-                    />
-                    {m.missingGems > 0 && (
-                      <span className="text-destructive text-xs tabular-nums">
-                        {m.missingGems}
-                      </span>
-                    )}
-                  </span>
+                  <StatusCell
+                    ok={m.missingGems === 0}
+                    count={m.missingGems}
+                    slots={m.gemSlots}
+                    okText="All sockets gemmed"
+                    missLabel={`Empty socket${m.missingGems === 1 ? "" : "s"}`}
+                  />
                 )}
               </td>
             </tr>
