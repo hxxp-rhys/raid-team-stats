@@ -79,7 +79,7 @@ async function uploadOne(cfg, file) {
   }
   let res;
   try {
-    res = await fetch(`${cfg.api}/api/ingest/addon`, {
+    res = await fetch(`${cfg.api}/uploader/ingest`, {
       method: "POST",
       headers: {
         "Content-Type": "text/plain",

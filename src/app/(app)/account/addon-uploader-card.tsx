@@ -63,7 +63,7 @@ export function AddonUploaderCard() {
         <ol className="text-muted-foreground list-decimal space-y-1 pl-5">
           <li>
             <a
-              href="/api/download/addon"
+              href="/uploader/download"
               className="text-primary font-medium hover:underline"
             >
               Download the addon + companion
