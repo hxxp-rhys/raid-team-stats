@@ -41,10 +41,9 @@ function CogSvg() {
 
 /**
  * One enchant/gem status cell. Cog is green when nothing's missing, red
- * with the count otherwise. On hover/focus it reveals the exact slot list
- * INLINE (normal flow) so it can't be clipped by the widget cell's
- * `overflow-hidden` / scroll area the way a floating tooltip or the native
- * `title` tooltip would. Keyboard- and touch-accessible (focusable).
+ * with the count otherwise. The missing-slot list is shown ONLY in the
+ * hover tooltip (native `title`, also exposed via `aria-label` for screen
+ * readers) — never rendered inline in the widget body.
  */
 function StatusCell({
   ok,
@@ -62,21 +61,15 @@ function StatusCell({
   const detail = ok ? okText : `${missLabel}: ${formatSlots(slots)}`;
   return (
     <span
-      tabIndex={0}
       title={detail}
       aria-label={detail}
-      className="group/cell inline-flex items-center gap-1 rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+      className="inline-flex items-center gap-1"
     >
       <span className={ok ? "text-green-500" : "text-destructive"}>
         <CogSvg />
       </span>
       {!ok && (
         <span className="text-destructive text-xs tabular-nums">{count}</span>
-      )}
-      {!ok && (
-        <span className="text-muted-foreground ml-1 hidden whitespace-nowrap text-xs group-hover/cell:inline group-focus-within/cell:inline">
-          {formatSlots(slots)}
-        </span>
       )}
     </span>
   );
