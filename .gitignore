@@ -59,3 +59,6 @@ next-env.d.ts
 # OS / OneDrive metadata
 desktop.ini
 $RECYCLE.BIN/
+
+# companion uploader local config (contains the user upload token)
+companion/config.json

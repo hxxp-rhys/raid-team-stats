@@ -14,6 +14,7 @@ import { ProfileActions } from "@/app/(app)/profile/actions";
 import { MfaCard } from "@/app/(app)/profile/mfa-card";
 import { DeleteAccountCard } from "@/app/(app)/profile/delete-account-card";
 import { OwnerMfaWarning } from "@/app/(app)/profile/owner-mfa-warning";
+import { AddonUploaderCard } from "@/app/(app)/account/addon-uploader-card";
 
 export default async function AccountPage() {
   const session =
@@ -101,6 +102,8 @@ export default async function AccountPage() {
         <ProfileActions battlenetLinked={battlenetLinked} />
 
         <MfaCard />
+
+        <AddonUploaderCard />
 
         <DeleteAccountCard />
       </div>

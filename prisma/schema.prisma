@@ -27,6 +27,10 @@ model User {
   // Platform-wide admin flag. Authoritative source for "always admin" along
   // with env.ADMIN_USER_IDS / env.ADMIN_EMAILS (see isPlatformAdmin).
   isAdmin       Boolean   @default(false)
+  // Bearer token the companion uploader / addon-export endpoint uses to
+  // authenticate without a browser session. Null until the user generates
+  // one on the setup page; regenerable (invalidates the old one).
+  uploadToken   String?   @unique
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -43,6 +47,7 @@ model User {
   raidTeamsLed        RaidTeam[]           @relation("RaidTeamLeader")
   raidTeamAdditions   RaidTeamMembership[] @relation("RaidTeamMemberAddedBy")
   dashboardsOwned     DashboardConfig[]    @relation("DashboardOwner")
+  addonUploads        AddonUpload[]
 }
 
 model Account {
@@ -256,6 +261,7 @@ model Character {
   // ownership transferred (see applyVerification → claimPendingAssets).
   pendingRaidTeams   RaidTeam[]           @relation("RaidTeamPendingLeader")
   pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
+  addonUpload        AddonUpload?
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -539,6 +545,33 @@ model WclParseSnapshot {
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
   @@index([characterId, encounterId, difficulty, capturedAt(sort: Desc)])
+}
+
+// Latest payload uploaded by our own in-game addon (via the companion
+// uploader or copy/paste). This is the ONLY authoritative source for the
+// World/Delve Great Vault row (no Blizzard web API exposes it). One row
+// per character, upserted on each upload. `payload` keeps the full raw
+// JSON for replay; the derived columns power the widgets directly.
+model AddonUpload {
+  id              String   @id @default(cuid())
+  characterId     String   @unique
+  userId          String
+  collectedAt     DateTime // in-game time the snapshot was taken
+  receivedAt      DateTime @default(now())
+  addonVersion    String?
+  // Great Vault unlocked-slot counts (0-3 each), derived server-side from
+  // the weekly-reward activities the addon captured.
+  raidUnlocked    Int?
+  mplusUnlocked   Int?
+  worldUnlocked   Int?
+  worldTotal      Int      @default(3)
+  weeklyMplusRuns Int?
+  payload         Json
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

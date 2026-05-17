@@ -130,6 +130,16 @@ export const snapshotRouter = router({
                 capturedAt: true,
               },
             }),
+            // Our own addon upload — the only authoritative source for the
+            // World/Delve Great Vault row (no Blizzard web API exposes it).
+            ctx.db.addonUpload.findUnique({
+              where: { characterId: id },
+              select: {
+                worldUnlocked: true,
+                worldTotal: true,
+                collectedAt: true,
+              },
+            }),
           ]),
         ),
       );
@@ -167,6 +177,34 @@ export const snapshotRouter = router({
                 };
               })()
             : null;
+          // Override the vault's World row from the addon upload when we
+          // have one — it's the only authoritative source (Blizzard exposes
+          // no Delve/World vault API). Raid + M+ stay as derived. If there's
+          // no vault snapshot yet but an addon upload exists, synthesize a
+          // minimal vault so the World row still shows.
+          const vaultSnap = latest[i]![3];
+          const addon = latest[i]![6];
+          let vault = vaultSnap as
+            | (NonNullable<typeof vaultSnap> & { slots: unknown })
+            | null;
+          if (addon && addon.worldUnlocked != null) {
+            const baseSlots =
+              (vaultSnap?.slots as Record<string, unknown> | null) ?? {};
+            const mergedSlots = {
+              ...baseSlots,
+              world: {
+                unlocked: addon.worldUnlocked,
+                total: addon.worldTotal,
+                tracks: [],
+                tracked: true,
+              },
+            };
+            vault = {
+              weekStart: vaultSnap?.weekStart ?? null,
+              capturedAt: vaultSnap?.capturedAt ?? addon.collectedAt,
+              slots: mergedSlots,
+            } as typeof vault;
+          }
           return {
             character: m.character,
             role: m.role,
@@ -174,7 +212,7 @@ export const snapshotRouter = router({
               character: latest[i]![0],
               equipment,
               mplus: latest[i]![2],
-              vault: latest[i]![3],
+              vault,
               raid: latest[i]![4],
               wclParses: latest[i]![5],
             },

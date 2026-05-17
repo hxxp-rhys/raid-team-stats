@@ -1,0 +1,10 @@
+## Interface: 120001
+## Title: Raid Team Stats Uploader
+## Notes: Collects Great Vault (incl. World/Delve), M+, gear/enchants & talents for raid-team-stats. No network access — data is read into SavedVariables for the companion uploader (or copy/paste export).
+## Author: raid-team-stats
+## Version: 1.0.0
+## SavedVariables: RaidTeamStatsUploaderDB
+## IconTexture: Interface\ICONS\INV_Misc_Note_01
+## X-Website: https://raiders.hxxp.io
+
+RaidTeamStatsUploader.lua
