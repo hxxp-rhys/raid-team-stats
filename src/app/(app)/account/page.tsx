@@ -15,6 +15,7 @@ import { MfaCard } from "@/app/(app)/profile/mfa-card";
 import { DeleteAccountCard } from "@/app/(app)/profile/delete-account-card";
 import { OwnerMfaWarning } from "@/app/(app)/profile/owner-mfa-warning";
 import { AddonUploaderCard } from "@/app/(app)/account/addon-uploader-card";
+import { AccountRefreshButton } from "@/app/(app)/account/account-refresh-button";
 
 export default async function AccountPage() {
   const session =
@@ -48,11 +49,14 @@ export default async function AccountPage() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
-        <p className="text-muted-foreground text-sm">
-          Manage your sign-in details, linked Battle.net account, and 2FA.
-        </p>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
+          <p className="text-muted-foreground text-sm">
+            Manage your sign-in details, linked Battle.net account, and 2FA.
+          </p>
+        </div>
+        <AccountRefreshButton />
       </header>
 
       <div className="space-y-6">
