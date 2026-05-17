@@ -16,9 +16,10 @@ Installed by the setup:
 Using it:
  1. In WoW, enable the "Raid Team Stats Uploader" addon, log in, then
     /reload (or log out once) so the game writes its data file.
- 2. If you chose "run at startup", it's already uploading in the background
-    after each logon. Otherwise run rts-companion.exe (or with --watch to
-    keep it syncing every 5 minutes).
+ 2. If you chose "run at startup", the uploader starts immediately when the
+    install finishes and again at every Windows logon, syncing hidden in the
+    background after each /reload or logout. Otherwise run rts-companion.exe
+    (or with --watch to keep it syncing every 5 minutes).
 
 Your upload token is like a password. Rotate or revoke it any time on the
 website Account page. All uploads are sent over HTTPS (TLS).
