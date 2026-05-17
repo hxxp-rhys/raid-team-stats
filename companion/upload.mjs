@@ -35,16 +35,27 @@ function loadConfig() {
       die(`config.json is not valid JSON: ${cfgPath}`);
     }
   }
-  const api = process.env.RTS_API || cfg.api || "https://raiders.hxxp.io";
+  const api = (process.env.RTS_API || cfg.api || "https://raiders.hxxp.io")
+    .trim()
+    .replace(/\/+$/, "");
   const token = process.env.RTS_TOKEN || cfg.token || "";
   const wowPath = process.env.RTS_WOW_PATH || cfg.wowPath || "";
+  // Hard requirement: your character data + token must never leave this
+  // machine in plaintext. Refuse anything but HTTPS (TLS to Cloudflare,
+  // then Cloudflare→origin is Full-strict TLS). No silent http downgrade.
+  if (!/^https:\/\//i.test(api)) {
+    die(
+      `"api" must be https:// (got "${api}"). The uploader will not send ` +
+        "your data over an unencrypted connection.",
+    );
+  }
   if (!token) die("No upload token. Set it in config.json or RTS_TOKEN.");
   if (!wowPath)
     die(
       'No WoW path. Set "wowPath" in config.json, e.g. ' +
         '"C:\\\\Program Files (x86)\\\\World of Warcraft"',
     );
-  return { api: api.replace(/\/+$/, ""), token, wowPath };
+  return { api, token, wowPath };
 }
 
 // One SavedVariables file per WoW account folder (retail).

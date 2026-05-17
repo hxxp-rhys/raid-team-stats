@@ -41,6 +41,15 @@ runs, gear/enchants and talent loadout — read live from the game. Nothing
 else. Auth is your personal upload token (rotate or revoke it any time on
 the Account page).
 
+## Security / encryption
+
+The data is encrypted in transit the whole way. The uploader **refuses to
+run unless `api` is `https://`** — it will not send your data or token
+over an unencrypted connection. From there: TLS to Cloudflare, then
+Cloudflare→origin is TLS with strict certificate validation (Full
+(strict)). The addon itself makes no network calls — it only writes a
+local SavedVariables file that this script reads on your own machine.
+
 ## Troubleshooting
 
 - **"No SavedVariables found"** — log in with the addon enabled, then
