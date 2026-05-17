@@ -7,8 +7,19 @@ import { WidgetShell, WidgetLoading, WidgetError, WidgetEmpty } from "./shell";
 /**
  * Per-character enchant/gem readiness. Each character gets two gear icons:
  * red when something is missing (with the count), green when fully done.
- * Sorted by item level so high-geared offenders surface first.
+ * Hovering an icon names the exact slots (e.g. "Head, Shoulder"). Slot
+ * logic is Midnight-correct and computed server-side. Sorted worst-first.
  */
+
+// "Head, Shoulder" / "Ring 1, Neck ×2" — dedupe repeats (e.g. two empty
+// sockets on one item) into a "×N" suffix, preserving first-seen order.
+function formatSlots(slots: string[]): string {
+  const counts = new Map<string, number>();
+  for (const s of slots) counts.set(s, (counts.get(s) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([s, n]) => (n > 1 ? `${s} ×${n}` : s))
+    .join(", ");
+}
 
 function GearIcon({ ok, title }: { ok: boolean; title: string }) {
   return (
@@ -63,10 +74,20 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
     .map((m) => {
       const ench = m.latest.equipment?.missingEnchantsCount ?? 0;
       const gem = m.latest.equipment?.missingGemsCount ?? 0;
+      const enchSlots = m.latest.equipment?.missingEnchantSlots ?? [];
+      const gemSlots = m.latest.equipment?.missingGemSlots ?? [];
       const ilvl =
         m.latest.equipment?.itemLevel ?? m.latest.character?.itemLevel ?? 0;
       const hasEquip = !!m.latest.equipment;
-      return { ...m, missingEnchants: ench, missingGems: gem, ilvl, hasEquip };
+      return {
+        ...m,
+        missingEnchants: ench,
+        missingGems: gem,
+        enchSlots,
+        gemSlots,
+        ilvl,
+        hasEquip,
+      };
     })
     // Worst (most missing) first, then by ilvl desc.
     .sort(
@@ -78,7 +99,7 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Missing enchants / gems"
-      description="Green gear = ready · red gear = needs fixing (count shown)."
+      description="Green gear = ready · red gear = needs fixing. Hover an icon to see which slots (WoW Midnight enchant rules)."
     >
       <table className="w-full text-sm">
         <caption className="sr-only">Enchant and gem readiness</caption>
@@ -113,7 +134,7 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
                       title={
                         m.missingEnchants === 0
                           ? "All enchants applied"
-                          : `${m.missingEnchants} missing enchant${m.missingEnchants === 1 ? "" : "s"}`
+                          : `Missing enchant${m.missingEnchants === 1 ? "" : "s"}: ${formatSlots(m.enchSlots)}`
                       }
                     />
                     {m.missingEnchants > 0 && (
@@ -134,7 +155,7 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
                       title={
                         m.missingGems === 0
                           ? "All sockets gemmed"
-                          : `${m.missingGems} empty socket${m.missingGems === 1 ? "" : "s"}`
+                          : `Empty socket${m.missingGems === 1 ? "" : "s"}: ${formatSlots(m.gemSlots)}`
                       }
                     />
                     {m.missingGems > 0 && (

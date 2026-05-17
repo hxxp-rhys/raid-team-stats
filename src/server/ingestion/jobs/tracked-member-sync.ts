@@ -31,6 +31,7 @@ import {
 } from "@/server/ingestion/raiderio/client";
 import { raiderIOCharacterProfileSchema } from "@/server/ingestion/raiderio/schemas";
 import { resolveWorldVault } from "@/server/ingestion/wowaudit/world-vault";
+import { computeGearAudit } from "@/server/ingestion/gear-audit";
 import type { Region } from "@/generated/prisma/enums";
 import { z } from "zod";
 
@@ -114,21 +115,6 @@ const equipmentItemSchema = z
       .optional(),
   })
   .passthrough();
-
-// Slots that actually take a permanent enchant in current retail (The War
-// Within). Everything else (helm, shoulders, gloves, waist, trinkets, neck,
-// shirt, tabard, ranged) does NOT — counting those as "missing" produced
-// the false positives the gear-audit widget was showing.
-const ENCHANTABLE_SLOTS = new Set([
-  "CHEST",
-  "WRIST",
-  "LEGS",
-  "FEET",
-  "BACK",
-  "FINGER_1",
-  "FINGER_2",
-  "MAIN_HAND",
-]);
 
 const equipmentResponseSchema = z
   .object({
@@ -253,21 +239,12 @@ export async function handleTrackedMemberSync(
       },
     );
 
-    // Missing enchants: only count enchantable slots that have no
-    // enchantment. Non-enchantable slots are ignored entirely.
-    const missingEnchantsCount = equipment.equipped_items.filter((i) => {
-      const slot = i.slot?.type;
-      if (!slot || !ENCHANTABLE_SLOTS.has(slot)) return false;
-      return !i.enchantments || i.enchantments.length === 0;
-    }).length;
-
-    // Missing gems: count EMPTY sockets across all equipped items. An item
-    // with N sockets contributes one "missing" per socket that has no gem
-    // (`item` absent). Items with no sockets contribute nothing.
-    const missingGemsCount = equipment.equipped_items.reduce((sum, i) => {
-      if (!i.sockets || i.sockets.length === 0) return sum;
-      return sum + i.sockets.filter((s) => !s.item).length;
-    }, 0);
+    // Missing enchants / empty sockets — Midnight-correct slot logic lives
+    // in the shared gear-audit helper (also used by the snapshot router so
+    // the widget's hover detail and these stored counts never diverge).
+    const { missingEnchantsCount, missingGemsCount } = computeGearAudit(
+      equipment.equipped_items,
+    );
 
     // Tier set lives in exactly these five armor slots. Restricting the
     // count to them avoids miscounting non-tier "sets" (e.g. ring/trinket

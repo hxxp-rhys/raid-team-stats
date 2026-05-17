@@ -6,6 +6,7 @@ import {
   assertRaidTeamRole,
 } from "@/server/api/trpc";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
+import { computeGearAudit } from "@/server/ingestion/gear-audit";
 
 /**
  * Read-only access to the per-domain snapshot rows. Authorization rides on
@@ -73,6 +74,9 @@ export const snapshotRouter = router({
                 tierSetPiecesCount: true,
                 tierSetIds: true,
                 tierSlots: true,
+                // Raw equipped items: used server-side only to derive the
+                // per-slot missing-enchant/gem detail; not sent to clients.
+                items: true,
                 capturedAt: true,
               },
             }),
@@ -139,18 +143,43 @@ export const snapshotRouter = router({
 
       return {
         currentRaidZoneId,
-        members: memberships.map((m, i) => ({
-          character: m.character,
-          role: m.role,
-          latest: {
-            character: latest[i]![0],
-            equipment: latest[i]![1],
-            mplus: latest[i]![2],
-            vault: latest[i]![3],
-            raid: latest[i]![4],
-            wclParses: latest[i]![5],
-          },
-        })),
+        members: memberships.map((m, i) => {
+          const eq = latest[i]![1];
+          // Recompute the gear audit from the stored equipped items with
+          // the Midnight-correct slot logic, so the per-slot hover detail
+          // and the counts are always consistent and correct even on
+          // snapshots written before the slot list was fixed. The bulky
+          // raw `items` is intentionally NOT included in the payload —
+          // only the compact derived detail is sent to the client.
+          const equipment = eq
+            ? (() => {
+                const audit = computeGearAudit(eq.items);
+                return {
+                  itemLevel: eq.itemLevel,
+                  tierSetPiecesCount: eq.tierSetPiecesCount,
+                  tierSetIds: eq.tierSetIds,
+                  tierSlots: eq.tierSlots,
+                  capturedAt: eq.capturedAt,
+                  missingEnchantsCount: audit.missingEnchantsCount,
+                  missingGemsCount: audit.missingGemsCount,
+                  missingEnchantSlots: audit.missingEnchantSlots,
+                  missingGemSlots: audit.missingGemSlots,
+                };
+              })()
+            : null;
+          return {
+            character: m.character,
+            role: m.role,
+            latest: {
+              character: latest[i]![0],
+              equipment,
+              mplus: latest[i]![2],
+              vault: latest[i]![3],
+              raid: latest[i]![4],
+              wclParses: latest[i]![5],
+            },
+          };
+        }),
       };
     }),
 
