@@ -27,6 +27,13 @@ export const WIDGET_TYPES = [
   "talent_loadouts",
   "parses_heatmap",
   "recent_kills",
+  "vault_detail",
+  "keystones",
+  "weekly_lockouts",
+  "upgrade_currencies",
+  "consumable_readiness",
+  "delve_progress",
+  "talent_builds",
   "data_refresh",
 ] as const;
 
@@ -81,6 +88,13 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   talent_loadouts: { cols: 6, rows: 4 },
   parses_heatmap: { cols: 12, rows: 4 },
   recent_kills: { cols: 4, rows: 4 },
+  vault_detail: { cols: 6, rows: 4 },
+  keystones: { cols: 6, rows: 4 },
+  weekly_lockouts: { cols: 6, rows: 4 },
+  upgrade_currencies: { cols: 6, rows: 4 },
+  consumable_readiness: { cols: 6, rows: 3 },
+  delve_progress: { cols: 4, rows: 3 },
+  talent_builds: { cols: 6, rows: 4 },
   data_refresh: { cols: 4, rows: 2 },
 };
 export const WIDGET_DEFAULT_SIZE: Record<
@@ -324,6 +338,40 @@ export const WIDGET_META: Record<
   recent_kills: {
     title: "Recent kills",
     description: "Boss kills across the team in the last 7 days, newest first.",
+  },
+  vault_detail: {
+    title: "Great Vault detail",
+    description:
+      "All three vault rows (Raid / M+ / World·Delve) with unlocked slots + progress. Addon-only.",
+  },
+  keystones: {
+    title: "This week's keystones",
+    description:
+      "The M+ keystone each member currently holds — for scheduling key night. Addon-only.",
+  },
+  weekly_lockouts: {
+    title: "Weekly lockouts",
+    description:
+      "Raid bosses each member cleared THIS reset, by difficulty. Addon-only.",
+  },
+  upgrade_currencies: {
+    title: "Upgrade currencies",
+    description:
+      "Catalyst charges + crests / valorstones / coffer keys per member. Addon-only.",
+  },
+  consumable_readiness: {
+    title: "Raid consumables",
+    description:
+      "Flasks / potions / food / weapon enhancements on hand before pull. Addon-only.",
+  },
+  delve_progress: {
+    title: "Delve progress",
+    description: "Delve season / tier / Brann level per member. Addon-only.",
+  },
+  talent_builds: {
+    title: "Talent builds",
+    description:
+      "Copy/paste loadout import string per member for a build spotcheck. Addon-only.",
   },
   data_refresh: {
     title: "Data refresh",

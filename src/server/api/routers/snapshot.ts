@@ -7,12 +7,157 @@ import {
 } from "@/server/api/trpc";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import { computeGearAudit } from "@/server/ingestion/gear-audit";
+import {
+  addonPayloadSchema,
+  deriveVaultDetail,
+} from "@/server/ingestion/addon/payload";
 
 /**
  * Read-only access to the per-domain snapshot rows. Authorization rides on
  * raid-team membership — anyone who can see the team can read the snapshots
  * of its active members.
  */
+
+/**
+ * Compact, client-safe view-model of the schema-2 addon payload sections
+ * (the API-blind data: full vault, held keystone, weekly lockouts, upgrade
+ * currencies, consumables, delves, talent build string). Raw item links /
+ * the full payload are intentionally NOT sent to the client.
+ */
+export type AddonView = {
+  collectedAt: Date | null;
+  addonVersion: string | null;
+  vault: ReturnType<typeof deriveVaultDetail>;
+  keystone: { mapName: string | null; level: number | null } | null;
+  lockouts: Array<{
+    name: string;
+    difficulty: string | null;
+    killed: number;
+    total: number;
+    extended: boolean;
+  }>;
+  currencies: Array<{
+    name: string;
+    quantity: number | null;
+    max: number | null;
+  }>;
+  consumables: {
+    flask: number;
+    potion: number;
+    food: number;
+    weaponEnh: number;
+    other: number;
+  };
+  delves: {
+    season: number | null;
+    tier: number | null;
+    brann: number | null;
+  } | null;
+  talents: { importString: string } | null;
+};
+
+const CURRENCY_KEYWORDS = [
+  "catalyst",
+  "crest",
+  "valorstone",
+  "coffer",
+  "spark",
+  "mettle",
+  "kej",
+];
+
+function buildAddonView(
+  raw: unknown,
+  collectedAt: Date | null,
+  addonVersion: string | null,
+): AddonView | null {
+  const parsed = addonPayloadSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const p = parsed.data;
+
+  const ks = p.mythicPlus?.ownedKeystone ?? null;
+  const keystone = ks
+    ? { mapName: ks.mapName ?? null, level: ks.level ?? null }
+    : null;
+
+  const lockouts = (p.lockouts ?? [])
+    .filter((l) => l.isRaid === true)
+    .map((l) => {
+      const bosses = l.bosses ?? [];
+      return {
+        name: l.name ?? "?",
+        difficulty: l.difficulty ?? null,
+        killed: bosses.filter((b) => b.killed === true).length,
+        total: bosses.length || (l.encounters ?? 0),
+        extended: l.extended === true,
+      };
+    });
+
+  const currencies = (p.currencies ?? [])
+    .filter((c) => {
+      const nm = c.name;
+      return (
+        typeof nm === "string" &&
+        CURRENCY_KEYWORDS.some((k) => nm.toLowerCase().includes(k))
+      );
+    })
+    .map((c) => ({
+      name: c.name as string,
+      quantity: c.quantity ?? null,
+      max: c.maxQuantity ?? null,
+    }))
+    .slice(0, 12);
+
+  const consumables = { flask: 0, potion: 0, food: 0, weaponEnh: 0, other: 0 };
+  for (const it of p.consumables?.items ?? []) {
+    const n = it.count ?? 0;
+    if (it.sub === 3) consumables.flask += n;
+    else if (it.sub === 1) consumables.potion += n;
+    else if (it.sub === 5) consumables.food += n;
+    else if (it.sub === 6) consumables.weaponEnh += n;
+    else consumables.other += n;
+  }
+
+  const dapi = (p.delves?.api ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | null =>
+    typeof v === "number" ? v : null;
+  const delvesObj = p.delves
+    ? {
+        season:
+          num(dapi.GetCurrentDelvesSeasonNumber) ??
+          num(dapi.GetDelvesSeasonNumber),
+        tier: num(dapi.GetCurrentDelveTier),
+        brann: num(p.delves.companion?.level),
+      }
+    : null;
+  const delves =
+    delvesObj &&
+    (delvesObj.season != null ||
+      delvesObj.tier != null ||
+      delvesObj.brann != null)
+      ? delvesObj
+      : null;
+
+  const talentsRaw = (p as { talents?: unknown }).talents;
+  const importString =
+    talentsRaw &&
+    typeof talentsRaw === "object" &&
+    typeof (talentsRaw as { importString?: unknown }).importString === "string"
+      ? (talentsRaw as { importString: string }).importString
+      : null;
+
+  return {
+    collectedAt,
+    addonVersion,
+    vault: deriveVaultDetail(p),
+    keystone,
+    lockouts,
+    currencies,
+    consumables,
+    delves,
+    talents: importString ? { importString } : null,
+  };
+}
 
 export const snapshotRouter = router({
   /**
@@ -138,6 +283,8 @@ export const snapshotRouter = router({
                 worldUnlocked: true,
                 worldTotal: true,
                 collectedAt: true,
+                addonVersion: true,
+                payload: true,
               },
             }),
           ]),
@@ -205,6 +352,13 @@ export const snapshotRouter = router({
               slots: mergedSlots,
             } as typeof vault;
           }
+          const addonView = addon
+            ? buildAddonView(
+                addon.payload,
+                addon.collectedAt,
+                addon.addonVersion,
+              )
+            : null;
           return {
             character: m.character,
             role: m.role,
@@ -215,6 +369,7 @@ export const snapshotRouter = router({
               vault,
               raid: latest[i]![4],
               wclParses: latest[i]![5],
+              addon: addonView,
             },
           };
         }),

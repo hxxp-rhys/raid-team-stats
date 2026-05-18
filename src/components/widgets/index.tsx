@@ -5,19 +5,26 @@ import type { ComponentType } from "react";
 import type { WidgetInstance, WidgetType } from "@/lib/widgets/types";
 import { CharacterTimelineWidget } from "./character-timeline";
 import { ClassCompositionWidget } from "./class-composition";
+import { ConsumableReadinessWidget } from "./consumable-readiness";
 import { DataRefreshWidget } from "./data-refresh";
+import { DelveProgressWidget } from "./delve-progress";
 import { IlvlDistributionWidget } from "./ilvl-distribution";
 import { IlvlRosterWidget } from "./ilvl-roster";
+import { KeystonesWidget } from "./keystones";
 import { MissingFixesWidget } from "./missing-fixes";
 import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RecentKillsWidget } from "./recent-kills";
+import { TalentBuildsWidget } from "./talent-builds";
 import { TalentLoadoutsWidget } from "./talent-loadouts";
 import { TierSetTrackerWidget } from "./tier-set-tracker";
+import { UpgradeCurrenciesWidget } from "./upgrade-currencies";
+import { VaultDetailWidget } from "./vault-detail";
 import { VaultProgressWidget } from "./vault-progress";
 import { WclParsesWidget } from "./wcl-parses";
+import { WeeklyLockoutsWidget } from "./weekly-lockouts";
 
 export type WidgetComponentProps = {
   raidTeamId: string;
@@ -49,6 +56,13 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   talent_loadouts: TalentLoadoutsWidget,
   parses_heatmap: ParsesHeatmapWidget,
   recent_kills: RecentKillsWidget,
+  vault_detail: VaultDetailWidget,
+  keystones: KeystonesWidget,
+  weekly_lockouts: WeeklyLockoutsWidget,
+  upgrade_currencies: UpgradeCurrenciesWidget,
+  consumable_readiness: ConsumableReadinessWidget,
+  delve_progress: DelveProgressWidget,
+  talent_builds: TalentBuildsWidget,
   data_refresh: DataRefreshWidget,
 };
 

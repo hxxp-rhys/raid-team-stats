@@ -249,3 +249,60 @@ export function deriveVault(payload: AddonPayload): DerivedVault {
     weeklyMplusRuns,
   };
 }
+
+export type VaultRow = {
+  threshold: number | null;
+  progress: number | null;
+  level: number | null;
+  unlocked: boolean;
+};
+export type VaultDetailCategory = {
+  kind: "raid" | "mplus" | "world";
+  rows: VaultRow[];
+};
+
+/**
+ * Per-row Great Vault detail for all three categories (schema-2 widget
+ * data). Same enum-by-name mapping as deriveVault, but keeps each slot's
+ * threshold / progress / unlock level instead of just the count.
+ */
+export function deriveVaultDetail(
+  payload: AddonPayload,
+): VaultDetailCategory[] {
+  const enumMap = payload.vault.enum ?? {};
+  const findType = (...names: string[]): number | null => {
+    for (const [k, v] of Object.entries(enumMap)) {
+      if (names.includes(k.toLowerCase())) return v;
+    }
+    return null;
+  };
+  const cats: Array<{ kind: VaultDetailCategory["kind"]; type: number | null }> =
+    [
+      { kind: "raid", type: findType("raid") },
+      {
+        kind: "mplus",
+        type: findType("activities", "mythicplus", "mythic_plus"),
+      },
+      { kind: "world", type: findType("world") },
+    ];
+  return cats.map(({ kind, type }) => ({
+    kind,
+    rows:
+      type == null
+        ? []
+        : payload.vault.activities
+            .filter((a) => a.type === type)
+            .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0))
+            .map((a) => ({
+              threshold: a.threshold ?? null,
+              progress: a.progress ?? null,
+              level: a.level ?? null,
+              unlocked:
+                a.unlocked === true ||
+                (typeof a.progress === "number" &&
+                  typeof a.threshold === "number" &&
+                  a.threshold > 0 &&
+                  a.progress >= a.threshold),
+            })),
+  }));
+}
