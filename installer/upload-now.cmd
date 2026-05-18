@@ -1,5 +1,5 @@
 @echo off
-title Raid Team Stats - Upload Now
+title Stat Smith - Upload Now
 echo Uploading your latest WoW data...
 echo.
 rem The companion is a windowless (GUI-subsystem) app, so it writes no

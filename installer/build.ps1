@@ -94,21 +94,21 @@ npx --yes resedit-cli@2 `
   --in $exe --out $tmp `
   --ignore-signed `
   --icon "1,installer/app.ico" `
-  --company-name "raid-team-stats" `
-  --product-name "Raid Team Stats Uploader" `
-  --file-description "Raid Team Stats Uploader" `
+  --company-name "Stat Smith" `
+  --product-name "Stat Smith" `
+  --file-description "Stat Smith Uploader" `
   --product-version $ver `
   --file-version $ver `
   --original-filename "rts-companion.exe" `
   --internal-name "RaidTeamStatsUploader" `
-  --legal-copyright "Raid Team Stats"
+  --legal-copyright "Stat Smith"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) {
   throw "resedit-cli failed to brand rts-companion.exe"
 }
 Move-Item -Force $tmp $exe
 $fi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
-if ($fi.ProductName -ne "Raid Team Stats Uploader" -or
-  $fi.FileDescription -ne "Raid Team Stats Uploader") {
+if ($fi.ProductName -ne "Stat Smith" -or
+  $fi.FileDescription -ne "Stat Smith Uploader") {
   throw "exe branding not applied (ProductName='$($fi.ProductName)' FileDescription='$($fi.FileDescription)')"
 }
 Write-Host "      branded: $($fi.FileDescription) v$($fi.FileVersion)"

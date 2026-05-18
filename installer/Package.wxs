@@ -2,9 +2,9 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
-  <Package Name="Raid Team Stats Uploader"
-           Manufacturer="raid-team-stats"
-           Version="1.0.9.0"
+  <Package Name="Stat Smith Uploader"
+           Manufacturer="Stat Smith"
+           Version="1.0.10.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -64,7 +64,7 @@
          install dir. Both are MSI components → removed on uninstall. -->
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="A7E1D2C3-4B56-4789-9ABC-DEF012345678">
-        <Shortcut Id="DeskSc" Name="Raid Team Stats - Upload Now"
+        <Shortcut Id="DeskSc" Name="Stat Smith - Upload Now"
                   Target="[INSTALLFOLDER]upload-now.cmd"
                   WorkingDirectory="INSTALLFOLDER"
                   Description="Upload your WoW Great Vault / M+ data now" />
@@ -75,10 +75,10 @@
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="AppMenuDir" Name="Raid Team Stats Uploader">
+      <Directory Id="AppMenuDir" Name="Stat Smith">
         <Component Id="StartMenuShortcut"
                    Guid="B8F2E3D4-5C67-489A-8BCD-EF0123456789">
-          <Shortcut Id="MenuSc" Name="Raid Team Stats - Upload Now"
+          <Shortcut Id="MenuSc" Name="Stat Smith - Upload Now"
                     Target="[INSTALLFOLDER]upload-now.cmd"
                     WorkingDirectory="INSTALLFOLDER"
                     Description="Upload your WoW Great Vault / M+ data now" />
@@ -104,7 +104,7 @@
       </Component>
     </ComponentGroup>
 
-    <Feature Id="Main" Title="Raid Team Stats Uploader" Level="1">
+    <Feature Id="Main" Title="Stat Smith Uploader" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentGroupRef Id="AddonStageFiles" />
       <ComponentRef Id="DesktopShortcut" />

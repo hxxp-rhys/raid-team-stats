@@ -28,7 +28,7 @@
 
       <!-- the configuration dialog -->
       <Dialog Id="RtsConfigDlg" Width="370" Height="270"
-              Title="Raid Team Stats Uploader Setup">
+              Title="Stat Smith Uploader Setup">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370"
                  Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />

@@ -1,11 +1,14 @@
-Raid Team Stats Uploader
-========================
+Stat Smith Uploader
+===================
 
 This program reads your World of Warcraft Great Vault (including the
 World/Delve row), weekly Mythic+ runs, gear/enchants and talents from the
 in-game addon's saved data and uploads it to https://raiders.hxxp.io so it
 shows on your raid team's dashboard. WoW addons can't use the internet, so
 this small companion does the upload.
+
+(The in-game addon you enable in WoW is still listed as "Raid Team Stats
+Uploader" — that's expected; only this desktop companion is "Stat Smith".)
 
 Installed by the setup:
  - rts-companion.exe   the uploader (self-contained; no other software needed)
@@ -23,7 +26,7 @@ Using it:
     session at every sign-in and syncs hidden in the background after each
     /reload or logout. You can toggle it any time in Task Manager >
     Startup. To sync right now without waiting, double-click the desktop
-    "Raid Team Stats - Upload Now" shortcut. (You can also run
+    "Stat Smith - Upload Now" shortcut. (You can also run
     rts-companion.exe directly, or with --watch to poll every 5 minutes.)
 
 Your upload token is like a password. Rotate or revoke it any time on the
