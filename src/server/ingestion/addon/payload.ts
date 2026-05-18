@@ -9,6 +9,27 @@ import { z } from "zod";
  * ingestion; the full raw payload is stored for replay regardless.
  */
 
+/**
+ * Lua serializes an EMPTY table as `{}` (a JSON object), never `[]`. So
+ * any list the addon couldn't fill (no raid lockout this reset, empty
+ * currency list, no loose gear in bags…) — or a collector that errored
+ * and fell back to `{}` via safe() — arrives as `{}`, and a bare
+ * `z.array()` rejects it → HTTP 422 and the WHOLE upload is lost. Coerce
+ * `{}` / null / undefined → [] at the boundary so a real array still
+ * validates but an empty/absent one degrades gracefully.
+ */
+const luaArray = <T extends z.ZodTypeAny>(item: T) =>
+  z.preprocess(
+    (v) =>
+      v == null ||
+      (typeof v === "object" &&
+        !Array.isArray(v) &&
+        Object.keys(v as Record<string, unknown>).length === 0)
+        ? []
+        : v,
+    z.array(item),
+  );
+
 const activitySchema = z
   .object({
     type: z.number().optional(),
@@ -47,7 +68,7 @@ export const addonPayloadSchema = z
       .passthrough(),
     vault: z
       .object({
-        activities: z.array(activitySchema).default([]),
+        activities: luaArray(activitySchema),
         hasRewards: z.boolean().nullable().optional(),
         enum: z.record(z.string(), z.number()).default({}),
       })
@@ -55,16 +76,14 @@ export const addonPayloadSchema = z
       .default({ activities: [], enum: {} }),
     mythicPlus: z
       .object({
-        weeklyRuns: z
-          .array(
-            z
-              .object({
-                level: z.number().optional(),
-                completed: z.boolean().optional(),
-              })
-              .passthrough(),
-          )
-          .default([]),
+        weeklyRuns: luaArray(
+          z
+            .object({
+              level: z.number().optional(),
+              completed: z.boolean().optional(),
+            })
+            .passthrough(),
+        ),
         season: z.number().nullable().optional(),
         // SCHEMA 2: the keystone currently in the player's bag (no web
         // API exposes this — Blizzard/RIO only show completed runs).
@@ -89,33 +108,29 @@ export const addonPayloadSchema = z
     // explicit shapes document the contract for the future widgets that
     // will consume them. The addon dumps raw ids/enums/subclass numbers
     // for stable server-side mapping (same approach as the vault enum).
-    currencies: z
-      .array(
-        z
-          .object({
-            id: z.number().nullable().optional(),
-            name: z.string().optional(),
-            quantity: z.number().optional(),
-            maxQuantity: z.number().optional(),
-            totalEarned: z.number().optional(),
-            earnedThisWeek: z.number().optional(),
-          })
-          .passthrough(),
-      )
-      .optional(),
+    currencies: luaArray(
+      z
+        .object({
+          id: z.number().nullable().optional(),
+          name: z.string().optional(),
+          quantity: z.number().optional(),
+          maxQuantity: z.number().optional(),
+          totalEarned: z.number().optional(),
+          earnedThisWeek: z.number().optional(),
+        })
+        .passthrough(),
+    ),
     inventory: z
       .object({
-        items: z
-          .array(
-            z
-              .object({
-                link: z.string(),
-                bag: z.number().optional(),
-                slot: z.number().optional(),
-              })
-              .passthrough(),
-          )
-          .default([]),
+        items: luaArray(
+          z
+            .object({
+              link: z.string(),
+              bag: z.number().optional(),
+              slot: z.number().optional(),
+            })
+            .passthrough(),
+        ),
         scanned: z.number().optional(),
       })
       .passthrough()
@@ -134,46 +149,40 @@ export const addonPayloadSchema = z
       })
       .passthrough()
       .optional(),
-    lockouts: z
-      .array(
-        z
-          .object({
-            name: z.string().optional(),
-            isRaid: z.boolean().optional(),
-            difficulty: z.string().nullable().optional(),
-            difficultyId: z.number().nullable().optional(),
-            locked: z.boolean().optional(),
-            extended: z.boolean().optional(),
-            encounters: z.number().nullable().optional(),
-            progress: z.number().nullable().optional(),
-            bosses: z
-              .array(
-                z
-                  .object({
-                    name: z.string().optional(),
-                    killed: z.boolean().optional(),
-                  })
-                  .passthrough(),
-              )
-              .default([]),
-          })
-          .passthrough(),
-      )
-      .optional(),
-    consumables: z
-      .object({
-        items: z
-          .array(
+    lockouts: luaArray(
+      z
+        .object({
+          name: z.string().optional(),
+          isRaid: z.boolean().optional(),
+          difficulty: z.string().nullable().optional(),
+          difficultyId: z.number().nullable().optional(),
+          locked: z.boolean().optional(),
+          extended: z.boolean().optional(),
+          encounters: z.number().nullable().optional(),
+          progress: z.number().nullable().optional(),
+          bosses: luaArray(
             z
               .object({
-                id: z.number().optional(),
-                name: z.string().nullable().optional(),
-                sub: z.number().nullable().optional(),
-                count: z.number().optional(),
+                name: z.string().optional(),
+                killed: z.boolean().optional(),
               })
               .passthrough(),
-          )
-          .default([]),
+          ),
+        })
+        .passthrough(),
+    ),
+    consumables: z
+      .object({
+        items: luaArray(
+          z
+            .object({
+              id: z.number().optional(),
+              name: z.string().nullable().optional(),
+              sub: z.number().nullable().optional(),
+              count: z.number().optional(),
+            })
+            .passthrough(),
+        ),
       })
       .passthrough()
       .optional(),

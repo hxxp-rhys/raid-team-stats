@@ -60,6 +60,10 @@ export async function POST(req: Request) {
 
   const parsed = addonPayloadSchema.safeParse(parsedJson);
   if (!parsed.success) {
+    logger.warn(
+      { issues: parsed.error.issues.slice(0, 8) },
+      "addon ingest rejected (422): payload schema mismatch",
+    );
     return bad(422, "payload did not match the expected addon schema");
   }
   const payload = parsed.data;
