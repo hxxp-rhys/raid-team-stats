@@ -71,7 +71,7 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
                     {cell(d?.tier)}
                   </td>
                   <td className="px-2 py-1.5 text-center tabular-nums">
-                    {cell(d?.brann)}
+                    {cell(d?.companion)}
                   </td>
                 </tr>
               );

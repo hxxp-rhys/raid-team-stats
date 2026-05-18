@@ -29,8 +29,11 @@ local AddonName, ns = ...
 -- confirmed delve names (GetActiveDelveTier / GetCompanionInfoForActivePlayer).
 -- 1.1.3: rebranded to Stat Smith (folder/TOC/SavedVariables StatSmithDB,
 -- /statsmith + /ss slash commands). Wire format (RTS1:) is unchanged.
+-- 1.1.4: delve capture fixed against confirmed 12.0.5 returns —
+-- GetActiveDelveTier is a table (use .tier), GetCompanionInfoForActivePlayer
+-- is a bare number (Valeera's level). out.tier + out.companion.level.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.3"
+local ADDON_VERSION = "1.1.4"
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -427,19 +430,16 @@ local function collectDelves()
   local out = {}
   if not C_DelvesUI then return out end
   out.api = {}
-  -- Confirmed live 12.0.5 names (verified via /dump): the tier getter is
-  -- GetActiveDelveTier (NOT GetCurrentDelveTier) and companion info is
-  -- GetCompanionInfoForActivePlayer. Old names kept as fallbacks so the
-  -- addon still works if Blizzard renames again.
+  -- Verified via /dump on live 12.0.5:
+  --   GetCurrentDelvesSeasonNumber() -> number (season)
+  --   HasActiveDelve()               -> bool
+  --   GetActiveDelveTier()           -> TABLE { tier=, unlocked=, ... }
+  --                                     (tier is 0 unless a delve is active)
+  --   GetCompanionInfoForActivePlayer() -> NUMBER (Valeera's level)
   local getters = {
     "GetCurrentDelvesSeasonNumber",
     "GetDelvesSeasonNumber",
     "HasActiveDelve",
-    "GetActiveDelveTier",
-    "GetCurrentDelveTier",
-    "GetDelveTier",
-    "GetSeasonTierID",
-    "GetDelveLevel",
     "GetHighestRunForCurrentSeason",
   }
   for _, fn in ipairs(getters) do
@@ -448,15 +448,28 @@ local function collectDelves()
       if ok and v ~= nil and type(v) ~= "table" then out.api[fn] = v end
     end
   end
+  -- Tier: GetActiveDelveTier returns a table; pull its numeric `tier`
+  -- (older patches returned a bare number — accept both).
+  if type(C_DelvesUI.GetActiveDelveTier) == "function" then
+    local ok, info = pcall(C_DelvesUI.GetActiveDelveTier)
+    if ok and type(info) == "table" and type(info.tier) == "number" then
+      out.tier = info.tier
+    elseif ok and type(info) == "number" then
+      out.tier = info
+    end
+  end
+  -- Delve companion (Valeera, 12.0.5): GetCompanionInfoForActivePlayer
+  -- returns the companion LEVEL as a plain number on this patch; older
+  -- patches returned a table — handle both.
   for _, fn in ipairs({
     "GetCompanionInfoForActivePlayer",
     "GetCompanionInfo",
   }) do
     if not out.companion and type(C_DelvesUI[fn]) == "function" then
       local ok, info = pcall(C_DelvesUI[fn])
-      if ok and type(info) == "table" then
-        -- Shape isn't documented; keep the raw table (server reads
-        -- whatever field carries Brann's level) plus a best-guess.
+      if ok and type(info) == "number" then
+        out.companion = { level = info }
+      elseif ok and type(info) == "table" then
         out.companion = info
         out.companion.level = info.level or info.experienceLevel
           or info.companionLevel or out.companion.level

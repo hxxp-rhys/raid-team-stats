@@ -58,7 +58,7 @@ export type AddonView = {
   delves: {
     season: number | null;
     tier: number | null;
-    brann: number | null;
+    companion: number | null;
   } | null;
   talents: { importString: string } | null;
 };
@@ -211,21 +211,31 @@ function buildAddonView(
   const dapi = (p.delves?.api ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number | null =>
     typeof v === "number" ? v : null;
+  // addon ≥1.1.4 emits delves.tier (number) + delves.companion.level
+  // (number). `tier` is the table's .tier — 0 unless a delve is active,
+  // so surface that as "—". Legacy api.* kept for old payloads.
+  const dRaw = p.delves as
+    | { tier?: unknown; companion?: { level?: unknown } | null }
+    | null
+    | undefined;
+  const tierRaw =
+    num(dRaw?.tier) ??
+    num(dapi.GetActiveDelveTier) ??
+    num(dapi.GetCurrentDelveTier);
   const delvesObj = p.delves
     ? {
         season:
           num(dapi.GetCurrentDelvesSeasonNumber) ??
           num(dapi.GetDelvesSeasonNumber),
-        tier:
-          num(dapi.GetActiveDelveTier) ?? num(dapi.GetCurrentDelveTier),
-        brann: num(p.delves.companion?.level),
+        tier: tierRaw && tierRaw > 0 ? tierRaw : null,
+        companion: num(dRaw?.companion?.level),
       }
     : null;
   const delves =
     delvesObj &&
     (delvesObj.season != null ||
       delvesObj.tier != null ||
-      delvesObj.brann != null)
+      delvesObj.companion != null)
       ? delvesObj
       : null;
 
