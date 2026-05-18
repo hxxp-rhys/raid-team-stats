@@ -110,8 +110,23 @@ breaks the validator. Ignore throwaway `^scripts/` diag-script lines.
   v7 demands a paid OSMF EULA — avoid.
 - **Bump `installer/Package.wxs` `Version=` every release** —
   `MajorUpgrade` only replaces an install when the version is *higher*.
+  Also bump it to cleanly supersede a *partially-installed / rolled-back*
+  prior attempt on the user's machine.
 - MSI strings must be CP1252 (no `→`, `…`, box-drawing).
-- Then ship via §B.
+- **`installer/ca.js` runs under CLASSIC JScript (ES3 engine), not
+  Node.** It rejects modern JS — most dangerously **trailing commas in
+  function-call argument lists** (Prettier adds these to multi-line
+  calls!), and also `let`/`const`/arrow/template-literals/`for…of`. ONE
+  syntax error fails the WHOLE script → every custom action fails →
+  "Setup Wizard ended prematurely … system has not been modified" (it
+  aborts at `verifyInputs`, the first CA, before any file is written).
+  Keep `sh.Run()` etc. single-line (build the command into a `var`
+  first) so Prettier can't wrap+comma them. `build.ps1` step [3/5] now
+  gates this with `cscript //NoLogo //E:JScript installer\ca.js` — the
+  exact engine MSI uses; run it standalone to debug
+  (`(line,col) … Syntax error`). This symptom = check ca.js FIRST.
+- Then ship via §B (binary artifact — no web dance; the
+  `/uploader/installer` route reads the MSI from disk per request).
 
 ## Related memory
 
