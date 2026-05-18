@@ -1,0 +1,44 @@
+name: security
+
+# Supply-chain scanning (security finding L5). Currently INFORMATIONAL:
+# every step is continue-on-error / exit-code 0 so it cannot block the
+# branch while existing findings are triaged. Once the report is clean,
+# remove `continue-on-error` (npm-audit) and set `exit-code: '1'`
+# (trivy) to make these enforcing.
+
+on:
+  push:
+    branches: [development, main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Mon 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: npm audit (high+)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  trivy-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (vuln/secret/misconfig)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0" # informational; set to "1" to enforce

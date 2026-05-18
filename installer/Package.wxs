@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="raid-team-stats"
-           Version="1.0.7.0"
+           Version="1.0.8.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -117,7 +117,7 @@
 
     <!-- ───────── deferred work (elevated, after files are laid down) ───────── -->
     <CustomAction Id="SetWriteConfig" Property="WriteConfig"
-                  Value="[INSTALLFOLDER]|[APIKEY]|[WOWPATH]|[APIBASE]" />
+                  Value="[INSTALLFOLDER]|[APIKEY]|[WOWPATH]|[APIBASE]|[LogonUser]" />
     <CustomAction Id="WriteConfig" BinaryRef="RtsScript" JScriptCall="writeConfig"
                   Execute="deferred" Impersonate="no" Return="check" />
 
@@ -135,7 +135,7 @@
     <CustomAction Id="StopAgent" BinaryRef="RtsScript" JScriptCall="stopAgent"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="SetUninstallClean" Property="UninstallClean"
-                  Value="[WOWPATH]|[INSTALLFOLDER]" />
+                  Value="[WOWPATH]|[INSTALLFOLDER]|[LogonUser]" />
     <CustomAction Id="UninstallClean" BinaryRef="RtsScript" JScriptCall="uninstallClean"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 

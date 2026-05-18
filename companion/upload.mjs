@@ -17,6 +17,7 @@ import { readFile, stat } from "node:fs/promises";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const die = (m) => {
@@ -25,9 +26,22 @@ const die = (m) => {
 };
 const log = (m) => console.log(`[rts] ${m}`);
 
+// SECURITY (H3b): config + token live in the per-user, non-world-
+// readable %LOCALAPPDATA%\RaidTeamStats. Fall back to the legacy
+// next-to-exe path for installs that predate the relocation.
+function configPath() {
+  const lad =
+    process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  const primary = join(lad, "RaidTeamStats", "config.json");
+  if (existsSync(primary)) return primary;
+  const legacy = join(HERE, "config.json");
+  if (existsSync(legacy)) return legacy;
+  return primary;
+}
+
 function loadConfig() {
   let cfg = {};
-  const cfgPath = join(HERE, "config.json");
+  const cfgPath = configPath();
   if (existsSync(cfgPath)) {
     try {
       cfg = JSON.parse(readFileSync(cfgPath, "utf8"));

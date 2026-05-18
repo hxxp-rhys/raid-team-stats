@@ -171,14 +171,28 @@ export async function isPlatformAdmin(
   userId: string | undefined,
 ): Promise<boolean> {
   if (!userId) return false;
-  if (env.ADMIN_USER_IDS.includes(userId)) return true;
+
   const u = await db.user.findUnique({
     where: { id: userId },
-    select: { email: true, isAdmin: true },
+    select: { email: true, isAdmin: true, mfaEnabled: true },
   });
-  if (!u) return false;
-  if (u.isAdmin) return true;
-  if (env.ADMIN_EMAILS.includes(u.email.toLowerCase())) return true;
+  const email = u?.email.toLowerCase();
+
+  // (1) Is this principal a platform admin by any of the three sources?
+  const baseAdmin =
+    env.ADMIN_USER_IDS.includes(userId) ||
+    (!!u && (u.isAdmin || (!!email && env.ADMIN_EMAILS.includes(email))));
+  if (!baseAdmin) return false;
+
+  // (2) L3: admin privileges require MFA. A configured exemption list
+  // (emails and/or user ids) is honoured "for the time being" so the
+  // rule never locks out the current admin(s). No MFA + not exempt =>
+  // treated as a normal user (admin powers withheld, account otherwise
+  // unaffected).
+  if (u?.mfaEnabled) return true;
+  const exempt = env.ADMIN_MFA_EXEMPT;
+  if (exempt.includes(userId.toLowerCase())) return true;
+  if (email && exempt.includes(email)) return true;
   return false;
 }
 

@@ -12,6 +12,7 @@
 const { readFile, stat } = require("node:fs/promises");
 const { readFileSync, readdirSync, existsSync } = require("node:fs");
 const { join, dirname } = require("node:path");
+const { homedir } = require("node:os");
 
 // Next to the exe when packaged; next to this file when run via node.
 const HERE = process.execPath.toLowerCase().endsWith("node.exe")
@@ -24,9 +25,22 @@ const die = (m) => {
 };
 const log = (m) => console.log(`[rts] ${m}`);
 
+// SECURITY (H3b): config + token live in the per-user, non-world-
+// readable %LOCALAPPDATA%\RaidTeamStats. Fall back to the legacy
+// next-to-exe path for installs that predate the relocation.
+function configPath() {
+  const lad =
+    process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  const primary = join(lad, "RaidTeamStats", "config.json");
+  if (existsSync(primary)) return primary;
+  const legacy = join(HERE, "config.json");
+  if (existsSync(legacy)) return legacy;
+  return primary; // used only for the "not found" error message
+}
+
 function loadConfig() {
   let cfg = {};
-  const cfgPath = join(HERE, "config.json");
+  const cfgPath = configPath();
   if (existsSync(cfgPath)) {
     try {
       cfg = JSON.parse(readFileSync(cfgPath, "utf8"));

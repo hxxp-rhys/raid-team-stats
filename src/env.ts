@@ -118,6 +118,22 @@ export const env = createEnv({
           .filter(Boolean),
       ),
 
+    // Platform-admin privileges REQUIRE MFA (finding L3): an admin
+    // without MFA is treated as a normal user. This list (emails and/or
+    // user ids, comma-separated, case-insensitive) is temporarily exempt
+    // from that requirement — set it to the current admin account(s) so
+    // enabling the rule never locks anyone out; shrink it as admins
+    // enable TOTP.
+    ADMIN_MFA_EXEMPT: z
+      .string()
+      .default("")
+      .transform((v) =>
+        v
+          .split(",")
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+
     RATE_LIMIT_TRUST_PROXY: z
       .enum(["true", "false"])
       .default("false")
@@ -159,6 +175,7 @@ export const env = createEnv({
     SMTP_FROM: process.env.SMTP_FROM,
     ADMIN_USER_IDS: process.env.ADMIN_USER_IDS,
     ADMIN_EMAILS: process.env.ADMIN_EMAILS,
+    ADMIN_MFA_EXEMPT: process.env.ADMIN_MFA_EXEMPT,
     RATE_LIMIT_TRUST_PROXY: process.env.RATE_LIMIT_TRUST_PROXY,
     METRICS_TOKEN: process.env.METRICS_TOKEN,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,

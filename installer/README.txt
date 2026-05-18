@@ -9,7 +9,9 @@ this small companion does the upload.
 
 Installed by the setup:
  - rts-companion.exe   the uploader (self-contained; no other software needed)
- - config.json         your settings (server, upload token, WoW folder)
+ - config.json         your settings (server, upload token, WoW folder),
+                       kept in %LOCALAPPDATA%\RaidTeamStats (per-user;
+                       not readable by other Windows accounts)
  - run-hidden.vbs      launches the uploader with no console window
  - the addon           copied into <WoW>\_retail_\Interface\AddOns\RaidTeamStatsUploader
 
