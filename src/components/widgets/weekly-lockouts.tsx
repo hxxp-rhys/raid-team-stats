@@ -52,33 +52,48 @@ export function WeeklyLockoutsWidget({ raidTeamId }: { raidTeamId: string }) {
                     {locks.length === 0 ? (
                       <span className="text-muted-foreground">—</span>
                     ) : (
-                      <span className="flex flex-wrap gap-x-3 gap-y-1">
-                        {locks.map((l, idx) => (
-                          <span
-                            key={idx}
-                            className="tabular-nums"
-                            title={`${l.name}${
-                              l.extended ? " (extended)" : ""
-                            }`}
-                          >
-                            <span className="font-medium">
-                              {l.difficulty ?? l.name}
-                            </span>{" "}
-                            <span
-                              className={
-                                l.total > 0 && l.killed >= l.total
-                                  ? "text-green-500"
-                                  : "text-foreground"
-                              }
-                            >
-                              {l.killed}/{l.total || "?"}
+                      <span className="flex flex-col gap-1">
+                        {locks.map((rl, idx) => (
+                          <span key={idx} className="flex flex-wrap items-baseline gap-x-3">
+                            <span className="text-muted-foreground min-w-[7rem] truncate">
+                              {rl.raid}
                             </span>
-                            {l.extended && (
-                              <span className="text-amber-500" title="Extended">
-                                {" "}
-                                ⤓
+                            {rl.diffs.map((d) => (
+                              <span key={d.tier} className="tabular-nums">
+                                <span className="text-muted-foreground text-xs">
+                                  {d.tier === "Normal"
+                                    ? "N"
+                                    : d.tier === "Heroic"
+                                      ? "H"
+                                      : d.tier === "Mythic"
+                                        ? "M"
+                                        : "LFR"}
+                                </span>{" "}
+                                {d.prog == null ? (
+                                  <span className="text-muted-foreground">–</span>
+                                ) : (
+                                  <span
+                                    className={
+                                      d.prog.total > 0 &&
+                                      d.prog.killed >= d.prog.total
+                                        ? "text-green-500 font-medium"
+                                        : "text-foreground"
+                                    }
+                                  >
+                                    {d.prog.killed}/{d.prog.total || "?"}
+                                    {d.prog.extended && (
+                                      <span
+                                        className="text-amber-500"
+                                        title="Extended"
+                                      >
+                                        {" "}
+                                        ⤓
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                               </span>
-                            )}
+                            ))}
                           </span>
                         ))}
                       </span>

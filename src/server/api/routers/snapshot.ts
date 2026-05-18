@@ -29,17 +29,19 @@ export type AddonView = {
   addonVersion: string | null;
   vault: ReturnType<typeof deriveVaultDetail>;
   keystone: { mapName: string | null; level: number | null } | null;
+  // One entry per raid this reset, with the four standard difficulties
+  // (LFR / Normal / Heroic / Mythic) as fixed columns — `null` where the
+  // member has no lockout at that difficulty.
   lockouts: Array<{
-    name: string;
-    difficulty: string | null;
-    killed: number;
-    total: number;
-    extended: boolean;
+    raid: string;
+    diffs: Array<{
+      tier: "LFR" | "Normal" | "Heroic" | "Mythic";
+      prog: { killed: number; total: number; extended: boolean } | null;
+    }>;
   }>;
   currencies: Array<{
     name: string;
     quantity: number | null;
-    max: number | null;
   }>;
   consumables: {
     flask: number;
@@ -80,18 +82,60 @@ function buildAddonView(
     ? { mapName: ks.mapName ?? null, level: ks.level ?? null }
     : null;
 
-  const lockouts = (p.lockouts ?? [])
-    .filter((l) => l.isRaid === true)
-    .map((l) => {
-      const bosses = l.bosses ?? [];
-      return {
-        name: l.name ?? "?",
-        difficulty: l.difficulty ?? null,
-        killed: bosses.filter((b) => b.killed === true).length,
-        total: bosses.length || (l.encounters ?? 0),
-        extended: l.extended === true,
-      };
-    });
+  // Group raid lockouts by raid, with the four standard difficulties as
+  // fixed slots. Blizzard difficultyIds: 17=LFR, 14=Normal, 15=Heroic,
+  // 16=Mythic (fall back to the localized name when an id is missing).
+  type DiffKey = "LFR" | "Normal" | "Heroic" | "Mythic";
+  const DIFF_ORDER: DiffKey[] = ["LFR", "Normal", "Heroic", "Mythic"];
+  const DIFF_BY_ID: Record<number, DiffKey> = {
+    17: "LFR",
+    14: "Normal",
+    15: "Heroic",
+    16: "Mythic",
+  };
+  const diffKey = (l: {
+    difficultyId?: number | null;
+    difficulty?: string | null;
+  }): DiffKey | null => {
+    if (typeof l.difficultyId === "number" && DIFF_BY_ID[l.difficultyId]) {
+      return DIFF_BY_ID[l.difficultyId];
+    }
+    const d = (l.difficulty ?? "").toLowerCase();
+    if (d.includes("mythic")) return "Mythic";
+    if (d.includes("heroic")) return "Heroic";
+    if (d.includes("normal")) return "Normal";
+    if (d.includes("raid finder") || d.includes("looking for raid") || d === "lfr")
+      return "LFR";
+    return null;
+  };
+  type DiffProg = { killed: number; total: number; extended: boolean };
+  const raidMap = new Map<string, Partial<Record<DiffKey, DiffProg>>>();
+  for (const l of p.lockouts ?? []) {
+    if (l.isRaid !== true) continue;
+    const k = diffKey(l);
+    if (!k) continue;
+    const raid = l.name ?? "?";
+    const bosses = l.bosses ?? [];
+    const total =
+      bosses.length || (typeof l.encounters === "number" ? l.encounters : 0);
+    const g = raidMap.get(raid) ?? {};
+    g[k] = {
+      killed: bosses.filter((b) => b.killed === true).length,
+      total,
+      extended: l.extended === true,
+    };
+    raidMap.set(raid, g);
+  }
+  const lockouts = [...raidMap.entries()]
+    .map(([raid, byId]) => ({
+      raid,
+      diffs: DIFF_ORDER.map((tier) => ({ tier, prog: byId[tier] ?? null })),
+    }))
+    .sort(
+      (a, b) =>
+        Math.max(...b.diffs.map((d) => d.prog?.total ?? 0)) -
+        Math.max(...a.diffs.map((d) => d.prog?.total ?? 0)),
+    );
 
   const currencies = (p.currencies ?? [])
     .filter((c) => {
@@ -104,18 +148,40 @@ function buildAddonView(
     .map((c) => ({
       name: c.name as string,
       quantity: c.quantity ?? null,
-      max: c.maxQuantity ?? null,
     }))
     .slice(0, 12);
 
+  // WoW 12.0 reshuffled the Consumable item subclasses (raid prep items —
+  // augment runes, weapon oils, potion cauldrons — all land in one "misc"
+  // subclass), so the old sub-number → bucket map mostly fell to "other".
+  // Classify by item NAME (the addon already sends it); fall back to the
+  // subclass only when the name is inconclusive.
   const consumables = { flask: 0, potion: 0, food: 0, weaponEnh: 0, other: 0 };
+  const classify = (
+    name: string,
+    sub: number | null | undefined,
+  ): keyof typeof consumables => {
+    const n = name.toLowerCase();
+    if (/\b(flask|phial)\b/.test(n)) return "flask";
+    if (/\b(potion|cauldron|draught)\b/.test(n)) return "potion";
+    if (
+      /\b(feast|food|ration|banquet|stew|broth|meal)\b/.test(n) ||
+      n.includes("celebration") ||
+      n.includes("well fed")
+    )
+      return "food";
+    if (/\b(oil|sharpening stone|weightstone|whetstone|wax)\b/.test(n))
+      return "weaponEnh";
+    if (sub === 3) return "flask";
+    if (sub === 5) return "food";
+    if (sub === 1) return "potion";
+    if (sub === 6) return "weaponEnh";
+    return "other";
+  };
   for (const it of p.consumables?.items ?? []) {
     const n = it.count ?? 0;
-    if (it.sub === 3) consumables.flask += n;
-    else if (it.sub === 1) consumables.potion += n;
-    else if (it.sub === 5) consumables.food += n;
-    else if (it.sub === 6) consumables.weaponEnh += n;
-    else consumables.other += n;
+    const name = typeof it.name === "string" ? it.name : "";
+    consumables[classify(name, it.sub)] += n;
   }
 
   const dapi = (p.delves?.api ?? {}) as Record<string, unknown>;

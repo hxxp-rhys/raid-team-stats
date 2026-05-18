@@ -366,12 +366,13 @@ export const WIDGET_META: Record<
   },
   delve_progress: {
     title: "Delve progress",
-    description: "Delve season / tier / Brann level per member. Addon-only.",
+    description:
+      "Delve season / tier / companion (Valeera) level per member. Addon-only.",
   },
   talent_builds: {
     title: "Talent builds",
     description:
-      "Copy/paste loadout import string per member for a build spotcheck. Addon-only.",
+      "Each member's current talent loadout, linked to the calculator.",
   },
   data_refresh: {
     title: "Data refresh",

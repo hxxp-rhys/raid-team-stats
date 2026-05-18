@@ -15,7 +15,7 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Delve progress"
-      description="Season / tier / Brann level. Needs the in-game uploader (12.0.5)."
+      description="Season / tier / Valeera (delve companion) level. Needs the in-game uploader (12.0.5)."
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -43,7 +43,7 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
                 Tier
               </th>
               <th scope="col" className="px-2 py-1 text-center font-medium">
-                Brann
+                Valeera
               </th>
             </tr>
           </thead>

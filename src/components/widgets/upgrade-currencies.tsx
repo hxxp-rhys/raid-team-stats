@@ -62,17 +62,8 @@ export function UpgradeCurrenciesWidget({
                             <span className="text-muted-foreground">
                               {c.name}
                             </span>{" "}
-                            <span
-                              className={
-                                c.max != null &&
-                                c.quantity != null &&
-                                c.quantity >= c.max
-                                  ? "text-amber-500 font-medium"
-                                  : "text-foreground font-medium"
-                              }
-                            >
+                            <span className="text-foreground font-medium">
                               {c.quantity ?? "?"}
-                              {c.max ? `/${c.max}` : ""}
                             </span>
                           </span>
                         ))}
