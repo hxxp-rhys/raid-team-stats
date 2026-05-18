@@ -56,6 +56,16 @@ function verifyInputs() {
       Session.Property("RTS_ERR") = "Server URL must be https://.";
       return;
     }
+    // Lock the destination to the canonical host. Without this, an
+    // attacker-supplied APIBASE= public property (e.g.
+    // msiexec /i rts.msi APIBASE=https://evil) would exfiltrate the
+    // upload token + WoW data to a hostile server.
+    var apiHost = api.toLowerCase().substr(8).split("/")[0].split(":")[0];
+    if (apiHost !== "raiders.hxxp.io") {
+      Session.Property("RTS_ERR") =
+        "Server URL must be https://raiders.hxxp.io.";
+      return;
+    }
 
     var http = new ActiveXObject("WinHttp.WinHttpRequest.5.1");
     http.SetTimeouts(5000, 8000, 8000, 15000);

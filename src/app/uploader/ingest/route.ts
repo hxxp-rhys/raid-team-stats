@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { consumeLimit, policies } from "@/server/security/rate-limit";
+import {
+  resolveUploadTokenUserId,
+  hashUploadToken,
+} from "@/server/auth/upload-token";
 import {
   addonPayloadSchema,
   deriveVault,
@@ -32,11 +37,29 @@ export async function POST(req: Request) {
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   if (!token || token.length < 16) return bad(401, "missing or invalid token");
 
-  const user = await db.user.findUnique({
-    where: { uploadToken: token },
-    select: { id: true },
-  });
-  if (!user) return bad(401, "unauthorized");
+  // Per-token cap (keyed by hash, not the raw secret). Blunts a leaked
+  // token / DB-write spam; well above the legit companion's cadence.
+  const rl = await consumeLimit(
+    policies.uploadIngestPerToken,
+    hashUploadToken(token),
+  );
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "rate limited" },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": Math.max(
+            1,
+            Math.ceil((rl.resetAt - Date.now()) / 1000),
+          ).toString(),
+        },
+      },
+    );
+  }
+
+  const userId = await resolveUploadTokenUserId(token);
+  if (!userId) return bad(401, "unauthorized");
 
   // ── body (JSON object, JSON string, or RTS1:<base64>) ──
   const raw = await req.text();
@@ -61,7 +84,14 @@ export async function POST(req: Request) {
   const parsed = addonPayloadSchema.safeParse(parsedJson);
   if (!parsed.success) {
     logger.warn(
-      { issues: parsed.error.issues.slice(0, 8) },
+      {
+        // path/code/message only — never the rejected value (user data).
+        issues: parsed.error.issues.slice(0, 8).map((i) => ({
+          path: i.path.join("."),
+          code: i.code,
+          message: i.message,
+        })),
+      },
       "addon ingest rejected (422): payload schema mismatch",
     );
     return bad(422, "payload did not match the expected addon schema");
@@ -77,7 +107,7 @@ export async function POST(req: Request) {
   const wantName = normalizeKey(payload.character.name);
 
   const candidates = await db.character.findMany({
-    where: { userId: user.id, region },
+    where: { userId: userId, region },
     select: { id: true, name: true, realmSlug: true },
   });
   const character = candidates.find(
@@ -101,7 +131,7 @@ export async function POST(req: Request) {
       where: { characterId: character.id },
       create: {
         characterId: character.id,
-        userId: user.id,
+        userId: userId,
         collectedAt,
         addonVersion: payload.addonVersion ?? null,
         raidUnlocked: v.raidUnlocked,
@@ -112,7 +142,7 @@ export async function POST(req: Request) {
         payload: payload as object,
       },
       update: {
-        userId: user.id,
+        userId: userId,
         collectedAt,
         receivedAt: new Date(),
         addonVersion: payload.addonVersion ?? null,

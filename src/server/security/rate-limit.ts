@@ -137,4 +137,10 @@ export const policies = {
   // iterating on a dashboard, five per hour for the team as a whole.
   teamRefreshPerUser: { namespace: "team:refresh:user", limit: 3, windowMs: 10 * 60_000 },
   teamRefreshPerTeam: { namespace: "team:refresh:team", limit: 5, windowMs: 60 * 60_000 },
+  // Per-token caps on the unauthenticated /uploader/* surface (keyed by
+  // the token HASH, never the raw secret). Generous vs. the legit
+  // companion (one-shot on start + a change-gated 5-min poll), tight
+  // enough to blunt a leaked token / DB-write spam.
+  uploadIngestPerToken: { namespace: "upload:ingest:token", limit: 40, windowMs: 10 * 60_000 },
+  uploadVerifyPerToken: { namespace: "upload:verify:token", limit: 40, windowMs: 10 * 60_000 },
 } as const satisfies Record<string, Limit>;

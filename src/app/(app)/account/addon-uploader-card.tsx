@@ -29,19 +29,23 @@ export function AddonUploaderCard() {
     onSuccess: () => utils.account.uploadStatus.invalidate(),
   });
   const revoke = api.account.revokeToken.useMutation({
-    onSuccess: () => utils.account.uploadStatus.invalidate(),
+    onSuccess: () => {
+      regen.reset(); // clear the just-shown token
+      utils.account.uploadStatus.invalidate();
+    },
   });
-  const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
   const [nowMs] = useState(() => Date.now());
 
-  const token = q.data?.token ?? null;
+  const hasToken = q.data?.hasToken ?? false;
+  // Only available right after (re)generation — in memory, never refetched.
+  const freshToken = regen.data?.token ?? null;
   const uploads = q.data?.uploads ?? [];
 
   const copy = async () => {
-    if (!token) return;
+    if (!freshToken) return;
     try {
-      await navigator.clipboard.writeText(token);
+      await navigator.clipboard.writeText(freshToken);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -69,7 +73,7 @@ export function AddonUploaderCard() {
           </a>
           <p className="text-muted-foreground text-xs">
             The installer bundles everything (no Node needed): pick your WoW
-            folder, paste the token below, choose run-at-startup. It installs
+            folder, paste your upload token, choose run-at-startup. It installs
             the addon for you and verifies the folder + token before
             finishing. Then in WoW enable the{" "}
             <code className="bg-muted/50 rounded px-1">
@@ -118,38 +122,48 @@ export function AddonUploaderCard() {
           </p>
           {q.isPending ? (
             <p className="text-muted-foreground">Loading…</p>
-          ) : token ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <code className="bg-muted/50 min-w-0 flex-1 truncate rounded px-2 py-1 font-mono text-xs">
-                {show ? token : "•".repeat(24)}
-              </code>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShow((s) => !s)}
-              >
-                {show ? "Hide" : "Show"}
-              </Button>
-              <Button type="button" variant="outline" onClick={copy}>
-                {copied ? "Copied" : "Copy"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={regen.isPending}
-                onClick={() => regen.mutate()}
-                title="Invalidates the old token"
-              >
-                Regenerate
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={revoke.isPending}
-                onClick={() => revoke.mutate()}
-              >
-                Revoke
-              </Button>
+          ) : freshToken ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <code className="bg-muted/50 min-w-0 flex-1 truncate rounded px-2 py-1 font-mono text-xs">
+                  {freshToken}
+                </code>
+                <Button type="button" variant="outline" onClick={copy}>
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <p className="text-xs font-medium text-amber-500">
+                Copy this now — for security it is shown only once and cannot
+                be retrieved later. Paste it into the installer (or the
+                companion config). If you lose it, just Regenerate.
+              </p>
+            </div>
+          ) : hasToken ? (
+            <div className="space-y-2">
+              <p className="text-muted-foreground">
+                A token is configured. For your security it can&apos;t be
+                displayed again — if you&apos;ve lost it, regenerate a new one
+                (you&apos;ll need to reconfigure the installer / companion).
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={regen.isPending}
+                  onClick={() => regen.mutate()}
+                  title="Issues a new token and invalidates the old one"
+                >
+                  {regen.isPending ? "Regenerating…" : "Regenerate"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={revoke.isPending}
+                  onClick={() => revoke.mutate()}
+                >
+                  Revoke
+                </Button>
+              </div>
             </div>
           ) : (
             <Button
@@ -161,8 +175,9 @@ export function AddonUploaderCard() {
             </Button>
           )}
           <p className="text-muted-foreground mt-1 text-xs">
-            Treat this like a password. Regenerating or revoking it stops the
-            companion until you update its config.
+            Treat this like a password. It&apos;s stored hashed (never shown
+            again); regenerating or revoking stops the companion until you
+            reconfigure it with the new value.
           </p>
         </div>
 

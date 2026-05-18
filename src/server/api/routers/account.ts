@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 
@@ -10,19 +8,20 @@ import {
 } from "@/server/api/trpc";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import { audit } from "@/server/security/audit";
+import { newUploadToken, hashUploadToken } from "@/server/auth/upload-token";
 
 /**
  * Account-level settings for the in-game addon + companion uploader:
  * the per-user upload token and recent upload status.
+ *
+ * SECURITY: only the SHA-256 of the token is stored (see upload-token.ts);
+ * the raw value is returned to the user exactly once, by regenerateToken.
  */
-
-const newToken = (): string =>
-  randomBytes(32).toString("base64url"); // ~43 url-safe chars
 
 export const accountRouter = router({
   /**
-   * Current upload token (the user's own — safe to show them; they need it
-   * to configure the companion) plus the most recent addon uploads.
+   * Whether a token is configured (we store only its hash, so the raw
+   * value can NOT be redisplayed) plus the most recent addon uploads.
    */
   uploadStatus: protectedProcedure.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
@@ -43,18 +42,20 @@ export const accountRouter = router({
         character: { select: { name: true, realmSlug: true } },
       },
     });
-    return { token: user?.uploadToken ?? null, uploads };
+    return { hasToken: Boolean(user?.uploadToken), uploads };
   }),
 
   /**
-   * Generate (or rotate) the upload token. Rotating invalidates the old
-   * one immediately — the companion must be reconfigured with the new value.
+   * Generate (or rotate) the upload token. Only the hash is stored;
+   * the raw token is returned here ONCE (never retrievable again).
+   * Rotating invalidates the old one immediately — the companion /
+   * installer must be reconfigured with the new value.
    */
   regenerateToken: protectedProcedure.mutation(async ({ ctx }) => {
-    const token = newToken();
+    const token = newUploadToken();
     await ctx.db.user.update({
       where: { id: ctx.session.user.id },
-      data: { uploadToken: token },
+      data: { uploadToken: hashUploadToken(token) },
     });
     return { token };
   }),
