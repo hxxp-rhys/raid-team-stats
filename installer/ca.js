@@ -157,6 +157,17 @@ function installAddon() {
     var file = e.item();
     fso.CopyFile(file.Path, dst + "\\" + file.Name, true);
   }
+  // Scrub the pre-1.0.15 autostart: the old HKLM\...\Run value (it landed
+  // in WOW6432Node — a 32-bit reg delete from here targets the same view)
+  // and the orphaned StartupApproved\Run32 entry Windows created for it,
+  // so Task Manager > Startup has no stale "RaidTeamStatsUploader" row.
+  try {
+    var sh = new ActiveXObject("WScript.Shell");
+    var rmRun = 'cmd /c reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v RaidTeamStatsUploader /f';
+    sh.Run(rmRun, 0, true);
+    var rmApproved = 'cmd /c reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32" /v RaidTeamStatsUploader /f';
+    sh.Run(rmApproved, 0, true);
+  } catch (regErr) {}
 }
 
 // Autostart is NOT a custom action anymore. It's a declarative HKLM Run

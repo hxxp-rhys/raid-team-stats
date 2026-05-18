@@ -363,6 +363,19 @@ export const guildRouter = router({
         message: "Link your Battle.net account on the profile page first.",
       });
     }
+    // Battle.net access tokens are short-lived (~24h) and the auth-code
+    // flow issues NO refresh token, so a stored token simply goes stale.
+    // Catch that up-front (30s skew) with an actionable message instead
+    // of letting it surface as a raw "blizzard 401".
+    const RELINK_MSG =
+      "Your Battle.net sign-in has expired. Re-link Battle.net on the " +
+      "profile page (Link Battle.net), then try Discover guilds again.";
+    if (
+      typeof account.expires_at === "number" &&
+      account.expires_at * 1000 <= Date.now() + 30_000
+    ) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: RELINK_MSG });
+    }
 
     const { blizzardClient } = await import("@/server/ingestion/blizzard/client");
     const { endpoints } = await import("@/server/ingestion/blizzard/endpoints");
@@ -378,11 +391,23 @@ export const guildRouter = router({
 
     const region = env.BLIZZARD_REGION;
     const client = blizzardClient();
-    const characters = await client.request(endpoints.userCharacters(region), {
-      region,
-      schema: userCharactersResponseSchema,
-      auth: { kind: "user", accessToken: account.access_token },
-    });
+    const characters = await client
+      .request(endpoints.userCharacters(region), {
+        region,
+        schema: userCharactersResponseSchema,
+        auth: { kind: "user", accessToken: account.access_token },
+      })
+      .catch((err: unknown) => {
+        // No refresh-token path for Battle.net — a 401 here means the
+        // token went stale; turn it into the same re-link guidance.
+        if (err instanceof Error && /\b401\b/.test(err.message)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: RELINK_MSG,
+          });
+        }
+        throw err;
+      });
 
     type Faction = "ALLIANCE" | "HORDE" | "NEUTRAL";
     const factionFromRaw = (raw: string | undefined, fallback: Faction): Faction =>

@@ -4,7 +4,7 @@
 
   <Package Name="Stat Smith Uploader"
            Manufacturer="Stat Smith"
-           Version="1.0.14.0"
+           Version="1.0.15.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -40,24 +40,6 @@
       <Component Id="UploadNowCmd">
         <File Id="upload_now.cmd" Source="installer\upload-now.cmd" KeyPath="yes" />
       </Component>
-
-      <!-- Autostart as a NORMAL Windows startup app (HKLM Run) — NOT a
-           scheduled task and NOT a service. Runs in the signed-in user's
-           session at every logon, shows in Task Manager > Startup (the
-           user can toggle it there), and is fully MSI-managed: removed on
-           uninstall, no custom-action scripting. Only present when the
-           user opted in (RUNATSTARTUP checkbox). run-hidden.vbs launches
-           the uploader in watch mode with no console window. -->
-      <Component Id="AutostartRun"
-                 Guid="7E2B9C4D-5A6F-4B81-9C3D-2E4F6A8B0C12"
-                 Condition="RUNATSTARTUP = &quot;1&quot;">
-        <RegistryValue Root="HKLM"
-                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
-                       Name="RaidTeamStatsUploader"
-                       Type="string"
-                       Value="&quot;[INSTALLFOLDER]rts-companion.exe&quot; --watch"
-                       KeyPath="yes" />
-      </Component>
     </ComponentGroup>
 
     <!-- Desktop + Start Menu shortcuts so users never navigate to the
@@ -91,6 +73,30 @@
       </Directory>
     </StandardDirectory>
 
+    <!-- Autostart: a shortcut in the COMMON Startup folder (replaces the
+         old, invisible WOW6432Node\Run value as of 1.0.15). Runs in the
+         signed-in user's session at EVERY logon, is visible & toggleable
+         in Explorer and Task Manager > Startup, and is fully MSI-managed
+         (removed on uninstall). rts-companion.exe is GUI-subsystem so it
+         runs with NO window. Only present when the user opted in
+         (RUNATSTARTUP). An InstallFinalize custom action also launches it
+         immediately so it runs the moment setup completes — no need to
+         log out/in first. -->
+    <StandardDirectory Id="StartupFolder">
+      <Component Id="AutostartShortcut"
+                 Guid="C9D4E1F2-6A7B-4C8D-9E0F-1A2B3C4D5E6F"
+                 Condition="RUNATSTARTUP = &quot;1&quot;">
+        <Shortcut Id="StartupSc" Name="Stat Smith Uploader"
+                  Target="[INSTALLFOLDER]rts-companion.exe"
+                  Arguments="--watch"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Syncs your WoW data in the background" />
+        <RemoveFolder Id="StartupFolder" On="uninstall" />
+        <RegistryValue Root="HKLM" Key="Software\raid-team-stats\Uploader"
+                       Name="startup" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
     <ComponentGroup Id="AddonStageFiles" Directory="ADDONSTAGE">
       <Component Id="AddonToc">
         <File Id="StatSmith.toc"
@@ -109,6 +115,7 @@
       <ComponentGroupRef Id="AddonStageFiles" />
       <ComponentRef Id="DesktopShortcut" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="AutostartShortcut" />
     </Feature>
 
     <!-- ───────── validation (immediate, on the config dialog's Next) ───────── -->
@@ -126,8 +133,19 @@
     <CustomAction Id="InstallAddon" BinaryRef="RtsScript" JScriptCall="installAddon"
                   Execute="deferred" Impersonate="no" Return="check" />
 
-    <!-- Autostart is now a declarative HKLM Run component (AutostartRun)
-         — no scheduled-task custom action. -->
+    <!-- Autostart is a Common-Startup-folder shortcut (AutostartShortcut)
+         for subsequent logons; this CA launches it IMMEDIATELY at the end
+         of a successful install so it runs the moment setup finishes (no
+         log out/in needed). Impersonate=yes → runs in the installing
+         user's session (sees their %LOCALAPPDATA% config + WoW folder);
+         asyncNoWait → the installer doesn't block on the long-lived
+         background watch process. -->
+    <CustomAction Id="LaunchCompanion"
+                  FileRef="rts_companion.exe"
+                  ExeCommand="--watch"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
 
     <!-- uninstall: stop the running agent FIRST (so RemoveFiles can delete
          the otherwise-locked exe), also delete any LEGACY scheduled task
@@ -158,6 +176,11 @@
               Condition="NOT REMOVE" />
       <Custom Action="InstallAddon" After="WriteConfig"
               Condition="NOT REMOVE" />
+
+      <!-- Start the uploader right after a successful install/upgrade
+           when the user opted into autostart. -->
+      <Custom Action="LaunchCompanion" After="InstallFinalize"
+              Condition="NOT REMOVE AND RUNATSTARTUP=&quot;1&quot;" />
     </InstallExecuteSequence>
 
     <!-- WixUI_InstallDir gives Welcome/License/InstallDir/Verify/Progress.
