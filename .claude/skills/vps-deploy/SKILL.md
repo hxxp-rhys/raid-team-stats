@@ -143,6 +143,23 @@ breaks the validator. Ignore throwaway `^scripts/` diag-script lines.
 - Then ship via §B (binary artifact — no web dance; the
   `/uploader/installer` route reads the MSI from disk per request).
 
+## H. Cloudflare-only firewall (H2)
+
+`/usr/local/sbin/cloudflare-firewall-sync.sh` (source of truth:
+`infra/cloudflare-firewall-sync.sh`) locks tcp 80/443 to Cloudflare
+ranges. **Caddy is a Docker container → Docker DNAT bypasses UFW; the
+script manages the `DOCKER-USER` iptables chain + an ipset instead.**
+Cron: `/etc/cron.d/cloudflare-firewall-sync` (04:00 daily + `@reboot`).
+- Restarting/recreating *containers* (our normal deploy) does NOT clear
+  `DOCKER-USER`. A Docker **daemon** restart (`systemctl restart docker`)
+  or host reboot DOES — `@reboot` covers reboots; after any manual
+  daemon restart, run `cloudflare-firewall-sync.sh` or 80/443 stays
+  open until the next 04:00.
+- Verify: via CF `curl https://raiders.hxxp.io/` = 200; direct origin
+  `curl --resolve raiders.hxxp.io:443:66.228.39.54 …` must time out.
+- Rollback: `iptables -F DOCKER-USER; iptables -A DOCKER-USER -j RETURN`
+  (and `ip6tables` likewise) reopens immediately.
+
 ## Related memory
 
 `vps-sync-winscp-pitfalls`, `docker-next-cache-prisma`,
