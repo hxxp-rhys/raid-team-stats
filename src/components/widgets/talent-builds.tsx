@@ -28,7 +28,7 @@ export function TalentBuildsWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Talent builds"
-      description="Copy/paste loadout strings per member. Needs the in-game uploader."
+      description="Copy/paste loadout strings per member (from the Blizzard sync)."
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -56,7 +56,13 @@ export function TalentBuildsWidget({ raidTeamId }: { raidTeamId: string }) {
           </thead>
           <tbody className="divide-border divide-y">
             {q.data.members.map((m) => {
-              const str = m.latest.addon?.talents?.importString ?? null;
+              // Blizzard /specializations is the source (the in-game addon
+              // can't read the loadout on WoW 12.0); fall back to an addon
+              // import string if an older upload still carries one.
+              const str =
+                m.latest.character?.loadoutText ??
+                m.latest.addon?.talents?.importString ??
+                null;
               return (
                 <tr key={m.character.id}>
                   <th

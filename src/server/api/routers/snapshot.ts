@@ -126,7 +126,8 @@ function buildAddonView(
         season:
           num(dapi.GetCurrentDelvesSeasonNumber) ??
           num(dapi.GetDelvesSeasonNumber),
-        tier: num(dapi.GetCurrentDelveTier),
+        tier:
+          num(dapi.GetActiveDelveTier) ?? num(dapi.GetCurrentDelveTier),
         brann: num(p.delves.companion?.level),
       }
     : null;
@@ -206,6 +207,7 @@ export const snapshotRouter = router({
                 itemLevel: true,
                 level: true,
                 specName: true,
+                loadoutText: true,
                 capturedAt: true,
               },
             }),

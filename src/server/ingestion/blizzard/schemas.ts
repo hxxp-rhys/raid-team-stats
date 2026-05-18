@@ -115,6 +115,78 @@ export const characterSummaryResponseSchema = z
 export type CharacterSummaryResponse = z.infer<typeof characterSummaryResponseSchema>;
 
 /**
+ * /profile/wow/character/{realmSlug}/{characterName}/specializations
+ * — every spec's saved loadouts. We only need the active loadout's
+ * `talent_loadout_code` (the copy/paste import string) and the active
+ * spec id; kept permissive so Blizzard adding fields never breaks it.
+ */
+export const characterSpecializationsResponseSchema = z
+  .object({
+    active_specialization: z
+      .object({ id: z.number().int().optional() })
+      .passthrough()
+      .nullable()
+      .optional(),
+    specializations: z
+      .array(
+        z
+          .object({
+            specialization: z
+              .object({ id: z.number().int().optional() })
+              .passthrough()
+              .optional(),
+            loadouts: z
+              .array(
+                z
+                  .object({
+                    is_active: z.boolean().optional(),
+                    talent_loadout_code: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type CharacterSpecializationsResponse = z.infer<
+  typeof characterSpecializationsResponseSchema
+>;
+
+/**
+ * Pull the active loadout's import string from a specializations payload:
+ * prefer the loadout flagged active under the active spec, else any active
+ * loadout, else null. (No web fallback exists — the addon can't read this
+ * on 12.0.)
+ */
+export function activeLoadoutCode(
+  data: CharacterSpecializationsResponse,
+): string | null {
+  const specs = data.specializations ?? [];
+  const pick = (
+    loadouts?: { is_active?: boolean; talent_loadout_code?: string }[],
+  ): string | null => {
+    const a = (loadouts ?? []).find(
+      (l) => l.is_active === true && l.talent_loadout_code,
+    );
+    return a?.talent_loadout_code ?? null;
+  };
+  const activeId = data.active_specialization?.id ?? null;
+  if (activeId != null) {
+    const match = specs.find((s) => s.specialization?.id === activeId);
+    const code = pick(match?.loadouts);
+    if (code) return code;
+  }
+  for (const s of specs) {
+    const code = pick(s.loadouts);
+    if (code) return code;
+  }
+  return null;
+}
+
+/**
  * /profile/wow/character/{realmSlug}/{characterName}/encounters/raids
  * — per-expansion → per-instance → per-mode → per-encounter completion list.
  * Schema kept minimal; raw payload is preserved for replay.

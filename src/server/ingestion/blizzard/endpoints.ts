@@ -50,6 +50,21 @@ export const endpoints = {
     namespace: profileNamespace(region),
   }),
 
+  /**
+   * GET — character specializations: every spec's saved loadouts incl. the
+   * `talent_loadout_code` export string and `active_specialization`. WoW
+   * 12.0 locks the loadout away from in-game addons, so this authenticated
+   * endpoint is the only source for the Talent-builds widget.
+   */
+  characterSpecializations: (
+    region: string,
+    realmSlug: string,
+    characterName: string,
+  ): BlizzardPath => ({
+    path: `/profile/wow/character/${buildCharacterPath(realmSlug, characterName)}/specializations`,
+    namespace: profileNamespace(region),
+  }),
+
   /** GET — M+ index for a character (current overall rating + season list). */
   characterMythicKeystoneIndex: (
     region: string,

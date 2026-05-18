@@ -19,13 +19,16 @@ local AddonName, ns = ...
 
 -- SCHEMA 2: adds currencies, inventory (bag/bank), delves, lockouts,
 -- consumables, per-activity vault reward previews, and ownedKeystone.
--- 1.1.1: Midnight 12.0.5 collector fixes — spec via C_SpecializationInfo
--- (the bare globals were deprecated in 11.2 and return nil), talent
--- loadout string resolved from multiple configID sources (GetActiveConfigID
--- often nil), and raid lockouts requested via RequestRaidInfo() +
--- UPDATE_INSTANCE_INFO so numEncounters / per-boss state are populated.
+-- 1.1.1: Midnight 12.0.5 collector fixes — spec via C_SpecializationInfo,
+-- talent configID from multiple sources, RequestRaidInfo() for lockouts.
+-- 1.1.2: /dump on a live 12.0.5 client proved the APIs all WORK — the
+-- failure was timing: collect() at login+8s / PLAYER_LOGOUT runs before
+-- the server round-trips (keystone/lockouts/talents/delves) are back.
+-- Fix: extra delayed login snapshots + a steady 60s in-session ticker so
+-- the file the companion reads always has fully-loaded data. Also use the
+-- confirmed delve names (GetActiveDelveTier / GetCompanionInfoForActivePlayer).
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.1"
+local ADDON_VERSION = "1.1.2"
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -422,10 +425,15 @@ local function collectDelves()
   local out = {}
   if not C_DelvesUI then return out end
   out.api = {}
+  -- Confirmed live 12.0.5 names (verified via /dump): the tier getter is
+  -- GetActiveDelveTier (NOT GetCurrentDelveTier) and companion info is
+  -- GetCompanionInfoForActivePlayer. Old names kept as fallbacks so the
+  -- addon still works if Blizzard renames again.
   local getters = {
     "GetCurrentDelvesSeasonNumber",
     "GetDelvesSeasonNumber",
     "HasActiveDelve",
+    "GetActiveDelveTier",
     "GetCurrentDelveTier",
     "GetDelveTier",
     "GetSeasonTierID",
@@ -438,18 +446,19 @@ local function collectDelves()
       if ok and v ~= nil and type(v) ~= "table" then out.api[fn] = v end
     end
   end
-  if C_DelvesUI.GetCompanionInfo then
-    local ok, info = pcall(C_DelvesUI.GetCompanionInfo)
-    if ok and type(info) == "table" then
-      out.companion = { level = info.level, name = info.name, xp = info.xp }
-    end
-  end
-  -- Brann level via the curio/companion ranking API when GetCompanionInfo
-  -- isn't exposed on this patch (companion data has no web API).
-  if not out.companion and C_DelvesUI.GetCurrentDelvesCompanionLevel then
-    local ok, lvl = pcall(C_DelvesUI.GetCurrentDelvesCompanionLevel)
-    if ok and lvl ~= nil and type(lvl) ~= "table" then
-      out.companion = { level = lvl }
+  for _, fn in ipairs({
+    "GetCompanionInfoForActivePlayer",
+    "GetCompanionInfo",
+  }) do
+    if not out.companion and type(C_DelvesUI[fn]) == "function" then
+      local ok, info = pcall(C_DelvesUI[fn])
+      if ok and type(info) == "table" then
+        -- Shape isn't documented; keep the raw table (server reads
+        -- whatever field carries Brann's level) plus a best-guess.
+        out.companion = info
+        out.companion.level = info.level or info.experienceLevel
+          or info.companionLevel or out.companion.level
+      end
     end
   end
   return out
@@ -676,6 +685,7 @@ SLASH_RTSUPLOAD1 = "/rtsupload"
 SLASH_RTSUPLOAD2 = "/rts"
 
 -- ─── lifecycle ──────────────────────────────────────────────────────────
+local refreshTicker -- steady in-session re-snapshot (server data lands late)
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
@@ -704,7 +714,18 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     pcall(function() C_MythicPlus.RequestMapInfo() end)
     pcall(function() C_WeeklyRewards.CanClaimRewards() end)
     pcall(RequestRaidInfo)
+    -- The data behind keystone/lockouts/talents/delves all needs a server
+    -- round-trip that ISN'T back at +8s, and the PLAYER_LOGOUT snapshot is
+    -- too late for those round-trips to finish. So snapshot a few times
+    -- after login AND keep a steady 60s ticker running the whole session —
+    -- the companion (watch mode, every 5 min) then always reads a file
+    -- whose server-sourced fields are fully populated, regardless of how
+    -- briefly the player was online.
     C_Timer.After(8, collect)
+    C_Timer.After(25, collect)
+    if not refreshTicker then
+      refreshTicker = C_Timer.NewTicker(60, collect)
+    end
     print("|cff39c5bbRaid Team Stats|r uploader loaded. /rts export to copy a manual export, /rts help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.

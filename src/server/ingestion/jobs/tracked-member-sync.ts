@@ -5,6 +5,8 @@ import { blizzardClient } from "@/server/ingestion/blizzard/client";
 import { endpoints } from "@/server/ingestion/blizzard/endpoints";
 import {
   characterSummaryResponseSchema,
+  characterSpecializationsResponseSchema,
+  activeLoadoutCode,
   mythicKeystoneIndexResponseSchema,
   mythicKeystoneSeasonResponseSchema,
   raidEncountersResponseSchema,
@@ -203,6 +205,33 @@ export async function handleTrackedMemberSync(
     const specId =
       typeof summary.active_spec?.id === "number" ? summary.active_spec.id : null;
 
+    // Talent loadout export code. WoW 12.0 locks this away from in-game
+    // addons (the addon collector returns nothing), so the authenticated
+    // Blizzard /specializations endpoint is the only source. Best-effort:
+    // a failure here must not lose the summary snapshot.
+    let loadoutText: string | null = null;
+    try {
+      const specs = await client.request(
+        endpoints.characterSpecializations(
+          region,
+          character.realmSlug,
+          character.name,
+        ),
+        {
+          region,
+          schema: characterSpecializationsResponseSchema,
+          auth: { kind: "app" },
+          minFloor: 5,
+        },
+      );
+      loadoutText = activeLoadoutCode(specs);
+    } catch (err) {
+      logger.warn(
+        { err, character: character.name },
+        "blizzard specializations fetch failed; talent loadout omitted",
+      );
+    }
+
     await writeCharacterSnapshot({
       characterId: character.id,
       source: "BLIZZARD",
@@ -211,7 +240,7 @@ export async function handleTrackedMemberSync(
       level: summary.level ?? null,
       specId,
       specName,
-      loadoutText: null,
+      loadoutText,
       rawPayload: summary,
     });
 
