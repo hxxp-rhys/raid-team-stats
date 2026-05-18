@@ -19,8 +19,13 @@ local AddonName, ns = ...
 
 -- SCHEMA 2: adds currencies, inventory (bag/bank), delves, lockouts,
 -- consumables, per-activity vault reward previews, and ownedKeystone.
+-- 1.1.1: Midnight 12.0.5 collector fixes — spec via C_SpecializationInfo
+-- (the bare globals were deprecated in 11.2 and return nil), talent
+-- loadout string resolved from multiple configID sources (GetActiveConfigID
+-- often nil), and raid lockouts requested via RequestRaidInfo() +
+-- UPDATE_INSTANCE_INFO so numEncounters / per-boss state are populated.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.0"
+local ADDON_VERSION = "1.1.1"
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -95,24 +100,59 @@ end
 -- ─── data collectors (each pcall-guarded by collect()) ──────────────────
 local REGION_CODE = { [1] = "us", [2] = "kr", [3] = "eu", [4] = "tw", [5] = "cn" }
 
+-- Spec APIs moved to C_SpecializationInfo in 11.2.0; the bare globals
+-- (GetSpecialization / GetSpecializationInfo) are deprecated and return
+-- nil on 12.0.x. Probe the namespace first, fall back to the legacy
+-- globals so the addon keeps working across every 12.0.x patch.
+local function getSpecIndex()
+  if C_SpecializationInfo and C_SpecializationInfo.GetSpecialization then
+    local ok, v = pcall(C_SpecializationInfo.GetSpecialization)
+    if ok and v then return v end
+  end
+  if GetSpecialization then
+    local ok, v = pcall(GetSpecialization)
+    if ok and v then return v end
+  end
+  return nil
+end
+
+-- Returns specId, specName for a spec index (C_SpecializationInfo.
+-- GetSpecializationInfo and the legacy global both return id, name, ...).
+local function getSpecInfo(idx)
+  if not idx then return nil, nil end
+  if C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo then
+    local ok, specId, specName = pcall(C_SpecializationInfo.GetSpecializationInfo, idx)
+    if ok and (specId or specName) then return specId, specName end
+  end
+  if GetSpecializationInfo then
+    local ok, specId, specName = pcall(GetSpecializationInfo, idx)
+    if ok and (specId or specName) then return specId, specName end
+  end
+  return nil, nil
+end
+
+-- Stable SpecializationID for the talent/loadout APIs.
+local function getCurrentSpecID()
+  if PlayerUtil and PlayerUtil.GetCurrentSpecID then
+    local ok, v = pcall(PlayerUtil.GetCurrentSpecID)
+    if ok and v then return v end
+  end
+  return (getSpecInfo(getSpecIndex()))
+end
+
 local function collectIdentity()
   local name = UnitName("player")
   local realm = GetNormalizedRealmName() or GetRealmName()
   local _, classFile = UnitClass("player")
   local regionId = (GetCurrentRegion and GetCurrentRegion()) or 0
-  local specName
-  do
-    local idx = GetSpecialization and GetSpecialization()
-    if idx then
-      specName = select(2, GetSpecializationInfo(idx))
-    end
-  end
+  local specId, specName = getSpecInfo(getSpecIndex())
   return {
     name = name,
     realm = realm,
     region = REGION_CODE[regionId] or tostring(regionId),
     class = classFile,
     spec = specName,
+    specId = specId,
     level = UnitLevel("player"),
     faction = UnitFactionGroup("player"),
   }
@@ -174,23 +214,34 @@ local function collectMythicPlus()
   if C_MythicPlus then
     pcall(function() C_MythicPlus.RequestRewards() end)
     if C_MythicPlus.GetCurrentSeason then out.season = C_MythicPlus.GetCurrentSeason() end
-    -- The keystone currently in the player's bag (NOT exposed by the
-    -- Blizzard web API / Raider.IO — they only show completed runs).
-    if C_MythicPlus.GetOwnedKeystoneChallengeMapID then
-      local ok, mapId = pcall(C_MythicPlus.GetOwnedKeystoneChallengeMapID)
-      if ok and mapId then
-        local lvl
-        if C_MythicPlus.GetOwnedKeystoneLevel then
-          local ok2, l = pcall(C_MythicPlus.GetOwnedKeystoneLevel)
-          if ok2 then lvl = l end
-        end
-        local mapName
-        if C_ChallengeMode and C_ChallengeMode.GetMapUIInfo then
-          local ok3, n = pcall(C_ChallengeMode.GetMapUIInfo, mapId)
-          if ok3 then mapName = n end
-        end
-        out.ownedKeystone = { mapId = mapId, level = lvl, mapName = mapName }
+    -- The keystone currently in the player's bag — NOT exposed by the
+    -- Blizzard web API / Raider.IO (they only show completed runs). The
+    -- getter name is current in 12.0 but the value needs RequestMapInfo()
+    -- to be populated and may legitimately be absent (no key in the bag).
+    -- Probe both getter spellings; accept nil silently.
+    pcall(function() C_MythicPlus.RequestMapInfo() end)
+    local mapId
+    for _, fn in ipairs({
+      "GetOwnedKeystoneChallengeMapID",
+      "GetOwnedKeystoneMapID",
+    }) do
+      if type(C_MythicPlus[fn]) == "function" then
+        local ok, v = pcall(C_MythicPlus[fn])
+        if ok and v then mapId = v break end
       end
+    end
+    if mapId then
+      local lvl
+      if C_MythicPlus.GetOwnedKeystoneLevel then
+        local ok2, l = pcall(C_MythicPlus.GetOwnedKeystoneLevel)
+        if ok2 then lvl = l end
+      end
+      local mapName
+      if C_ChallengeMode and C_ChallengeMode.GetMapUIInfo then
+        local ok3, n = pcall(C_ChallengeMode.GetMapUIInfo, mapId)
+        if ok3 then mapName = n end
+      end
+      out.ownedKeystone = { mapId = mapId, level = lvl, mapName = mapName }
     end
     if C_MythicPlus.GetRunHistory then
       local runs = C_MythicPlus.GetRunHistory(false, true) -- not previous weeks, this week
@@ -241,15 +292,45 @@ local function collectGear()
   return { items = items, equippedItemLevel = select(2, GetAverageItemLevel()) }
 end
 
+-- Talent loadout export string. The API names (C_ClassTalents.
+-- GetActiveConfigID + C_Traits.GenerateImportString) are CURRENT in
+-- 12.0 — the real failure mode is GetActiveConfigID() returning nil
+-- (player on an unsaved/starter build, or queried before the trait
+-- config is live). Resolve a usable configID from several sources and
+-- use the first that yields a non-empty import string.
 local function collectTalents()
   local out = {}
-  if C_ClassTalents and C_ClassTalents.GetActiveConfigID then
-    out.configId = C_ClassTalents.GetActiveConfigID()
-    if out.configId and C_Traits and C_Traits.GenerateImportString then
-      local ok, str = pcall(C_Traits.GenerateImportString, out.configId)
-      if ok then out.importString = str end
+  if not (C_ClassTalents and C_Traits and C_Traits.GenerateImportString) then
+    return out
+  end
+  local specID = getCurrentSpecID()
+  local candidates = {}
+  if C_ClassTalents.GetActiveConfigID then
+    local ok, cid = pcall(C_ClassTalents.GetActiveConfigID)
+    if ok and cid then candidates[#candidates + 1] = cid end
+  end
+  if specID and C_ClassTalents.GetLastSelectedSavedConfigID then
+    -- Returns -2 for a starter build; only real (> 0) ids are usable.
+    local ok, cid = pcall(C_ClassTalents.GetLastSelectedSavedConfigID, specID)
+    if ok and type(cid) == "number" and cid > 0 then
+      candidates[#candidates + 1] = cid
     end
   end
+  if specID and C_ClassTalents.GetConfigIDsBySpecID then
+    local ok, ids = pcall(C_ClassTalents.GetConfigIDsBySpecID, specID)
+    if ok and type(ids) == "table" then
+      for _, cid in ipairs(ids) do candidates[#candidates + 1] = cid end
+    end
+  end
+  for _, cid in ipairs(candidates) do
+    local ok, str = pcall(C_Traits.GenerateImportString, cid)
+    if ok and type(str) == "string" and str ~= "" then
+      out.configId = cid
+      out.importString = str
+      return out
+    end
+  end
+  out.configId = candidates[1] -- keep an id for debug even with no string
   return out
 end
 
@@ -346,6 +427,9 @@ local function collectDelves()
     "GetDelvesSeasonNumber",
     "HasActiveDelve",
     "GetCurrentDelveTier",
+    "GetDelveTier",
+    "GetSeasonTierID",
+    "GetDelveLevel",
     "GetHighestRunForCurrentSeason",
   }
   for _, fn in ipairs(getters) do
@@ -360,13 +444,29 @@ local function collectDelves()
       out.companion = { level = info.level, name = info.name, xp = info.xp }
     end
   end
+  -- Brann level via the curio/companion ranking API when GetCompanionInfo
+  -- isn't exposed on this patch (companion data has no web API).
+  if not out.companion and C_DelvesUI.GetCurrentDelvesCompanionLevel then
+    local ok, lvl = pcall(C_DelvesUI.GetCurrentDelvesCompanionLevel)
+    if ok and lvl ~= nil and type(lvl) ~= "table" then
+      out.companion = { level = lvl }
+    end
+  end
   return out
 end
 
 -- Weekly raid/dungeon lockouts incl. per-boss kill state THIS reset.
--- Blizzard's web API only exposes season aggregates, not the live lockout.
+-- Blizzard's web API only exposes season aggregates, not the live
+-- lockout. GetSavedInstanceInfo's signature is correct in 12.0, but the
+-- saved-instance list (esp. numEncounters / per-boss state) is only
+-- populated AFTER RequestRaidInfo() round-trips and UPDATE_INSTANCE_INFO
+-- fires — without it numEncounters reads 0 and the boss list is empty.
+-- The lifecycle code requests this on login and re-snapshots on
+-- UPDATE_INSTANCE_INFO so the logout file the companion reads is whole;
+-- the request here is a best-effort refresh.
 local function collectLockouts()
   local out = {}
+  pcall(RequestRaidInfo)
   local num = 0
   pcall(function() num = GetNumSavedInstances() or 0 end)
   for i = 1, num do
@@ -583,14 +683,27 @@ ev:RegisterEvent("PLAYER_LOGOUT")
 ev:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 ev:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 ev:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+-- Re-snapshot when the server delivers data that isn't ready at login:
+-- raid lockouts (UPDATE_INSTANCE_INFO) and the talent loadout
+-- (TRAIT_CONFIG_UPDATED / PLAYER_TALENT_UPDATE).
+ev:RegisterEvent("UPDATE_INSTANCE_INFO")
+ev:RegisterEvent("TRAIT_CONFIG_UPDATED")
+ev:RegisterEvent("PLAYER_TALENT_UPDATE")
 ev:SetScript("OnEvent", function(self, event, arg1)
   if event == "ADDON_LOADED" and arg1 == AddonName then
     RaidTeamStatsUploaderDB = RaidTeamStatsUploaderDB or {}
     self:UnregisterEvent("ADDON_LOADED")
   elseif event == "PLAYER_LOGIN" then
-    -- Ask the client to populate vault / M+ data, then snapshot shortly after.
+    -- Ask the client to populate the data that needs a server round-trip
+    -- (vault, M+ rewards/keystone, AND raid lockouts) BEFORE the first
+    -- snapshot. Without RequestRaidInfo() the saved-instance list reports
+    -- numEncounters=0 with no per-boss state. UPDATE_INSTANCE_INFO and the
+    -- talent events re-snapshot when that data lands, so the logout file
+    -- the companion reads is complete.
     pcall(function() C_MythicPlus.RequestRewards() end)
+    pcall(function() C_MythicPlus.RequestMapInfo() end)
     pcall(function() C_WeeklyRewards.CanClaimRewards() end)
+    pcall(RequestRaidInfo)
     C_Timer.After(8, collect)
     print("|cff39c5bbRaid Team Stats|r uploader loaded. /rts export to copy a manual export, /rts help for commands.")
   elseif event == "PLAYER_LOGOUT" then
