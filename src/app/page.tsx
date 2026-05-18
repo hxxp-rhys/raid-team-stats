@@ -46,9 +46,24 @@ export default async function Home() {
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col px-4 py-16 sm:py-24">
       <section className="flex flex-col items-start gap-6">
-        <p className="text-primary text-xs font-medium uppercase tracking-widest">
-          {env.NEXT_PUBLIC_APP_NAME}
-        </p>
+        <div className="flex items-center gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/stat-smith-logo.png"
+            alt={`${env.NEXT_PUBLIC_APP_NAME} logo`}
+            width={64}
+            height={64}
+            className="border-border/60 h-16 w-16 rounded-lg border"
+          />
+          <div className="flex flex-col">
+            <span className="text-2xl font-bold tracking-tight">
+              {env.NEXT_PUBLIC_APP_NAME}
+            </span>
+            <span className="text-primary text-sm font-medium tracking-wide">
+              forging numbers into insight
+            </span>
+          </div>
+        </div>
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
           Stop hand-auditing your raid team in a spreadsheet.
         </h1>

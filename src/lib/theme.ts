@@ -11,6 +11,8 @@
 
 export const THEME_IDS = [
   "default-dark",
+  "forge",
+  "anvil",
   "alliance",
   "horde",
   "parchment",
@@ -25,6 +27,14 @@ export const THEME_META: Record<ThemeId, { name: string; description: string }> 
   "default-dark": {
     name: "Default dark",
     description: "Neutral high-contrast dark.",
+  },
+  forge: {
+    name: "Forge",
+    description: "Stat Smith dark: deep navy, forge-orange, rune teal.",
+  },
+  anvil: {
+    name: "Anvil",
+    description: "Stat Smith light: warm parchment + steel, forge-orange.",
   },
   alliance: {
     name: "Alliance",
@@ -53,4 +63,5 @@ export const isValidTheme = (v: unknown): v is ThemeId =>
  * Whether the theme's base palette is light (so we should NOT also apply
  * the `.dark` class). All others are dark-based.
  */
-export const isLightTheme = (t: ThemeId): boolean => t === "parchment";
+export const isLightTheme = (t: ThemeId): boolean =>
+  t === "parchment" || t === "anvil";

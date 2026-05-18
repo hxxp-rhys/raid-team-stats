@@ -37,9 +37,25 @@ export async function AppHeader() {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4">
         <Link
           href="/"
-          className="text-foreground hover:text-primary text-sm font-semibold tracking-tight"
+          className="group flex min-w-0 items-center gap-2.5"
+          title={`${env.NEXT_PUBLIC_APP_NAME} — forging numbers into insight`}
         >
-          Raid Team Stats
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/stat-smith-logo.png"
+            alt={`${env.NEXT_PUBLIC_APP_NAME} logo`}
+            width={28}
+            height={28}
+            className="border-border/60 h-7 w-7 shrink-0 rounded"
+          />
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="text-foreground group-hover:text-primary truncate text-sm font-semibold tracking-tight">
+              {env.NEXT_PUBLIC_APP_NAME}
+            </span>
+            <span className="text-muted-foreground hidden truncate text-[10px] sm:block">
+              forging numbers into insight
+            </span>
+          </span>
         </Link>
         <UserMenu label={label} isAdmin={isAdmin} />
       </div>

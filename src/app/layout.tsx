@@ -18,8 +18,12 @@ import "./globals.css";
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: env.NEXT_PUBLIC_APP_NAME,
-  description: "Customizable raid-team stat tracking for World of Warcraft guilds.",
+  title: {
+    default: `${env.NEXT_PUBLIC_APP_NAME} — forging numbers into insight`,
+    template: `%s — ${env.NEXT_PUBLIC_APP_NAME}`,
+  },
+  description:
+    "Stat Smith — forging numbers into insight. Customizable, auto-synced raid-team stat dashboards for World of Warcraft guilds.",
   robots: { index: false, follow: false },
   referrer: "strict-origin-when-cross-origin",
 };
