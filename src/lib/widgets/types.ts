@@ -352,7 +352,7 @@ export const WIDGET_META: Record<
   weekly_lockouts: {
     title: "Weekly lockouts",
     description:
-      "Raid bosses each member cleared THIS reset, by difficulty. Addon-only.",
+      "Heroic/Mythic bosses each member cleared THIS reset, per raid. Addon-only.",
   },
   upgrade_currencies: {
     title: "Upgrade currencies",

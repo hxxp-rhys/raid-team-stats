@@ -49,6 +49,11 @@ export type AddonView = {
     food: number;
     weaponEnh: number;
     other: number;
+    /** Per-bucket itemized list (name + count) for hover detail. */
+    breakdown: Record<
+      "flask" | "potion" | "food" | "weaponEnh" | "other",
+      Array<{ name: string; count: number }>
+    >;
   };
   delves: {
     season: number | null;
@@ -156,11 +161,25 @@ function buildAddonView(
   // subclass), so the old sub-number → bucket map mostly fell to "other".
   // Classify by item NAME (the addon already sends it); fall back to the
   // subclass only when the name is inconclusive.
-  const consumables = { flask: 0, potion: 0, food: 0, weaponEnh: 0, other: 0 };
+  const consumables = {
+    flask: 0,
+    potion: 0,
+    food: 0,
+    weaponEnh: 0,
+    other: 0,
+    breakdown: {
+      flask: [] as Array<{ name: string; count: number }>,
+      potion: [] as Array<{ name: string; count: number }>,
+      food: [] as Array<{ name: string; count: number }>,
+      weaponEnh: [] as Array<{ name: string; count: number }>,
+      other: [] as Array<{ name: string; count: number }>,
+    },
+  };
+  type Bucket = "flask" | "potion" | "food" | "weaponEnh" | "other";
   const classify = (
     name: string,
     sub: number | null | undefined,
-  ): keyof typeof consumables => {
+  ): Bucket => {
     const n = name.toLowerCase();
     if (/\b(flask|phial)\b/.test(n)) return "flask";
     if (/\b(potion|cauldron|draught)\b/.test(n)) return "potion";
@@ -180,8 +199,13 @@ function buildAddonView(
   };
   for (const it of p.consumables?.items ?? []) {
     const n = it.count ?? 0;
-    const name = typeof it.name === "string" ? it.name : "";
-    consumables[classify(name, it.sub)] += n;
+    const name = typeof it.name === "string" ? it.name : "(unknown)";
+    const b = classify(name, it.sub);
+    consumables[b] += n;
+    consumables.breakdown[b].push({ name, count: n });
+  }
+  for (const b of Object.keys(consumables.breakdown) as Bucket[]) {
+    consumables.breakdown[b].sort((a, z) => z.count - a.count);
   }
 
   const dapi = (p.delves?.api ?? {}) as Record<string, unknown>;

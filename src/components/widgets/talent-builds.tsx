@@ -47,10 +47,11 @@ export function TalentBuildsWidget({ raidTeamId }: { raidTeamId: string }) {
                 m.latest.character?.loadoutText ??
                 m.latest.addon?.talents?.importString ??
                 null;
+              // Wowhead expects the RAW Blizzard import string in the path
+              // (it base64-decodes it). encodeURIComponent breaks the `+`
+              // that ~half of loadout strings contain — pass it verbatim.
               const href = str
-                ? `https://www.wowhead.com/talent-calc/blizzard/${encodeURIComponent(
-                    str,
-                  )}`
+                ? `https://www.wowhead.com/talent-calc/blizzard/${str}`
                 : null;
               return (
                 <tr key={m.character.id}>

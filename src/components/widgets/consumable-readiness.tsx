@@ -15,10 +15,27 @@ const COLS = [
   { key: "weaponEnh", label: "Wpn" },
 ] as const;
 
-function Cell({ n }: { n: number }) {
+function Cell({
+  n,
+  items,
+}: {
+  n: number;
+  items: Array<{ name: string; count: number }>;
+}) {
+  const tip =
+    items.length > 0
+      ? items.map((i) => `${i.name} ×${i.count}`).join("\n")
+      : undefined;
   return (
     <td className="px-2 py-1.5 text-center tabular-nums">
-      <span className={n > 0 ? "text-green-500 font-medium" : "text-destructive"}>
+      <span
+        title={tip}
+        className={
+          n > 0
+            ? "text-green-500 font-medium" + (tip ? " cursor-help" : "")
+            : "text-destructive"
+        }
+      >
         {n > 0 ? n : "✗"}
       </span>
     </td>
@@ -76,7 +93,13 @@ export function ConsumableReadinessWidget({
                     {m.character.name}
                   </th>
                   {c ? (
-                    COLS.map((col) => <Cell key={col.key} n={c[col.key]} />)
+                    COLS.map((col) => (
+                      <Cell
+                        key={col.key}
+                        n={c[col.key]}
+                        items={c.breakdown?.[col.key] ?? []}
+                      />
+                    ))
                   ) : (
                     <td
                       colSpan={COLS.length}
