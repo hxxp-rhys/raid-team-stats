@@ -68,22 +68,30 @@ ipset destroy "${SET4}_t"; ipset destroy "${SET6}_t"
 # DOCKER-USER is consulted (from FORWARD) BEFORE Docker's per-container
 # ACCEPTs, so dropping non-Cloudflare 80/443 here filters the published
 # Caddy ports while leaving every other container/flow alone (RETURN).
-sync_chain() { # $1=iptables|ip6tables  $2=setname
-  local ipt="$1" set="$2"
+sync_chain() { # $1=iptables|ip6tables  $2=setname  $3=docker-src-cidr
+  local ipt="$1" set="$2" dnet="$3"
   "$ipt" -L DOCKER-USER -n >/dev/null 2>&1 || {
     log "WARN: $ipt has no DOCKER-USER chain — ${ipt}/80,443 NOT filtered"
     return 0
   }
   "$ipt" -F DOCKER-USER
   "$ipt" -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+  # CRITICAL: DOCKER-USER is in the FORWARD path and sees BOTH directions.
+  # The 80/443 DROP below has no inbound-interface match, so without this
+  # rule it also drops CONTAINER EGRESS to any :80/:443 (Blizzard / WCL /
+  # Raider.IO), silently breaking every sync. Container traffic has an
+  # RFC1918 (v4) / ULA (v6) source; genuine external inbound never does,
+  # so allowing these sources cannot be used to bypass the CF-only filter.
+  "$ipt" -A DOCKER-USER -s "$dnet" -p tcp -m multiport --dports "$PORTS" \
+         -m comment --comment "$CMT" -j RETURN
   "$ipt" -A DOCKER-USER -p tcp -m multiport --dports "$PORTS" \
          -m set --match-set "$set" src -m comment --comment "$CMT" -j RETURN
   "$ipt" -A DOCKER-USER -p tcp -m multiport --dports "$PORTS" \
          -m comment --comment "$CMT" -j DROP
   "$ipt" -A DOCKER-USER -j RETURN
-  log "$ipt DOCKER-USER synced (allow CF -> 80/443, drop the rest)"
+  log "$ipt DOCKER-USER synced (egress allowed; inbound 80/443 CF-only)"
 }
-sync_chain iptables  "$SET4"
-sync_chain ip6tables "$SET6"
+sync_chain iptables  "$SET4" "172.16.0.0/12"
+sync_chain ip6tables "$SET6" "fc00::/7"
 
 log "done — only Cloudflare may reach tcp 80/443; SSH/22 untouched"
