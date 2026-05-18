@@ -104,8 +104,8 @@ export default async function Home() {
         <ol className="text-muted-foreground mt-4 list-decimal space-y-2 pl-5 text-sm">
           <li>Register with an email + password, verify, and sign in.</li>
           <li>
-            Link your Battle.net account on your profile — the app discovers
-            every guild your characters belong to.
+            Link your Battle.net account on the Account page — the app
+            discovers every guild your characters belong to.
           </li>
           <li>
             The guild master can claim the guild (auto-claim if you&apos;re

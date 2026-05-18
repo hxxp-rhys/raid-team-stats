@@ -249,7 +249,7 @@ const config: NextAuthConfig = {
               scope: account.scope,
             },
           });
-          return "/profile?bnet=already-linked";
+          return "/account?bnet=reconnected";
         }
 
         // First link: manually create the Account row attached to the current
@@ -280,7 +280,7 @@ const config: NextAuthConfig = {
         // (Auth.js does not mint a new session for the synthesized Battle.net
         // user) and avoids the duplicate-User-row that returning `true` would
         // produce.
-        return "/profile?bnet=linked";
+        return "/account?bnet=linked";
       }
       return true;
     },

@@ -360,7 +360,9 @@ export const guildRouter = router({
     if (!account?.access_token) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
-        message: "Link your Battle.net account on the profile page first.",
+        message:
+          "Link your Battle.net account on the Account page first " +
+          "(Link Battle.net).",
       });
     }
     // Battle.net access tokens are short-lived (~24h) and the auth-code
@@ -368,8 +370,8 @@ export const guildRouter = router({
     // Catch that up-front (30s skew) with an actionable message instead
     // of letting it surface as a raw "blizzard 401".
     const RELINK_MSG =
-      "Your Battle.net sign-in has expired. Re-link Battle.net on the " +
-      "profile page (Link Battle.net), then try Discover guilds again.";
+      "Your Battle.net sign-in has expired. On the Account page click " +
+      "“Reconnect Battle.net”, then try Discover guilds again.";
     if (
       typeof account.expires_at === "number" &&
       account.expires_at * 1000 <= Date.now() + 30_000

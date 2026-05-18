@@ -36,7 +36,10 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
   // cacheComponents' useSearchParams-needs-Suspense gotcha.
   const [justLinked] = useState(() => {
     if (typeof window === "undefined") return false;
-    return new URLSearchParams(window.location.search).get("bnet") === "linked";
+    // "reconnected" = re-auth to refresh an expired token; auto-run
+    // discovery just like a first link so the fresh token is used now.
+    const v = new URLSearchParams(window.location.search).get("bnet");
+    return v === "linked" || v === "reconnected";
   });
   const autoFired = useRef(false);
 
@@ -78,6 +81,20 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
             >
               My guilds
             </Link>
+            {/* Battle.net tokens expire ~24h and there's no refresh
+                token — re-running OAuth is the only way to get a fresh
+                one. The signIn callback updates the existing Account
+                row's token in place. */}
+            <Button
+              variant="outline"
+              onClick={() =>
+                signIn("battlenet", {
+                  callbackUrl: "/account?bnet=reconnected",
+                })
+              }
+            >
+              Reconnect Battle.net
+            </Button>
           </>
         ) : (
           <Button
