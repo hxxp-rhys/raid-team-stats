@@ -66,44 +66,50 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-3">
+        {/* 1. Gateway action. Battle.net tokens expire ~24h with no
+            refresh token, so "Refresh Battle.net" re-runs OAuth (the
+            signIn callback updates the existing Account row's token in
+            place); before linking it's the primary "Link Battle.net". */}
+        <Button
+          variant={battlenetLinked ? "outline" : "default"}
+          onClick={() =>
+            signIn("battlenet", {
+              callbackUrl: battlenetLinked
+                ? "/account?bnet=reconnected"
+                : "/account?bnet=linked",
+            })
+          }
+        >
+          {battlenetLinked ? "Refresh Battle.net" : "Link Battle.net"}
+        </Button>
+
+        {/* 2. Sync guilds — disabled until Battle.net is linked. */}
+        <Button
+          variant="default"
+          onClick={() => discover.mutate()}
+          disabled={!battlenetLinked || discover.isPending}
+        >
+          {discover.isPending ? "Syncing…" : "Sync guilds"}
+        </Button>
+
+        {/* 3. My guilds — disabled until Battle.net is linked. */}
         {battlenetLinked ? (
-          <>
-            <Button
-              onClick={() => discover.mutate()}
-              disabled={discover.isPending}
-              variant="default"
-            >
-              {discover.isPending ? "Syncing…" : "Sync guilds"}
-            </Button>
-            <Link
-              href="/guild"
-              className="border-border bg-background hover:bg-muted inline-flex h-8 items-center justify-center rounded-lg border px-2.5 text-sm font-medium transition-colors"
-            >
-              My guilds
-            </Link>
-            {/* Battle.net tokens expire ~24h and there's no refresh
-                token — re-running OAuth is the only way to get a fresh
-                one. The signIn callback updates the existing Account
-                row's token in place. */}
-            <Button
-              variant="outline"
-              onClick={() =>
-                signIn("battlenet", {
-                  callbackUrl: "/account?bnet=reconnected",
-                })
-              }
-            >
-              Refresh Battle.net
-            </Button>
-          </>
-        ) : (
-          <Button
-            onClick={() => signIn("battlenet", { callbackUrl: "/account?bnet=linked" })}
-            variant="default"
+          <Link
+            href="/guild"
+            className="border-border bg-background hover:bg-muted inline-flex h-8 items-center justify-center rounded-lg border px-2.5 text-sm font-medium transition-colors"
           >
-            Link Battle.net
-          </Button>
+            My guilds
+          </Link>
+        ) : (
+          <span
+            aria-disabled="true"
+            className="border-border bg-background pointer-events-none inline-flex h-8 cursor-not-allowed items-center justify-center rounded-lg border px-2.5 text-sm font-medium opacity-50"
+          >
+            My guilds
+          </span>
         )}
+
+        {/* 4. Sign out — always available. */}
         <Button variant="outline" onClick={() => signOut({ callbackUrl: "/" })}>
           Sign out
         </Button>
