@@ -73,7 +73,7 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
               disabled={discover.isPending}
               variant="default"
             >
-              {discover.isPending ? "Discovering…" : "Discover guilds from Battle.net"}
+              {discover.isPending ? "Syncing…" : "Sync guilds"}
             </Button>
             <Link
               href="/guild"
@@ -93,7 +93,7 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
                 })
               }
             >
-              Reconnect Battle.net
+              Refresh Battle.net
             </Button>
           </>
         ) : (

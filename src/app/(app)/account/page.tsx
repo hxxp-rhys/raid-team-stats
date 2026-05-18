@@ -49,7 +49,7 @@ export default async function AccountPage() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
-      <header className="mb-8 flex items-start justify-between gap-4">
+      <header className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
           <p className="text-muted-foreground text-sm">
@@ -58,6 +58,13 @@ export default async function AccountPage() {
         </div>
         <AccountRefreshButton />
       </header>
+
+      {/* Primary actions as a horizontal toolbar directly under the
+          title/subtitle (Sync guilds / Refresh Battle.net / My guilds /
+          Sign out). Discovery progress + result render just below it. */}
+      <div className="border-border mb-8 border-b pb-6">
+        <ProfileActions battlenetLinked={battlenetLinked} />
+      </div>
 
       <div className="space-y-6">
         <OwnerMfaWarning />
@@ -102,8 +109,6 @@ export default async function AccountPage() {
             </p>
           </CardContent>
         </Card>
-
-        <ProfileActions battlenetLinked={battlenetLinked} />
 
         <MfaCard />
 
