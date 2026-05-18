@@ -45,12 +45,12 @@ function Invoke-Sign($file) {
   Write-Host "      signed: $file"
 }
 
-Write-Host "[1/4] generating SEA blob..."
+Write-Host "[1/5] generating SEA blob..."
 Push-Location companion
 node --experimental-sea-config sea-config.json
 Pop-Location
 
-Write-Host "[2/4] bundling rts-companion.exe..."
+Write-Host "[2/5] bundling rts-companion.exe..."
 New-Item -ItemType Directory -Force installer\dist | Out-Null
 $nodeExe = (Get-Command node).Source
 Copy-Item $nodeExe installer\dist\rts-companion.exe -Force
@@ -59,12 +59,23 @@ npx --yes postject installer\dist\rts-companion.exe NODE_SEA_BLOB `
   --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
 Invoke-Sign "installer\dist\rts-companion.exe"
 
-Write-Host "[3/4] building MSI..."
+# Gate: the MSI custom actions run under CLASSIC JScript (ES3-era engine,
+# NOT Node/modern JS). It rejects things modern JS allows — most notably
+# trailing commas in function-call argument lists — and a single syntax
+# error makes EVERY custom action fail ("Setup ended prematurely, system
+# not modified"). Validate with the very same engine before shipping.
+Write-Host "[3/5] validating ca.js (classic JScript)..."
+& cscript //NoLogo //E:JScript installer\ca.js
+if ($LASTEXITCODE -ne 0) {
+  throw "ca.js failed the classic-JScript syntax check. The MSI scripting host is ES3 JScript: no trailing commas in calls, no let/const/arrow/template literals."
+}
+
+Write-Host "[4/5] building MSI..."
 wix build installer\Package.wxs installer\RtsUI.wxs `
   -ext WixToolset.UI.wixext `
   -o installer\dist\raid-team-stats-uploader.msi
 
-Write-Host "[4/4] signing MSI (if configured)..."
+Write-Host "[5/5] signing MSI (if configured)..."
 Invoke-Sign "installer\dist\raid-team-stats-uploader.msi"
 
 Write-Host "DONE -> installer\dist\raid-team-stats-uploader.msi"

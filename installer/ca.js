@@ -213,13 +213,15 @@ function startup() {
       var tf = fso.CreateTextFile(xmlPath, true, true); // Unicode (UTF-16LE+BOM)
       tf.Write(xml);
       tf.Close();
-      var rc = sh.Run(
+      // NOTE: keep sh.Run() calls single-line with no trailing comma —
+      // the MSI scripting host is classic (ES3) JScript, which rejects
+      // trailing commas in argument lists (compile error → every CA
+      // fails → "Setup ended prematurely"). Build the command in a var.
+      var createCmd =
         'cmd /c schtasks /Create /F /TN "RaidTeamStatsUploader" /XML "' +
-          xmlPath +
-          '"',
-        0,
-        true,
-      );
+        xmlPath +
+        '"';
+      var rc = sh.Run(createCmd, 0, true);
       created = rc === 0;
       try {
         fso.DeleteFile(xmlPath);
@@ -231,15 +233,13 @@ function startup() {
     if (!created) {
       var tr = 'wscript.exe //B \\"' + vbs + '\\"';
       var ru = principal ? ' /IT /RU "' + principal + '"' : "";
-      sh.Run(
+      var fbCmd =
         "cmd /c schtasks /Create /F /SC ONLOGON /RL LIMITED" +
-          ru +
-          ' /TN "RaidTeamStatsUploader" /TR "' +
-          tr +
-          '"',
-        0,
-        true,
-      );
+        ru +
+        ' /TN "RaidTeamStatsUploader" /TR "' +
+        tr +
+        '"';
+      sh.Run(fbCmd, 0, true);
     }
 
     // Start it now so the user doesn't have to sign out/in first. With
