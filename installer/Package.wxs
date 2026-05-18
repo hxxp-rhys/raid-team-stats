@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="raid-team-stats"
-           Version="1.0.5.0"
+           Version="1.0.6.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -39,6 +39,24 @@
       </Component>
       <Component Id="UploadNowCmd">
         <File Id="upload_now.cmd" Source="installer\upload-now.cmd" KeyPath="yes" />
+      </Component>
+
+      <!-- Autostart as a NORMAL Windows startup app (HKLM Run) — NOT a
+           scheduled task and NOT a service. Runs in the signed-in user's
+           session at every logon, shows in Task Manager > Startup (the
+           user can toggle it there), and is fully MSI-managed: removed on
+           uninstall, no custom-action scripting. Only present when the
+           user opted in (RUNATSTARTUP checkbox). run-hidden.vbs launches
+           the uploader in watch mode with no console window. -->
+      <Component Id="AutostartRun"
+                 Guid="7E2B9C4D-5A6F-4B81-9C3D-2E4F6A8B0C12"
+                 Condition="RUNATSTARTUP = &quot;1&quot;">
+        <RegistryValue Root="HKLM"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="RaidTeamStatsUploader"
+                       Type="string"
+                       Value="wscript.exe //B &quot;[INSTALLFOLDER]run-hidden.vbs&quot;"
+                       KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -108,13 +126,12 @@
     <CustomAction Id="InstallAddon" BinaryRef="RtsScript" JScriptCall="installAddon"
                   Execute="deferred" Impersonate="no" Return="check" />
 
-    <CustomAction Id="SetStartup" Property="Startup"
-                  Value="[INSTALLFOLDER]|[RUNATSTARTUP]|[LogonUser]|[ComputerName]" />
-    <CustomAction Id="Startup" BinaryRef="RtsScript" JScriptCall="startup"
-                  Execute="deferred" Impersonate="no" Return="check" />
+    <!-- Autostart is now a declarative HKLM Run component (AutostartRun)
+         — no scheduled-task custom action. -->
 
-    <!-- uninstall: stop the running agent + task FIRST (so RemoveFiles can
-         delete the locked exe and the watcher stops), then deep-clean. -->
+    <!-- uninstall: stop the running agent FIRST (so RemoveFiles can delete
+         the otherwise-locked exe), also delete any LEGACY scheduled task
+         left by pre-1.0.6 builds, then deep-clean. -->
     <CustomAction Id="StopAgent" BinaryRef="RtsScript" JScriptCall="stopAgent"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="SetUninstallClean" Property="UninstallClean"
@@ -140,11 +157,6 @@
       <Custom Action="SetInstallAddon" Before="InstallAddon"
               Condition="NOT REMOVE" />
       <Custom Action="InstallAddon" After="WriteConfig"
-              Condition="NOT REMOVE" />
-
-      <Custom Action="SetStartup" Before="Startup"
-              Condition="NOT REMOVE" />
-      <Custom Action="Startup" After="InstallAddon"
               Condition="NOT REMOVE" />
     </InstallExecuteSequence>
 

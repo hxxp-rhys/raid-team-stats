@@ -74,6 +74,7 @@ Write-Host "[4/5] building MSI..."
 wix build installer\Package.wxs installer\RtsUI.wxs `
   -ext WixToolset.UI.wixext `
   -o installer\dist\raid-team-stats-uploader.msi
+if ($LASTEXITCODE -ne 0) { throw "wix build failed (see the WIX error above); MSI not produced." }
 
 Write-Host "[5/5] signing MSI (if configured)..."
 Invoke-Sign "installer\dist\raid-team-stats-uploader.msi"

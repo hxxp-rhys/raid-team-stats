@@ -10,18 +10,22 @@ this small companion does the upload.
 Installed by the setup:
  - rts-companion.exe   the uploader (self-contained; no other software needed)
  - config.json         your settings (server, upload token, WoW folder)
- - run-hidden.vbs      used by the optional "run at startup" task
+ - run-hidden.vbs      launches the uploader with no console window
  - the addon           copied into <WoW>\_retail_\Interface\AddOns\RaidTeamStatsUploader
 
 Using it:
  1. In WoW, enable the "Raid Team Stats Uploader" addon, log in, then
     /reload (or log out once) so the game writes its data file.
- 2. If you chose "run at startup", the uploader starts immediately when the
-    install finishes and again at every Windows logon, syncing hidden in the
-    background after each /reload or logout. Otherwise run rts-companion.exe
-    (or with --watch to keep it syncing every 5 minutes).
+ 2. If you chose "run at startup", it's registered as a normal Windows
+    startup app (NOT a scheduled task or service): it starts in your
+    session at every sign-in and syncs hidden in the background after each
+    /reload or logout. You can toggle it any time in Task Manager >
+    Startup. To sync right now without waiting, double-click the desktop
+    "Raid Team Stats - Upload Now" shortcut. (You can also run
+    rts-companion.exe directly, or with --watch to poll every 5 minutes.)
 
 Your upload token is like a password. Rotate or revoke it any time on the
 website Account page. All uploads are sent over HTTPS (TLS).
 
-Uninstalling removes the companion, the addon folder, and the startup task.
+Uninstalling removes the companion, the addon folder, and the startup
+entry (and clears any leftover scheduled task from older versions).

@@ -112,7 +112,22 @@ breaks the validator. Ignore throwaway `^scripts/` diag-script lines.
   `MajorUpgrade` only replaces an install when the version is *higher*.
   Also bump it to cleanly supersede a *partially-installed / rolled-back*
   prior attempt on the user's machine.
-- MSI strings must be CP1252 (no `→`, `…`, box-drawing).
+- MSI strings must be CP1252 (no `→`, `…`, box-drawing). **`build.ps1`
+  and `.wxs` XML comments are equally unforgiving:** Windows PowerShell
+  reads `build.ps1` as ANSI (no BOM) — a stray `—`/Unicode there is a
+  *parse error*; and an XML comment containing `--` (e.g. ``--watch``)
+  fails `wix build` (WIX0104). Keep both ASCII.
+- **Autostart is a declarative HKLM `Run` component (`AutostartRun`),
+  NOT a scheduled task or service** (as of 1.0.6). It runs in the user's
+  session at logon, MSI-managed (uninstall removes it), conditioned via
+  the WiX v4 **`Condition` *attribute*** on `<Component>` (the v3
+  `<Condition>` *child element* errors WIX0005). `ca.js` `stopAgent()`
+  still `schtasks /Delete`s the legacy task so upgrades clean up. If a
+  user reports "autostart not working", it's a Run-key/logon issue now —
+  there is no task to debug.
+- `build.ps1` step [4/5] now `throw`s on a non-zero `wix build` exit —
+  before, a failed build still printed "DONE" and shipped a STALE MSI.
+  Always confirm the dist `.msi` mtime/size changed after a build.
 - **`installer/ca.js` runs under CLASSIC JScript (ES3 engine), not
   Node.** It rejects modern JS — most dangerously **trailing commas in
   function-call argument lists** (Prettier adds these to multi-line
