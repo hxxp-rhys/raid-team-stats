@@ -7,10 +7,10 @@ rem console output; cmd still waits for this one-shot run to finish.
 "%~dp0rts-companion.exe"
 echo.
 echo --- recent uploader log ---------------------------------------
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path $env:LOCALAPPDATA 'RaidTeamStats\uploader.log'; if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f -Tail 15 } else { Write-Output 'No log yet. In WoW: enable the Raid Team Stats Uploader addon, log in, then /reload (or log out) so it writes its data file.' }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path $env:LOCALAPPDATA 'RaidTeamStats\uploader.log'; if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f -Tail 15 } else { Write-Output 'No log yet. In WoW: enable the Stat Smith addon and log in - it writes its data file within ~60s.' }"
 echo ---------------------------------------------------------------
 echo Done. If "run at startup" was enabled, the uploader also syncs
-echo automatically in the background after every /reload or logout -
+echo automatically in the background every few minutes while you play -
 echo you do not need to run this each time.
 echo.
 pause

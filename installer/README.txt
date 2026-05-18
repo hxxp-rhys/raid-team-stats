@@ -7,24 +7,21 @@ in-game addon's saved data and uploads it to https://raiders.hxxp.io so it
 shows on your raid team's dashboard. WoW addons can't use the internet, so
 this small companion does the upload.
 
-(The in-game addon you enable in WoW is still listed as "Raid Team Stats
-Uploader" — that's expected; only this desktop companion is "Stat Smith".)
-
 Installed by the setup:
  - rts-companion.exe   the uploader (self-contained; no other software needed)
  - config.json         your settings (server, upload token, WoW folder),
                        kept in %LOCALAPPDATA%\RaidTeamStats (per-user;
                        not readable by other Windows accounts)
  - run-hidden.vbs      launches the uploader with no console window
- - the addon           copied into <WoW>\_retail_\Interface\AddOns\RaidTeamStatsUploader
+ - the addon           copied into <WoW>\_retail_\Interface\AddOns\StatSmith
 
 Using it:
- 1. In WoW, enable the "Raid Team Stats Uploader" addon, log in, then
-    /reload (or log out once) so the game writes its data file.
+ 1. In WoW, enable the "Stat Smith" addon and log in. It writes its data
+    file automatically within ~60s (no /reload needed).
  2. If you chose "run at startup", it's registered as a normal Windows
     startup app (NOT a scheduled task or service): it starts in your
-    session at every sign-in and syncs hidden in the background after each
-    /reload or logout. You can toggle it any time in Task Manager >
+    session at every sign-in and syncs hidden in the background every few
+    minutes while you play. You can toggle it any time in Task Manager >
     Startup. To sync right now without waiting, double-click the desktop
     "Stat Smith - Upload Now" shortcut. (You can also run
     rts-companion.exe directly, or with --watch to poll every 5 minutes.)

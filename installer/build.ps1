@@ -1,4 +1,4 @@
-# Builds the Raid Team Stats Uploader installer:
+# Builds the Stat Smith Uploader installer:
 #   1. bundles companion/sea-entry.cjs + the Node runtime -> rts-companion.exe
 #      (Node 24 Single Executable Application; no Node needed by end users)
 #   2. (optional) Authenticode-signs the exe
@@ -58,7 +58,7 @@ npx --yes postject installer\dist\rts-companion.exe NODE_SEA_BLOB `
   companion\sea-prep.blob `
   --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
 
-# Brand the exe so it is clearly "Raid Team Stats Uploader" everywhere
+# Brand the exe so it is clearly "Stat Smith Uploader" everywhere
 # in Windows (Task Manager / Explorer / Startup) and runs windowless.
 # Version comes from Package.wxs (single source of truth).
 $exe = "installer\dist\rts-companion.exe"
@@ -100,7 +100,7 @@ npx --yes resedit-cli@2 `
   --product-version $ver `
   --file-version $ver `
   --original-filename "rts-companion.exe" `
-  --internal-name "RaidTeamStatsUploader" `
+  --internal-name "StatSmith" `
   --legal-copyright "Stat Smith"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) {
   throw "resedit-cli failed to brand rts-companion.exe"

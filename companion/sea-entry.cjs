@@ -116,7 +116,7 @@ function findSavedVarFiles(wowPath) {
       accountRoot,
       acct,
       "SavedVariables",
-      "RaidTeamStatsUploader.lua",
+      "StatSmith.lua",
     );
     if (existsSync(f)) found.push(f);
   }
@@ -174,8 +174,8 @@ async function runOnce(cfg) {
   const files = findSavedVarFiles(cfg.wowPath);
   if (files.length === 0) {
     log(
-      "No RaidTeamStatsUploader SavedVariables found yet. In WoW: enable the " +
-        "addon, log in, then /reload (or log out once) so the file is written.",
+      "No Stat Smith SavedVariables found yet. In WoW: enable the Stat Smith " +
+        "addon and log in — it writes its data file within ~60s.",
     );
     return;
   }

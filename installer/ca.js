@@ -1,4 +1,4 @@
-// MSI custom actions for the Raid Team Stats Uploader installer.
+// MSI custom actions for the Stat Smith Uploader installer.
 // JScript (WSH) — `Session` is the global MSI session object.
 //
 //   verifyInputs   immediate: validate WoW folder + API token (live HTTP)
@@ -144,7 +144,11 @@ function installAddon() {
   var wow = trimSlash(d[1]);
   var fso = new ActiveXObject("Scripting.FileSystemObject");
   var src = dir + "\\addon";
-  var dst = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
+  // Drop the pre-rebrand addon folder so the old copy can't keep loading
+  // and writing a stale SavedVariables the companion no longer reads.
+  var legacy = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
+  if (fso.FolderExists(legacy)) fso.DeleteFolder(legacy, true);
+  var dst = wow + "\\_retail_\\Interface\\AddOns\\StatSmith";
   ensureTree(fso, dst);
   // copy each staged addon file (overwrite)
   var folder = fso.GetFolder(src);
@@ -184,9 +188,12 @@ function uninstallClean() {
     var dir = trimSlash(d[1]);
     var user = ("" + (d[2] || "")).replace(/^\s+|\s+$/g, "");
     var fso = new ActiveXObject("Scripting.FileSystemObject");
-    // 1. addon copied into the WoW folder (not an MSI component)
-    var addon = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
+    // 1. addon copied into the WoW folder (not an MSI component) — remove
+    //    the current name AND any pre-rebrand folder left by old installs.
+    var addon = wow + "\\_retail_\\Interface\\AddOns\\StatSmith";
     if (fso.FolderExists(addon)) fso.DeleteFolder(addon, true);
+    var addonOld = wow + "\\_retail_\\Interface\\AddOns\\RaidTeamStatsUploader";
+    if (fso.FolderExists(addonOld)) fso.DeleteFolder(addonOld, true);
     // 2. anything left in the install dir (legacy config.json etc.).
     if (dir && fso.FolderExists(dir)) fso.DeleteFolder(dir, true);
     // 3. the per-user config home (H3b — token lives here now).

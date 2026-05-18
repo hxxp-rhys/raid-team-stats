@@ -75,12 +75,9 @@ export function AddonUploaderCard() {
             The installer bundles everything (no Node needed): pick your WoW
             folder, paste your upload token, choose run-at-startup. It installs
             the addon for you and verifies the folder + token before
-            finishing. Then in WoW enable the{" "}
-            <code className="bg-muted/50 rounded px-1">
-              Raid Team Stats Uploader
-            </code>{" "}
-            addon and{" "}
-            <code className="bg-muted/50 rounded px-1">/reload</code> once.
+            finishing. Then in WoW just enable the{" "}
+            <code className="bg-muted/50 rounded px-1">Stat Smith</code> addon
+            and log in — it syncs automatically within ~60s.
           </p>
         </div>
 

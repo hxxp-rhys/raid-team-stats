@@ -1,14 +1,14 @@
-# Raid Team Stats — Companion Uploader
+# Stat Smith — Companion Uploader
 
 WoW addons can't talk to the internet, so this tiny script reads what the
-**RaidTeamStatsUploader** addon saved and sends it to the website. It's the
+**Stat Smith** addon saved and sends it to the website. It's the
 piece that makes the **World / Delve Great Vault** row work (Blizzard has no
 API for it).
 
 ## Requirements
 
 - [Node.js 18+](https://nodejs.org) (no `npm install` needed — zero dependencies)
-- The `RaidTeamStatsUploader` addon installed (see the addon's folder / the
+- The `StatSmith` addon installed (see the addon's folder / the
   Account page download)
 
 ## Setup

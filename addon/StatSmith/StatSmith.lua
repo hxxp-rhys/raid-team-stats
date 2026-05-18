@@ -1,4 +1,4 @@
--- RaidTeamStatsUploader.lua  (WoW Midnight 12.0.5 — Interface 120005)
+-- StatSmith.lua  (WoW Midnight 12.0.5 — Interface 120005)
 --
 -- Reads the player's live data that has NO Blizzard web API (Great Vault
 -- incl. the World/Delve row + per-row thresholds & reward previews, exact
@@ -8,7 +8,7 @@
 -- to SavedVariables. WoW addons cannot make network requests, so the
 -- companion desktop uploader reads the saved file and POSTs it to
 -- https://raiders.hxxp.io. A copy/paste export string is also provided as a
--- no-companion fallback (/rts export).
+-- no-companion fallback (/statsmith export).
 --
 -- Every collector is pcall-guarded (via safe()) AND feature-detects each
 -- Blizzard API before calling it: one missing/renamed API on a given 12.0.x
@@ -27,8 +27,10 @@ local AddonName, ns = ...
 -- Fix: extra delayed login snapshots + a steady 60s in-session ticker so
 -- the file the companion reads always has fully-loaded data. Also use the
 -- confirmed delve names (GetActiveDelveTier / GetCompanionInfoForActivePlayer).
+-- 1.1.3: rebranded to Stat Smith (folder/TOC/SavedVariables StatSmithDB,
+-- /statsmith + /ss slash commands). Wire format (RTS1:) is unchanged.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.2"
+local ADDON_VERSION = "1.1.3"
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -586,12 +588,12 @@ local function collect()
     consumables = safe(collectConsumables),
   }
   local json = jsonEncode(payload)
-  RaidTeamStatsUploaderDB = RaidTeamStatsUploaderDB or {}
-  RaidTeamStatsUploaderDB.schema = SCHEMA_VERSION
-  RaidTeamStatsUploaderDB.collectedAt = payload.collectedAt
-  RaidTeamStatsUploaderDB.payload = payload      -- structured (debug/inspection)
-  RaidTeamStatsUploaderDB.json = json            -- companion reads THIS string
-  RaidTeamStatsUploaderDB.export = "RTS1:" .. base64(json) -- copy/paste fallback
+  StatSmithDB = StatSmithDB or {}
+  StatSmithDB.schema = SCHEMA_VERSION
+  StatSmithDB.collectedAt = payload.collectedAt
+  StatSmithDB.payload = payload      -- structured (debug/inspection)
+  StatSmithDB.json = json            -- companion reads THIS string
+  StatSmithDB.export = "RTS1:" .. base64(json) -- copy/paste fallback
   ns.lastJson = json
   return payload
 end
@@ -602,7 +604,7 @@ local exportFrame
 local function showExport()
   collect()
   if not exportFrame then
-    local f = CreateFrame("Frame", "RTSUploaderExportFrame", UIParent, "BackdropTemplate")
+    local f = CreateFrame("Frame", "StatSmithExportFrame", UIParent, "BackdropTemplate")
     f:SetSize(560, 170)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
@@ -621,7 +623,7 @@ local function showExport()
     end
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     title:SetPoint("TOP", 0, -12)
-    title:SetText("Raid Team Stats — copy this, then paste it on the website")
+    title:SetText("Stat Smith — copy this, then paste it on the website")
     local sf = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
     sf:SetPoint("TOPLEFT", 16, -36)
     sf:SetPoint("BOTTOMRIGHT", -34, 40)
@@ -643,31 +645,31 @@ local function showExport()
     hint:SetText("Ctrl+A then Ctrl+C")
     exportFrame = f
   end
-  exportFrame.editBox:SetText(RaidTeamStatsUploaderDB.export or "")
+  exportFrame.editBox:SetText(StatSmithDB.export or "")
   exportFrame.editBox:HighlightText()
   exportFrame.editBox:SetFocus()
   exportFrame:Show()
 end
 
 -- ─── slash command ──────────────────────────────────────────────────────
-local PREFIX = "|cff39c5bbRaid Team Stats|r: "
+local PREFIX = "|cff39c5bbStat Smith|r: "
 local function printHelp()
   print(PREFIX .. "commands —")
-  print("  /rts export  — collect a fresh snapshot and open the copy/paste export window")
-  print("  /rts now     — collect a fresh snapshot silently (the companion app uploads it)")
-  print("  /rts status  — show when the last snapshot was taken")
-  print("  /rts help    — show this list")
+  print("  /statsmith export  — collect a fresh snapshot and open the copy/paste export window")
+  print("  /statsmith now     — collect a fresh snapshot silently (the companion app uploads it)")
+  print("  /statsmith status  — show when the last snapshot was taken")
+  print("  /statsmith help    — show this list")
 end
 
-SlashCmdList["RTSUPLOAD"] = function(msg)
+SlashCmdList["STATSMITH"] = function(msg)
   local cmd = strtrim(msg or ""):lower()
   if cmd == "now" then
     local p = collect()
     print(PREFIX .. "snapshot collected for " ..
       (p.character and p.character.name or "?") ..
-      ". It uploads automatically; use /rts export to copy it manually.")
+      ". It uploads automatically; use /statsmith export to copy it manually.")
   elseif cmd == "status" then
-    local at = RaidTeamStatsUploaderDB and RaidTeamStatsUploaderDB.collectedAt
+    local at = StatSmithDB and StatSmithDB.collectedAt
     print(PREFIX .. "last snapshot " ..
       (at and date("%Y-%m-%d %H:%M", at) or "never") ..
       ". The companion app uploads the saved file.")
@@ -681,8 +683,8 @@ SlashCmdList["RTSUPLOAD"] = function(msg)
     printHelp()
   end
 end
-SLASH_RTSUPLOAD1 = "/rtsupload"
-SLASH_RTSUPLOAD2 = "/rts"
+SLASH_STATSMITH1 = "/statsmith"
+SLASH_STATSMITH2 = "/ss"
 
 -- ─── lifecycle ──────────────────────────────────────────────────────────
 local refreshTicker -- steady in-session re-snapshot (server data lands late)
@@ -701,7 +703,7 @@ ev:RegisterEvent("TRAIT_CONFIG_UPDATED")
 ev:RegisterEvent("PLAYER_TALENT_UPDATE")
 ev:SetScript("OnEvent", function(self, event, arg1)
   if event == "ADDON_LOADED" and arg1 == AddonName then
-    RaidTeamStatsUploaderDB = RaidTeamStatsUploaderDB or {}
+    StatSmithDB = StatSmithDB or {}
     self:UnregisterEvent("ADDON_LOADED")
   elseif event == "PLAYER_LOGIN" then
     -- Ask the client to populate the data that needs a server round-trip
@@ -726,7 +728,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     if not refreshTicker then
       refreshTicker = C_Timer.NewTicker(60, collect)
     end
-    print("|cff39c5bbRaid Team Stats|r uploader loaded. /rts export to copy a manual export, /rts help for commands.")
+    print("|cff39c5bbStat Smith|r loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()
