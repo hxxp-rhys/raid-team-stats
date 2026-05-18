@@ -45,38 +45,94 @@ function Invoke-Sign($file) {
   Write-Host "      signed: $file"
 }
 
-Write-Host "[1/5] generating SEA blob..."
+Write-Host "[1/7] generating SEA blob..."
 Push-Location companion
 node --experimental-sea-config sea-config.json
 Pop-Location
 
-Write-Host "[2/5] bundling rts-companion.exe..."
+Write-Host "[2/7] bundling rts-companion.exe..."
 New-Item -ItemType Directory -Force installer\dist | Out-Null
 $nodeExe = (Get-Command node).Source
 Copy-Item $nodeExe installer\dist\rts-companion.exe -Force
 npx --yes postject installer\dist\rts-companion.exe NODE_SEA_BLOB `
   companion\sea-prep.blob `
   --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
-Invoke-Sign "installer\dist\rts-companion.exe"
 
-# Gate: the MSI custom actions run under CLASSIC JScript (ES3-era engine,
-# NOT Node/modern JS). It rejects things modern JS allows — most notably
-# trailing commas in function-call argument lists — and a single syntax
-# error makes EVERY custom action fail ("Setup ended prematurely, system
-# not modified"). Validate with the very same engine before shipping.
-Write-Host "[3/5] validating ca.js (classic JScript)..."
+# Brand the exe so it is clearly "Raid Team Stats Uploader" everywhere
+# in Windows (Task Manager / Explorer / Startup) and runs windowless.
+# Version comes from Package.wxs (single source of truth).
+$exe = "installer\dist\rts-companion.exe"
+# Case-sensitive + 4-part so it matches the <Package Version="x.x.x.x">
+# and NOT the lowercase <?xml version="1.0"?> declaration.
+$ver = (Select-String -Path installer\Package.wxs -CaseSensitive `
+    -Pattern 'Version="(\d+\.\d+\.\d+\.\d+)"' |
+  Select-Object -First 1).Matches[0].Groups[1].Value
+if (-not $ver) { throw "could not read Package Version= from Package.wxs" }
+
+Write-Host "[3/7] branding rts-companion.exe (windowless + icon + v$ver)..."
+# (a) flip PE subsystem CONSOLE(3) -> WINDOWS_GUI(2): no console window
+#     from the autostart Run key, and Startup attributes to THIS exe
+#     (our name + icon), not wscript.exe.
+$b = [System.IO.File]::ReadAllBytes($exe)
+$peOff = [System.BitConverter]::ToInt32($b, 0x3C)
+if ([System.Text.Encoding]::ASCII.GetString($b, $peOff, 2) -ne "PE") {
+  throw "rts-companion.exe is not a valid PE (bad signature)"
+}
+$subOff = $peOff + 24 + 0x44
+$sub = [System.BitConverter]::ToUInt16($b, $subOff)
+if ($sub -eq 3) {
+  $b[$subOff] = 2; $b[$subOff + 1] = 0
+  [System.IO.File]::WriteAllBytes($exe, $b)
+  Write-Host "      subsystem CONSOLE -> GUI"
+}
+elseif ($sub -eq 2) { Write-Host "      subsystem already GUI" }
+else { throw "unexpected PE subsystem value: $sub" }
+# (b) embed icon + version/product metadata (pure-JS resedit-cli, no
+#     native deps). Any code-signing MUST happen AFTER this.
+$tmp = "$exe.branded"
+npx --yes resedit-cli@2 `
+  --in $exe --out $tmp `
+  --ignore-signed `
+  --icon "1,installer/app.ico" `
+  --company-name "raid-team-stats" `
+  --product-name "Raid Team Stats Uploader" `
+  --file-description "Raid Team Stats Uploader" `
+  --product-version $ver `
+  --file-version $ver `
+  --original-filename "rts-companion.exe" `
+  --internal-name "RaidTeamStatsUploader" `
+  --legal-copyright "Raid Team Stats"
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) {
+  throw "resedit-cli failed to brand rts-companion.exe"
+}
+Move-Item -Force $tmp $exe
+$fi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
+if ($fi.ProductName -ne "Raid Team Stats Uploader" -or
+  $fi.FileDescription -ne "Raid Team Stats Uploader") {
+  throw "exe branding not applied (ProductName='$($fi.ProductName)' FileDescription='$($fi.FileDescription)')"
+}
+Write-Host "      branded: $($fi.FileDescription) v$($fi.FileVersion)"
+
+Write-Host "[4/7] signing rts-companion.exe (if configured)..."
+Invoke-Sign $exe
+
+# Gate: MSI custom actions run under CLASSIC JScript (ES3-era engine).
+# A single modern-JS construct (trailing comma in a call, let/const/
+# arrow/template literal) fails the WHOLE script -> every CA fails
+# ("Setup ended prematurely"). Validate with that exact engine.
+Write-Host "[5/7] validating ca.js (classic JScript)..."
 & cscript //NoLogo //E:JScript installer\ca.js
 if ($LASTEXITCODE -ne 0) {
-  throw "ca.js failed the classic-JScript syntax check. The MSI scripting host is ES3 JScript: no trailing commas in calls, no let/const/arrow/template literals."
+  throw "ca.js failed the classic-JScript syntax check (no trailing commas / let / const / arrow / template literals)."
 }
 
-Write-Host "[4/5] building MSI..."
+Write-Host "[6/7] building MSI..."
 wix build installer\Package.wxs installer\RtsUI.wxs `
   -ext WixToolset.UI.wixext `
   -o installer\dist\raid-team-stats-uploader.msi
 if ($LASTEXITCODE -ne 0) { throw "wix build failed (see the WIX error above); MSI not produced." }
 
-Write-Host "[5/5] signing MSI (if configured)..."
+Write-Host "[7/7] signing MSI (if configured)..."
 Invoke-Sign "installer\dist\raid-team-stats-uploader.msi"
 
 Write-Host "DONE -> installer\dist\raid-team-stats-uploader.msi"

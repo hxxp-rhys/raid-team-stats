@@ -14,17 +14,58 @@
 // Requires Node 18+ (built-in fetch). No npm install needed.
 
 import { readFile, stat } from "node:fs/promises";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  appendFileSync,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// Mirrors sea-entry.cjs: best-effort rotating log next to the per-user
+// config (the packaged exe is windowless / GUI-subsystem).
+const LOG_DIR = join(
+  process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
+  "RaidTeamStats",
+);
+const LOG_FILE = join(LOG_DIR, "uploader.log");
+function writeLog(line) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      if (statSync(LOG_FILE).size > 262144) writeFileSync(LOG_FILE, "");
+    } catch {
+      /* no log yet */
+    }
+    appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* best-effort */
+  }
+}
 const die = (m) => {
-  console.error(`[rts] ERROR: ${m}`);
+  try {
+    console.error(`[rts] ERROR: ${m}`);
+  } catch {
+    /* no console */
+  }
+  writeLog(`ERROR: ${m}`);
   process.exit(1);
 };
-const log = (m) => console.log(`[rts] ${m}`);
+const log = (m) => {
+  try {
+    console.log(`[rts] ${m}`);
+  } catch {
+    /* no console */
+  }
+  writeLog(m);
+};
 
 // SECURITY (H3b): config + token live in the per-user, non-world-
 // readable %LOCALAPPDATA%\RaidTeamStats. Fall back to the legacy

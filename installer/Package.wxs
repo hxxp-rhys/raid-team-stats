@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="raid-team-stats"
-           Version="1.0.8.0"
+           Version="1.0.9.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -55,7 +55,7 @@
                        Key="Software\Microsoft\Windows\CurrentVersion\Run"
                        Name="RaidTeamStatsUploader"
                        Type="string"
-                       Value="wscript.exe //B &quot;[INSTALLFOLDER]run-hidden.vbs&quot;"
+                       Value="&quot;[INSTALLFOLDER]rts-companion.exe&quot; --watch"
                        KeyPath="yes" />
       </Component>
     </ComponentGroup>

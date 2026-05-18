@@ -10,7 +10,15 @@
 
 "use strict";
 const { readFile, stat } = require("node:fs/promises");
-const { readFileSync, readdirSync, existsSync } = require("node:fs");
+const {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  appendFileSync,
+  mkdirSync,
+  statSync,
+  writeFileSync,
+} = require("node:fs");
 const { join, dirname } = require("node:path");
 const { homedir } = require("node:os");
 
@@ -19,11 +27,45 @@ const HERE = process.execPath.toLowerCase().endsWith("node.exe")
   ? __dirname
   : dirname(process.execPath);
 
+// The exe is built as a Windows GUI-subsystem binary (no console), so
+// status goes to a rotating log next to the per-user config. Every
+// call is best-effort and never throws — a logging fault must not take
+// down the background uploader.
+const LOG_DIR = join(
+  process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
+  "RaidTeamStats",
+);
+const LOG_FILE = join(LOG_DIR, "uploader.log");
+function writeLog(line) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      if (statSync(LOG_FILE).size > 262144) writeFileSync(LOG_FILE, "");
+    } catch {
+      /* no log yet */
+    }
+    appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    /* logging is best-effort */
+  }
+}
 const die = (m) => {
-  console.error(`[rts] ERROR: ${m}`);
+  try {
+    console.error(`[rts] ERROR: ${m}`);
+  } catch {
+    /* no console under GUI subsystem */
+  }
+  writeLog(`ERROR: ${m}`);
   process.exit(1);
 };
-const log = (m) => console.log(`[rts] ${m}`);
+const log = (m) => {
+  try {
+    console.log(`[rts] ${m}`);
+  } catch {
+    /* no console under GUI subsystem */
+  }
+  writeLog(m);
+};
 
 // SECURITY (H3b): config + token live in the per-user, non-world-
 // readable %LOCALAPPDATA%\RaidTeamStats. Fall back to the legacy

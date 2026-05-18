@@ -2,11 +2,15 @@
 title Raid Team Stats - Upload Now
 echo Uploading your latest WoW data...
 echo.
+rem The companion is a windowless (GUI-subsystem) app, so it writes no
+rem console output; cmd still waits for this one-shot run to finish.
 "%~dp0rts-companion.exe"
 echo.
+echo --- recent uploader log ---------------------------------------
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path $env:LOCALAPPDATA 'RaidTeamStats\uploader.log'; if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f -Tail 15 } else { Write-Output 'No log yet. In WoW: enable the Raid Team Stats Uploader addon, log in, then /reload (or log out) so it writes its data file.' }"
 echo ---------------------------------------------------------------
-echo Done. If "run at startup" was enabled during install, the
-echo uploader also syncs automatically in the background after every
-echo /reload or logout - you do not need to run this each time.
+echo Done. If "run at startup" was enabled, the uploader also syncs
+echo automatically in the background after every /reload or logout -
+echo you do not need to run this each time.
 echo.
 pause
