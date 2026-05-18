@@ -41,6 +41,20 @@ function Inner({ params }: { params: Params }) {
   // even though `activeTabId` is unused on the pending/error branches.
   const [activeTabId, setActiveTabId] = useState<string>("overview");
 
+  // Live-refresh the shared team snapshot. Every widget calls
+  // `snapshot.latestForTeam.useQuery({ raidTeamId: teamId })`; React Query
+  // coalesces by key, so this one extra observer (the most aggressive
+  // options win for the shared query) makes the WHOLE dashboard refetch on
+  // an interval and when the user tabs back. Without it an already-open
+  // dashboard never reflects a fresh companion/addon upload (the upload is
+  // a server-only path with no client signal; global defaults are
+  // staleTime 30s + refetchOnWindowFocus:false), so it looked like the
+  // addon "wasn't updating the dashboard" when the data was actually fine.
+  api.snapshot.latestForTeam.useQuery(
+    { raidTeamId: teamId },
+    { refetchInterval: 60_000, refetchOnWindowFocus: true },
+  );
+
   if (q.isPending) {
     return (
       <main className="mx-auto max-w-5xl px-4 py-12">
