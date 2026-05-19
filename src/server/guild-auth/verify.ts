@@ -124,11 +124,10 @@ export async function applyVerification(
 
     const guild = await db.guild.upsert({
       where: {
-        region_realmSlug_guildSlug_faction: {
+        region_realmSlug_guildSlug: {
           region: obs.region,
           realmSlug: guildRealmSlug,
           guildSlug,
-          faction: obs.guild.faction,
         },
       },
       create: {
@@ -138,6 +137,8 @@ export async function applyVerification(
         name: obs.guild.name,
         faction: obs.guild.faction,
       },
+      // Never re-derive faction here: a single flaky per-character read
+      // must not flip (or, pre-fix, fork) an established guild's faction.
       update: {
         name: obs.guild.name,
       },

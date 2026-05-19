@@ -179,11 +179,10 @@ async function main() {
     const region = args.region.toUpperCase() as "US" | "EU" | "KR" | "TW";
     const guild = await db.guild.upsert({
       where: {
-        region_realmSlug_guildSlug_faction: {
+        region_realmSlug_guildSlug: {
           region,
           realmSlug,
           guildSlug,
-          faction: "NEUTRAL",
         },
       },
       create: {

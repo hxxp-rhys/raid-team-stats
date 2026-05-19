@@ -11,6 +11,7 @@ import {
   guildRosterResponseSchema,
   characterSummaryResponseSchema,
   FACTION_MAP,
+  type CharacterSummaryResponse,
 } from "@/server/ingestion/blizzard/schemas";
 import { normalizeRealmSlug } from "@/lib/realm";
 import { applyVerification } from "@/server/guild-auth/verify";
@@ -142,10 +143,14 @@ export async function handleManualRosterRefresh(
       const realmSlug = normalizeRealmSlug(m.character.realm.slug);
       if (!realmSlug) continue;
 
-      // Per-character summary gives us the guild relationship from the
-      // character's perspective. (Mostly the same info, but we get faction
-      // and class consistently.)
-      let summary;
+      // Per-character summary is OPTIONAL enrichment (character class /
+      // level / faction). Blizzard 404s the profile of any character
+      // whose profile it doesn't publish (alts, low-level, long-inactive)
+      // — that's normal and common in a large guild. The guild-ROSTER
+      // endpoint already proved this character IS in the guild, so a
+      // summary miss must NOT drop them (that's what shrank the roster to
+      // a fraction). Fall back to the roster entry's own data.
+      let summary: CharacterSummaryResponse | null = null;
       try {
         summary = await client.request(
           endpoints.characterSummary(regionToCode(guild.region), realmSlug, m.character.name),
@@ -158,9 +163,8 @@ export async function handleManualRosterRefresh(
       } catch (err) {
         logger.warn(
           { err, character: m.character.name, realmSlug },
-          "character summary fetch failed; skipping",
+          "character summary unavailable; using roster-entry data",
         );
-        continue;
       }
 
       observations.push({
@@ -168,18 +172,23 @@ export async function handleManualRosterRefresh(
         region: guild.region,
         realmSlug,
         characterName: m.character.name,
-        faction: factionFromSummary(summary.faction?.type, guild.faction),
-        level: summary.level ?? m.character.level ?? null,
-        classId: summary.character_class?.id ?? m.character.playable_class?.id ?? null,
+        faction: factionFromSummary(summary?.faction?.type, guild.faction),
+        level: summary?.level ?? m.character.level ?? null,
+        classId:
+          summary?.character_class?.id ??
+          m.character.playable_class?.id ??
+          null,
         race: undefined,
-        guild: summary.guild
-          ? {
-              name: summary.guild.name,
-              realmSlug: summary.guild.realm.slug,
-              faction: factionFromSummary(summary.guild.faction?.type, guild.faction),
-              rosterRank: m.rank,
-            }
-          : null,
+        // Attribute every member to THE GUILD WE ARE SYNCING — its row is
+        // the single source of truth. Deriving the guild (esp. faction)
+        // per-character from each summary is exactly what forked the guild
+        // into a duplicate row and split the roster.
+        guild: {
+          name: guild.name,
+          realmSlug: guild.realmSlug,
+          faction: guild.faction,
+          rosterRank: m.rank,
+        },
       });
     }
 

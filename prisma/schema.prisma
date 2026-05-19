@@ -292,7 +292,11 @@ model Guild {
   characterLinks GuildCharacterLink[]
   raidTeams      RaidTeam[]
 
-  @@unique([region, realmSlug, guildSlug, faction])
+  // Identity is region+realm+guild slug ONLY. A guild is a single faction;
+  // keeping `faction` in this key let a per-character faction misread mint
+  // a DUPLICATE guild row and split the roster, so faction is now a plain
+  // attribute, not part of the unique identity.
+  @@unique([region, realmSlug, guildSlug])
   @@index([claimStatus])
 }
 
