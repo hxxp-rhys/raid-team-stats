@@ -2,7 +2,7 @@
 ## Title: Stat Smith
 ## Notes: Collects Great Vault (incl. World/Delve + reward previews), M+ (incl. held keystone), weekly raid lockouts, gear/enchants, talents, catalyst/upgrade currencies, bagged tier pieces, delve progress & raid consumables. No network access — data is read into SavedVariables for the Stat Smith companion uploader (or /statsmith export copy/paste).
 ## Author: Stat Smith
-## Version: 1.1.6
+## Version: 1.1.7
 ## SavedVariables: StatSmithDB
 ## IconTexture: Interface\ICONS\INV_Misc_Note_01
 ## X-Website: https://raiders.hxxp.io

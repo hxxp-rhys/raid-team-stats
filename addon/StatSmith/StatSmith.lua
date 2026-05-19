@@ -42,8 +42,15 @@ local AddonName, ns = ...
 -- Belt-and-braces: the companion-facing export is NEVER overwritten by
 -- an incomplete capture, so a /reload or short session can't regress
 -- previously-good data.
+-- 1.1.7: collectLockouts no longer calls RequestRaidInfo() (it is ASYNC;
+-- calling it then reading on the same frame perpetually raced to
+-- numEncounters=0 — proven on prod: complete=true uploads with all
+-- lockouts enc=0). Request once at login + read the cached data later.
+-- Completeness now also requires lockout encounter data to have actually
+-- loaded (or zero saved instances), so a sparse capture can't be stamped
+-- complete by the vault/season fast-path proxy.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.6"
+local ADDON_VERSION = "1.1.7"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -494,17 +501,18 @@ local function collectDelves()
 end
 
 -- Weekly raid/dungeon lockouts incl. per-boss kill state THIS reset.
--- Blizzard's web API only exposes season aggregates, not the live
--- lockout. GetSavedInstanceInfo's signature is correct in 12.0, but the
--- saved-instance list (esp. numEncounters / per-boss state) is only
--- populated AFTER RequestRaidInfo() round-trips and UPDATE_INSTANCE_INFO
--- fires — without it numEncounters reads 0 and the boss list is empty.
--- The lifecycle code requests this on login and re-snapshots on
--- UPDATE_INSTANCE_INFO so the logout file the companion reads is whole;
--- the request here is a best-effort refresh.
+-- Blizzard's web API only exposes season aggregates, not the live lockout.
+-- CRITICAL: RequestRaidInfo() is ASYNC — GetSavedInstanceInfo's
+-- numEncounters/per-boss data only populates AFTER it round-trips and
+-- UPDATE_INSTANCE_INFO fires (proven via /dump: a 3s wait is required).
+-- This collector must therefore NOT call RequestRaidInfo() itself —
+-- doing so re-triggers the async fetch and the immediate read below
+-- perpetually races to numEncounters=0. We request ONCE at login (and
+-- re-snapshot on UPDATE_INSTANCE_INFO); by the time the ticker/logout
+-- collect runs, the cached saved-instance data is fully populated and we
+-- simply read it.
 local function collectLockouts()
   local out = {}
-  pcall(RequestRaidInfo)
   local num = 0
   pcall(function() num = GetNumSavedInstances() or 0 end)
   for i = 1, num do
@@ -622,10 +630,26 @@ local function collect()
   -- so they don't false-negative the way the old 5-min timer did.
   local vaultRows = payload.vault and payload.vault.activities
     and #payload.vault.activities or 0
+  -- Honest lockout readiness: if the player is saved to ANY instance, the
+  -- capture isn't complete until its encounter data has actually loaded
+  -- (>=1 lockout with encounters>0). Zero saved instances is a valid
+  -- "ready & empty" state. This is the field that lagged while the old
+  -- proxy gate falsely reported complete.
+  local locks = payload.lockouts or {}
+  local lockoutsReady = #locks == 0
+  if not lockoutsReady then
+    for _, l in ipairs(locks) do
+      if type(l.encounters) == "number" and l.encounters > 0 then
+        lockoutsReady = true
+        break
+      end
+    end
+  end
   local complete = sawInstanceInfo
     and vaultRows > 0
     and payload.mythicPlus ~= nil
     and payload.mythicPlus.season ~= nil
+    and lockoutsReady
     and true
     or false
   payload.complete = complete
