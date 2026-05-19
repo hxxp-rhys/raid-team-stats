@@ -32,17 +32,22 @@ local AddonName, ns = ...
 -- 1.1.4: delve capture fixed against confirmed 12.0.5 returns —
 -- GetActiveDelveTier is a table (use .tier), GetCompanionInfoForActivePlayer
 -- is a bare number (Valeera's level). out.tier + out.companion.level.
--- 1.1.5: payload.complete — keystone/lockout-boss/delve/talent data only
--- lands after server round-trips, so an early/short-session snapshot is
--- partial. Mark complete=true only once the session has been alive long
--- enough (≈5 min) for those to settle; the companion and server refuse
--- to send/store complete=false so partial data never overwrites good data.
+-- 1.1.5: payload.complete (partial captures not sent/stored).
+-- 1.1.6: completeness is now DATA-READINESS based, not a wall-clock
+-- timer. The 1.1.5 timer reset on every /reload (PLAYER_LOGIN re-fires),
+-- so a long session followed by the documented /reload+logout produced
+-- complete=false. Now: complete = the server round-trips have actually
+-- landed (UPDATE_INSTANCE_INFO seen + vault rows + M+ season known) —
+-- which legit-empty states still satisfy and which survives /reload.
+-- Belt-and-braces: the companion-facing export is NEVER overwritten by
+-- an incomplete capture, so a /reload or short session can't regress
+-- previously-good data.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.5"
--- Seconds logged in before a snapshot counts as "full". 270 (~4.5 min)
--- so a ~5-minute session reliably qualifies (the UI tells users 5 min).
-local FULL_CAPTURE_SECONDS = 270
-local loginTime -- GetServerTime() at PLAYER_LOGIN; nil until then
+local ADDON_VERSION = "1.1.6"
+-- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
+-- tripped — fires even with zero lockouts, the meaningful "ready" signal
+-- that lagged in sparse captures). Re-armed each addon load/reload.
+local sawInstanceInfo = false
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -594,19 +599,10 @@ local function safe(fn, fallback)
 end
 
 local function collect()
-  -- A snapshot is "complete" only once the session has been alive long
-  -- enough for the server round-trips (raid lockouts, owned keystone,
-  -- talent config, delves) to have settled. Early login snapshots and
-  -- short sessions are partial; the companion/server drop complete=false.
-  local elapsed = loginTime and (time() - loginTime) or nil
-  local complete = (elapsed ~= nil and elapsed >= FULL_CAPTURE_SECONDS)
-    and true
-    or false
   local payload = {
     schema = SCHEMA_VERSION,
     addonVersion = ADDON_VERSION,
     collectedAt = time(),
-    complete = complete,
     character = safe(collectIdentity),
     vault = safe(collectVault),
     mythicPlus = safe(collectMythicPlus),
@@ -618,14 +614,34 @@ local function collect()
     lockouts = safe(collectLockouts),
     consumables = safe(collectConsumables),
   }
+  -- "Complete" = the data that needs a Blizzard server round-trip has had
+  -- its chance to land THIS session: UPDATE_INSTANCE_INFO has fired (raid
+  -- lockouts settled — fires even with zero lockouts) AND the Great Vault
+  -- rows are present AND the M+ season is known. These hold in every
+  -- legit-empty state and re-establish within seconds after a /reload,
+  -- so they don't false-negative the way the old 5-min timer did.
+  local vaultRows = payload.vault and payload.vault.activities
+    and #payload.vault.activities or 0
+  local complete = sawInstanceInfo
+    and vaultRows > 0
+    and payload.mythicPlus ~= nil
+    and payload.mythicPlus.season ~= nil
+    and true
+    or false
+  payload.complete = complete
   local json = jsonEncode(payload)
   StatSmithDB = StatSmithDB or {}
   StatSmithDB.schema = SCHEMA_VERSION
-  StatSmithDB.collectedAt = payload.collectedAt
-  StatSmithDB.payload = payload      -- structured (debug/inspection)
-  StatSmithDB.json = json            -- companion reads THIS string
-  StatSmithDB.export = "RTS1:" .. base64(json) -- copy/paste fallback
+  StatSmithDB.payload = payload      -- structured (debug/inspection) — always
   ns.lastJson = json
+  -- NEVER regress: only update what the companion reads (export/json/
+  -- collectedAt) when this capture is complete. A /reload or short
+  -- session can't overwrite a previously-good capture with a partial one.
+  if complete then
+    StatSmithDB.collectedAt = payload.collectedAt
+    StatSmithDB.json = json
+    StatSmithDB.export = "RTS1:" .. base64(json)
+  end
   return payload
 end
 ns.collect = collect
@@ -737,7 +753,6 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     StatSmithDB = StatSmithDB or {}
     self:UnregisterEvent("ADDON_LOADED")
   elseif event == "PLAYER_LOGIN" then
-    loginTime = time() -- start the "full capture" clock
     -- Ask the client to populate the data that needs a server round-trip
     -- (vault, M+ rewards/keystone, AND raid lockouts) BEFORE the first
     -- snapshot. Without RequestRaidInfo() the saved-instance list reports
@@ -765,7 +780,11 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()
   else
-    -- Vault/M+/gear changed — refresh (debounced).
+    -- UPDATE_INSTANCE_INFO = raid-lockout data has round-tripped; this is
+    -- the readiness signal that gates a "complete" capture (it fires even
+    -- when the player has zero lockouts).
+    if event == "UPDATE_INSTANCE_INFO" then sawInstanceInfo = true end
+    -- Vault/M+/gear/lockout/talent changed — refresh (debounced).
     C_Timer.After(2, collect)
   end
 end)
