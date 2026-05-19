@@ -98,6 +98,19 @@ export async function POST(req: Request) {
   }
   const payload = parsed.data;
 
+  // ── reject partial captures ──
+  // addon ≥1.1.5 sets complete=false for early/short-session snapshots
+  // whose round-trip-dependent fields (keystone, lockout bosses, delves,
+  // talents) aren't populated. Storing one would clobber a prior GOOD
+  // capture, so we acknowledge (200, so the companion doesn't error-loop)
+  // but DON'T persist. Absent (older addons) is treated as allowed.
+  if (payload.complete === false) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "partial capture — stay logged in ~5 min for a full sync",
+    });
+  }
+
   // ── resolve the caller's own character ──
   const region = REGION_MAP[payload.character.region.toLowerCase()];
   if (!region) {

@@ -77,7 +77,18 @@ export function AddonUploaderCard() {
             the addon for you and verifies the folder + token before
             finishing. Then in WoW just enable the{" "}
             <code className="bg-muted/50 rounded px-1">Stat Smith</code> addon
-            and log in — it syncs automatically within ~60s.
+            and log in.
+          </p>
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+            <span className="font-semibold">
+              Stay logged into WoW for ~5 minutes for a full data capture.
+            </span>{" "}
+            Keystone, weekly-lockout boss kills, delve and consumable data
+            only arrive from Blizzard a short while after you log in. The app
+            will <span className="font-semibold">not send partial captures</span>{" "}
+            to the server (a short session won&apos;t overwrite your good
+            data) — your widgets update once a full ~5-minute capture
+            completes and uploads.
           </p>
         </div>
 

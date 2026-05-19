@@ -4,7 +4,7 @@
 
   <Package Name="Stat Smith Uploader"
            Manufacturer="Stat Smith"
-           Version="1.0.15.0"
+           Version="1.0.16.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">

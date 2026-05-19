@@ -54,6 +54,11 @@ export const addonPayloadSchema = z
   .object({
     schema: z.number().optional(),
     addonVersion: z.string().optional(),
+    // addon ≥1.1.5: false = a partial/early-session snapshot (the
+    // round-trip-dependent fields aren't populated yet). Absent on older
+    // addons → treated as allowed (back-compat). The ingest route refuses
+    // to STORE an explicit `false` so partial data never clobbers good.
+    complete: z.boolean().optional(),
     collectedAt: z.number().int().nonnegative(),
     character: z
       .object({

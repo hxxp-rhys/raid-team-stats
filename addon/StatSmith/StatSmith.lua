@@ -32,8 +32,17 @@ local AddonName, ns = ...
 -- 1.1.4: delve capture fixed against confirmed 12.0.5 returns —
 -- GetActiveDelveTier is a table (use .tier), GetCompanionInfoForActivePlayer
 -- is a bare number (Valeera's level). out.tier + out.companion.level.
+-- 1.1.5: payload.complete — keystone/lockout-boss/delve/talent data only
+-- lands after server round-trips, so an early/short-session snapshot is
+-- partial. Mark complete=true only once the session has been alive long
+-- enough (≈5 min) for those to settle; the companion and server refuse
+-- to send/store complete=false so partial data never overwrites good data.
 local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.4"
+local ADDON_VERSION = "1.1.5"
+-- Seconds logged in before a snapshot counts as "full". 270 (~4.5 min)
+-- so a ~5-minute session reliably qualifies (the UI tells users 5 min).
+local FULL_CAPTURE_SECONDS = 270
+local loginTime -- GetServerTime() at PLAYER_LOGIN; nil until then
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -585,10 +594,19 @@ local function safe(fn, fallback)
 end
 
 local function collect()
+  -- A snapshot is "complete" only once the session has been alive long
+  -- enough for the server round-trips (raid lockouts, owned keystone,
+  -- talent config, delves) to have settled. Early login snapshots and
+  -- short sessions are partial; the companion/server drop complete=false.
+  local elapsed = loginTime and (time() - loginTime) or nil
+  local complete = (elapsed ~= nil and elapsed >= FULL_CAPTURE_SECONDS)
+    and true
+    or false
   local payload = {
     schema = SCHEMA_VERSION,
     addonVersion = ADDON_VERSION,
     collectedAt = time(),
+    complete = complete,
     character = safe(collectIdentity),
     vault = safe(collectVault),
     mythicPlus = safe(collectMythicPlus),
@@ -719,6 +737,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     StatSmithDB = StatSmithDB or {}
     self:UnregisterEvent("ADDON_LOADED")
   elseif event == "PLAYER_LOGIN" then
+    loginTime = time() -- start the "full capture" clock
     -- Ask the client to populate the data that needs a server round-trip
     -- (vault, M+ rewards/keystone, AND raid lockouts) BEFORE the first
     -- snapshot. Without RequestRaidInfo() the saved-instance list reports

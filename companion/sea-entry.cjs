@@ -128,10 +128,29 @@ function extractExport(luaText) {
   return m ? m[1] : null;
 }
 
+// addon >=1.1.5 sets complete=false for early/short-session captures
+// whose round-trip-dependent fields aren't populated; don't upload those
+// (they'd clobber a prior good capture). Older addons omit it -> allowed.
+function captureIsPartial(exp) {
+  try {
+    const json = Buffer.from(exp.slice(5), "base64").toString("utf8");
+    return JSON.parse(json).complete === false;
+  } catch {
+    return false;
+  }
+}
+
 async function uploadOne(cfg, file) {
   const exp = extractExport(await readFile(file, "utf8"));
   if (!exp) {
     log(`skip (no snapshot yet): ${file}`);
+    return;
+  }
+  if (captureIsPartial(exp)) {
+    log(
+      "skip (partial capture — stay logged into WoW ~5 min for a full " +
+        `sync): ${file}`,
+    );
     return;
   }
   let res;
@@ -155,7 +174,9 @@ async function uploadOne(cfg, file) {
   } catch {
     body = { raw: bodyText.slice(0, 200) };
   }
-  if (res.ok && body.ok) {
+  if (res.ok && body.ok && body.skipped) {
+    log(`skipped: ${body.skipped}`);
+  } else if (res.ok && body.ok) {
     log(
       `uploaded ${body.character || "?"} — World vault ${
         (body.world && body.world.unlocked) ?? "?"
