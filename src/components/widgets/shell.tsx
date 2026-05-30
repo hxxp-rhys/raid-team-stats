@@ -15,10 +15,14 @@ import {
 export function WidgetShell({
   title,
   description,
+  requiresCompanion,
   children,
 }: {
   title: string;
   description?: string;
+  /** Show a small "Stat Smith addon required" chip in the header for
+   *  widgets whose data comes only from the in-game addon/companion. */
+  requiresCompanion?: boolean;
   children: ReactNode;
 }) {
   // h-full so the card stretches to fill its (resizable) grid cell; the
@@ -26,7 +30,17 @@ export function WidgetShell({
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle>{title}</CardTitle>
+          {requiresCompanion && (
+            <span
+              className="border-border bg-muted/50 text-muted-foreground shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium"
+              title="This widget's data comes from the Stat Smith in-game addon + companion uploader."
+            >
+              Stat Smith required
+            </span>
+          )}
+        </div>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
       <CardContent className="min-h-0 flex-1 overflow-auto">

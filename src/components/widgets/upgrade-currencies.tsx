@@ -18,7 +18,8 @@ export function UpgradeCurrenciesWidget({
   return (
     <WidgetShell
       title="Upgrade currencies"
-      description="Catalyst + crests / valorstones / coffer keys per member. Needs the in-game uploader."
+      description="Catalyst + crests / valorstones / coffer keys per member."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />

@@ -342,32 +342,32 @@ export const WIDGET_META: Record<
   vault_detail: {
     title: "Great Vault detail",
     description:
-      "All three vault rows (Raid / M+ / World·Delve) with unlocked slots + progress. Addon-only.",
+      "All three vault rows (Raid / M+ / World·Delve) with unlocked slots + progress.",
   },
   keystones: {
     title: "This week's keystones",
     description:
-      "The M+ keystone each member currently holds — for scheduling key night. Addon-only.",
+      "The M+ keystone each member currently holds — for scheduling key night.",
   },
   weekly_lockouts: {
     title: "Weekly lockouts",
     description:
-      "Heroic/Mythic bosses each member cleared THIS reset, per raid. Addon-only.",
+      "Heroic/Mythic bosses each member cleared THIS reset, per raid.",
   },
   upgrade_currencies: {
     title: "Upgrade currencies",
     description:
-      "Catalyst charges + crests / valorstones / coffer keys per member. Addon-only.",
+      "Catalyst charges + crests / valorstones / coffer keys per member.",
   },
   consumable_readiness: {
     title: "Raid consumables",
     description:
-      "Flasks / potions / food / weapon enhancements on hand before pull. Addon-only.",
+      "Flasks / potions / food / weapon enhancements on hand before pull.",
   },
   delve_progress: {
     title: "Delve progress",
     description:
-      "Delve season / tier / companion (Valeera) level per member. Addon-only.",
+      "Delve season / tier / companion (Valeera) level per member.",
   },
   talent_builds: {
     title: "Talent builds",

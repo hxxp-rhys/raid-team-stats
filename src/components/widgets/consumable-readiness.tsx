@@ -52,7 +52,8 @@ export function ConsumableReadinessWidget({
   return (
     <WidgetShell
       title="Raid consumables"
-      description="Flasks / potions / food / weapon enhancements on hand. Needs the in-game uploader."
+      description="Flasks / potions / food / weapon enhancements on hand."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />

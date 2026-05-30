@@ -14,7 +14,8 @@ export function KeystonesWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="This week's keystones"
-      description="The keystone each member currently holds. Needs the in-game uploader."
+      description="The keystone each member currently holds."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />

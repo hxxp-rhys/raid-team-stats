@@ -15,7 +15,8 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Delve progress"
-      description="Season / tier / Valeera (delve companion) level. Needs the in-game uploader (12.0.5)."
+      description="Season / tier / Valeera (delve companion) level."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />

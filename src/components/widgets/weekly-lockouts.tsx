@@ -43,7 +43,8 @@ export function WeeklyLockoutsWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Weekly lockouts"
-      description="Heroic / Mythic bosses cleared this reset, per raid. Needs the in-game uploader."
+      description="Heroic / Mythic bosses cleared this reset, per raid."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />

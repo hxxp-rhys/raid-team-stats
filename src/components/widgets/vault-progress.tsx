@@ -2,13 +2,12 @@
 
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
-
-type Track = "veteran" | "champion" | "hero" | "myth";
+import { GEAR_TRACK_BG, type GearTrack } from "@/lib/gear-tracks";
 
 type VaultCategory = {
   unlocked?: number;
   total?: number;
-  tracks?: Track[];
+  tracks?: GearTrack[];
   // World vault: Blizzard's public API doesn't expose Delve progress.
   // tracked:false → render slots as "unknown" with a hint, not 0/3.
   tracked?: boolean;
@@ -19,14 +18,10 @@ type VaultSlots = {
   world?: VaultCategory;
 } | null | undefined;
 
-// Gear-track → pip colour. Matches WoW reward-track conventions:
-//   veteran = green · champion = blue · hero = light purple · myth = light orange
-const TRACK_PIP: Record<Track, string> = {
-  veteran: "bg-green-500",
-  champion: "bg-blue-500",
-  hero: "bg-purple-400",
-  myth: "bg-orange-400",
-};
+// Gear-track → pip colour. Single source of truth in @/lib/gear-tracks
+// per the project brand spec (Adventurer/Veteran/Champion/Hero/Myth =
+// gray/green/blue/purple/orange).
+const TRACK_PIP = GEAR_TRACK_BG;
 
 /**
  * Three rows per character — raid / M+ / world vault categories.
@@ -42,7 +37,7 @@ function Pips({
 }: {
   unlocked: number;
   total: number;
-  tracks?: Track[];
+  tracks?: GearTrack[];
   tracked?: boolean;
 }) {
   if (total <= 0) return <span className="text-muted-foreground text-xs">—</span>;

@@ -2,29 +2,28 @@
 
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  GEAR_TRACK_BG,
+  GEAR_TRACK_LABEL,
+  type GearTrack,
+} from "@/lib/gear-tracks";
 
 /**
  * Per-character tier-set tracker. Five fixed armor slots (head, shoulder,
  * chest, hands, legs) are the COLUMN HEADERS — one armor icon each, shown
  * once at the top. Every character is a row; each cell is a circle,
- * filled + coloured by the piece's gear track (same palette as the Great
- * Vault widget) when tier is equipped in that slot, or an empty outline
- * when the slot still needs a tier piece.
+ * filled + coloured by the piece's gear track (shared palette with the
+ * Great Vault widget — see @/lib/gear-tracks) when tier is equipped in
+ * that slot, or an empty outline when the slot still needs a tier piece.
  */
 
-type Track = "veteran" | "champion" | "hero" | "myth";
 type TierSlotRow = {
   slot: "HEAD" | "SHOULDER" | "CHEST" | "HANDS" | "LEGS";
   filled?: boolean;
   itemLevel?: number | null;
-  track?: Track | null;
-};
-
-const TRACK_FILL: Record<Track, string> = {
-  veteran: "bg-green-500",
-  champion: "bg-blue-500",
-  hero: "bg-purple-400",
-  myth: "bg-orange-400",
+  /** Server currently emits veteran/champion/hero/myth; adventurer is
+   *  reserved for when the server adds a lower-band derivation. */
+  track?: GearTrack | null;
 };
 
 const SLOT_ORDER: TierSlotRow["slot"][] = [
@@ -42,11 +41,12 @@ const SLOT_LABEL: Record<TierSlotRow["slot"], string> = {
   LEGS: "Legs",
 };
 
-// Minimal armor-piece glyphs per slot.
+// Minimal armor-piece glyphs per slot. 1.5x baseline (16 → 24px) per the
+// brand spec — small icons were vague.
 function SlotIcon({ slot }: { slot: TierSlotRow["slot"] }) {
   const common = {
-    width: 16,
-    height: 16,
+    width: 24,
+    height: 24,
     viewBox: "0 0 24 24",
     fill: "currentColor",
     "aria-hidden": true,
@@ -116,7 +116,7 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
               {SLOT_ORDER.map((slot) => (
                 <th key={slot} scope="col" className="px-2 py-1">
                   <span
-                    className="text-muted-foreground mx-auto flex w-4 justify-center"
+                    className="text-muted-foreground mx-auto flex w-6 justify-center"
                     title={SLOT_LABEL[slot]}
                     aria-label={SLOT_LABEL[slot]}
                   >
@@ -146,7 +146,7 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
                     const filled = !!s?.filled;
                     const track = s?.track ?? null;
                     const fill =
-                      filled && track ? TRACK_FILL[track] : null;
+                      filled && track ? GEAR_TRACK_BG[track] : null;
                     return (
                       <td key={slot} className="px-2 py-2">
                         <span
@@ -157,9 +157,9 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
                           }
                           title={
                             filled
-                              ? `${SLOT_LABEL[slot]} — ${track ?? "tier"}${
-                                  s?.itemLevel ? ` (ilvl ${s.itemLevel})` : ""
-                                }`
+                              ? `${SLOT_LABEL[slot]} — ${
+                                  track ? GEAR_TRACK_LABEL[track] : "tier"
+                                }${s?.itemLevel ? ` (ilvl ${s.itemLevel})` : ""}`
                               : `${SLOT_LABEL[slot]} — no tier piece`
                           }
                         />

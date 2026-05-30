@@ -20,7 +20,8 @@ export function VaultDetailWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Great Vault detail"
-      description="Unlocked slots + progress per row. Needs the in-game uploader."
+      description="Unlocked slots + progress per row."
+      requiresCompanion
     >
       {q.isPending ? (
         <WidgetLoading />
