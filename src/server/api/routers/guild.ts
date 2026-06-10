@@ -142,6 +142,45 @@ export const guildRouter = router({
     }),
 
   /**
+   * Boolean used by the guild page to decide whether to render the
+   * "Settings" link. The visibility set is STRICTLY:
+   *   - platform admin
+   *   - guild OWNER (NOT OFFICER — they keep their other UI gates via
+   *     isStaff, but the settings surface is owner-scope)
+   *   - LEADER or CO_LEADER of any active raid team in this guild
+   * Anyone else gets `false`. Cheap (3 small queries, short-circuited).
+   */
+  canManageSettings: protectedProcedure
+    .input(z.object({ guildId: z.string().cuid() }))
+    .query(async ({ ctx, input }): Promise<{ canManage: boolean }> => {
+      if (await isPlatformAdmin(ctx.session.user.id)) {
+        return { canManage: true };
+      }
+      const gm = await ctx.db.guildMembership.findUnique({
+        where: {
+          userId_guildId: {
+            userId: ctx.session.user.id,
+            guildId: input.guildId,
+          },
+        },
+        select: { role: true, status: true },
+      });
+      if (gm?.status === "ACTIVE" && gm.role === "OWNER") {
+        return { canManage: true };
+      }
+      const lead = await ctx.db.raidTeamMembership.findFirst({
+        where: {
+          isActive: true,
+          role: { in: ["LEADER", "CO_LEADER"] },
+          character: { userId: ctx.session.user.id },
+          raidTeam: { guildId: input.guildId },
+        },
+        select: { id: true },
+      });
+      return { canManage: lead != null };
+    }),
+
+  /**
    * Guild OWNER / OFFICER approves a PENDING member.
    */
   approveMember: protectedProcedure

@@ -1,8 +1,7 @@
 "use client";
 
-import { Suspense, use, useState, type FormEvent } from "react";
+import { Suspense, use, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { Route } from "next";
 
 import { api } from "@/lib/trpc-client";
@@ -15,8 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 import { WowauditConfigCard } from "./wowaudit-config";
 
@@ -43,10 +40,12 @@ export default function GuildDetailPage({ params }: { params: Params }) {
 
 function GuildDetailInner({ params }: { params: Params }) {
   const { guildId } = use(params);
-  const router = useRouter();
 
   const detail = api.guild.get.useQuery({ guildId });
   const utils = api.useUtils();
+  // Strictly-scoped "should we render the Settings link?" — owner + RT
+  // leaders/co-leaders + platform admin. Server-side resolver in guild.ts.
+  const settingsAccess = api.guild.canManageSettings.useQuery({ guildId });
 
   const approve = api.guild.approveMember.useMutation({
     onSuccess: () => utils.guild.get.invalidate({ guildId }),
@@ -60,24 +59,6 @@ function GuildDetailInner({ params }: { params: Params }) {
       if (res.ok) setSyncJobId(res.jobId);
     },
   });
-
-  const [teamName, setTeamName] = useState("");
-  const createTeam = api.raidTeam.create.useMutation({
-    onSuccess: async (team) => {
-      setTeamName("");
-      await utils.guild.get.invalidate({ guildId });
-      // Drop the user straight into the new team's dashboard list so they can
-      // add widgets without hunting through the UI.
-      router.push(
-        `/guild/${guildId}/team/${team.id}/dashboard` as Route,
-      );
-    },
-  });
-  const onCreateTeam = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!teamName.trim()) return;
-    createTeam.mutate({ guildId, name: teamName.trim() });
-  };
 
   if (detail.isPending) {
     return (
@@ -112,20 +93,35 @@ function GuildDetailInner({ params }: { params: Params }) {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-12 space-y-8">
-      <header>
-        <Link
-          href="/guild"
-          className="text-muted-foreground hover:text-foreground text-sm transition-colors"
-        >
-          ← Guilds
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{guild.name}</h1>
-        <p className="text-muted-foreground text-sm">
-          {guild.region} · {guild.realmSlug} · {guild.faction} · {guild.claimStatus}
-        </p>
-        <p className="text-muted-foreground mt-1 text-xs">
-          You are a {myRole.toLowerCase()} ({myStatus.toLowerCase()}).
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <Link
+            href="/guild"
+            className="text-muted-foreground hover:text-foreground text-sm transition-colors"
+          >
+            ← Guilds
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+            {guild.name}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {guild.region} · {guild.realmSlug} · {guild.faction} ·{" "}
+            {guild.claimStatus}
+          </p>
+          <p className="text-muted-foreground mt-1 text-xs">
+            You are a {myRole.toLowerCase()} ({myStatus.toLowerCase()}).
+          </p>
+        </div>
+        {/* Settings link — only visible to OWNER / RT-LEADER / RT-CO_LEADER /
+            platform admin (server-resolved via guild.canManageSettings). */}
+        {settingsAccess.data?.canManage && (
+          <Link
+            href={`/guild/${guildId}/settings` as Route}
+            className="border-border bg-background hover:bg-muted shrink-0 inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium transition-colors"
+          >
+            Settings
+          </Link>
+        )}
       </header>
 
       {isStaff && (
@@ -222,36 +218,17 @@ function GuildDetailInner({ params }: { params: Params }) {
               ))}
             </ul>
           )}
-          {isStaff && (
-            <form
-              onSubmit={onCreateTeam}
-              className="space-y-3 rounded-md border border-border p-3"
-            >
-              <div className="space-y-2">
-                <Label htmlFor="teamName">Create a raid team</Label>
-                <Input
-                  id="teamName"
-                  value={teamName}
-                  onChange={(e) => setTeamName(e.target.value)}
-                  placeholder="Eclipse Midnight"
-                  minLength={2}
-                  maxLength={60}
-                  required
-                />
-              </div>
-              {createTeam.error && (
-                <p className="text-destructive text-sm" role="alert">
-                  {createTeam.error.message}
-                </p>
-              )}
-              <Button
-                type="submit"
-                size="sm"
-                disabled={createTeam.isPending || !teamName.trim()}
+          {settingsAccess.data?.canManage && guild.raidTeams.length === 0 && (
+            <p className="text-muted-foreground text-xs">
+              Create a team from{" "}
+              <Link
+                href={`/guild/${guildId}/settings` as Route}
+                className="text-primary underline-offset-4 hover:underline"
               >
-                {createTeam.isPending ? "Creating…" : "Create"}
-              </Button>
-            </form>
+                Settings
+              </Link>
+              .
+            </p>
           )}
         </CardContent>
       </Card>
