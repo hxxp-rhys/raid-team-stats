@@ -73,6 +73,59 @@ export async function enqueueTrackedMemberSyncForAll(): Promise<{ enqueued: numb
   return { enqueued: characters.length };
 }
 
+/**
+ * Out-of-band single-character sync. Use whenever a character becomes
+ * newly visible to the app (first guild-roster discovery, rejoin after
+ * a DEPARTED → ACTIVE flip, manager-added to a raid team) so the user
+ * sees real data instead of a stale "Loading…" widget grid until the
+ * next hourly tier-A pass.
+ *
+ * Failures are swallowed and logged: the caller is on the user's
+ * happy path (signup / roster sync / add-member), and a missed sync
+ * just means the next scheduled tier-A pass picks them up. Never
+ * reject the caller for a queue hiccup.
+ *
+ * Job id is namespaced by trigger + ms-timestamp so:
+ *   - it can't collide with the hourly tier-A job id, and
+ *   - back-to-back triggers for the same character don't dedupe into
+ *     one (the user re-clicking is a re-request, not a duplicate).
+ */
+export async function enqueueImmediateCharacterSync(
+  characterId: string,
+  trigger: "discovery" | "added_to_team" | "rejoin",
+): Promise<void> {
+  try {
+    // `discovery` fires from guild roster syncs, where a fresh claim can
+    // discover 50+ characters in one pass. Spreading them with up to 8 s of
+    // random jitter keeps the burst from pinning the Blizzard rate-limit
+    // bucket — every job runs the same handler, which already reserves
+    // `minFloor: 5` for interactive paths, so this is defence in depth. The
+    // other triggers come from individual user clicks (add member, rejoin)
+    // and should fire as fast as possible.
+    const delay =
+      trigger === "discovery" ? Math.floor(Math.random() * 8000) : 0;
+    await queues.trackedMemberSync.add(
+      QUEUE_NAMES.trackedMemberSync,
+      { characterId } satisfies TrackedMemberSyncPayload,
+      {
+        jobId: `immediate_${trigger}_${characterId}_${Date.now()}`,
+        // Higher priority (lower number) than the hourly bulk enqueue so a
+        // newly-discovered member jumps the queue ordering. Priority is
+        // honoured for *queued* jobs only — already-running tier-A jobs
+        // don't yield, which is fine: a few seconds of wait is still
+        // ~hours faster than the next scheduled pass.
+        priority: 1,
+        ...(delay > 0 ? { delay } : {}),
+      },
+    );
+  } catch (err) {
+    logger.warn(
+      { err, characterId, trigger },
+      "immediate character sync enqueue failed; tier-A will pick this character up",
+    );
+  }
+}
+
 // Minimal equipment shape we extract from the Blizzard payload. The full
 // payload lives in rawPayload for replay.
 //

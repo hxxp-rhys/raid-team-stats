@@ -6,6 +6,7 @@ import {
   reevaluateGuildClaim,
   transferRaidTeamOwnershipOnDeparture,
 } from "@/server/guild-auth/ownership";
+import { enqueueImmediateCharacterSync } from "@/server/ingestion/jobs/tracked-member-sync";
 
 /**
  * Number of consecutive missed sync observations before a character is marked
@@ -40,6 +41,11 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
   // newly promoted to rank 0, or the current rank-0 character demoted). When
   // true, we re-evaluate the guild's claim after the transaction commits.
   let rankZeroChanged = false;
+  // Whether this presence observation also discovered (or rediscovered) the
+  // character — drives a single immediate per-character sync after the tx
+  // commits, so newly-visible roster entries don't show empty widgets until
+  // the next hourly tier-A pass.
+  let initialSyncTrigger: "discovery" | "rejoin" | null = null;
   await db.$transaction(async (tx) => {
     const existing = await tx.guildCharacterLink.findUnique({
       where: { characterId_guildId: { characterId, guildId } },
@@ -59,6 +65,7 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
       });
       await ensureGuildMembership(tx, characterId, guildId);
       if (rosterRank === 0) rankZeroChanged = true;
+      initialSyncTrigger = "discovery";
       return;
     }
 
@@ -90,8 +97,17 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
         subjectId: characterId,
         metadata: { guildId, kind: "rejoin_requires_approval" },
       });
+      initialSyncTrigger = "rejoin";
     }
   });
+
+  // Fresh discovery / rejoin → kick off one immediate per-character sync so
+  // the dashboards have real data the moment the user lands. Fire-and-forget
+  // because the failure mode (hourly tier-A pass still catches them next
+  // hour) is acceptable; awaiting would slow every roster-sync iteration.
+  if (initialSyncTrigger) {
+    void enqueueImmediateCharacterSync(characterId, initialSyncTrigger);
+  }
 
   // Re-evaluate the guild's OWNER (claimedByUserId) when this observation
   // changed who sits at rosterRank 0. Spec: a demotion-only change touches

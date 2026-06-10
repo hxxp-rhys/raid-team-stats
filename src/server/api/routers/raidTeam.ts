@@ -10,6 +10,7 @@ import {
 } from "@/server/api/trpc";
 import { normalizeRaidTeamSlug } from "@/lib/realm";
 import { audit } from "@/server/security/audit";
+import { enqueueImmediateCharacterSync } from "@/server/ingestion/jobs/tracked-member-sync";
 
 const nameSchema = z.string().trim().min(2).max(60);
 const visibilitySchema = z.enum(["TEAM", "GUILD", "LINK"]);
@@ -357,6 +358,12 @@ export const raidTeamRouter = router({
         subjectId: input.raidTeamId,
         metadata: { characterId: input.characterId, role: membership.role },
       });
+
+      // Kick off an immediate per-character sync so the newly-added character
+      // appears in the team's widgets without waiting up to an hour for the
+      // next tier-A pass. Fire-and-forget; failures just mean the next
+      // scheduled sync picks them up.
+      void enqueueImmediateCharacterSync(input.characterId, "added_to_team");
 
       return { ok: true, membershipId: membership.id };
     }),
