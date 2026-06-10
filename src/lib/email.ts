@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
+import { redis } from "@/lib/redis";
 
 /**
  * SMTP transport built once from env. In dev with no SMTP configured the
@@ -45,7 +47,55 @@ const getTransporter = (): Transporter | null => {
 
 const fromAddress = (): string => env.SMTP_FROM ?? "no-reply@localhost";
 
+// Short-TTL dedupe window. Any identical send within this many seconds is
+// treated as a duplicate and silently dropped. Covers the documented sources
+// of double-emails on signup/reset: React's pre-`isPending` 1-frame window
+// where a fast double-click can fire the mutation twice, and SMTP-side
+// retries/relays. 15 s is short enough that a user who legitimately wants a
+// fresh link (e.g. mistyped email) won't be blocked from re-requesting.
+const EMAIL_DEDUPE_TTL_SECONDS = 15;
+
+const dedupeKey = (args: SendArgs): string => {
+  // Hash so an arbitrarily long URL/body never blows the Redis key cap, and
+  // so we don't keep PII URLs as literal strings in cache. The (to + subject)
+  // pair is the discriminator; we add the first 256 chars of `text` so two
+  // *different* verify links to the same address (e.g. resend → fresh token)
+  // are NOT collapsed into one.
+  const hash = createHash("sha256")
+    .update(args.to)
+    .update("\0")
+    .update(args.subject)
+    .update("\0")
+    .update(args.text.slice(0, 256))
+    .digest("base64url");
+  return `email:dedupe:${hash}`;
+};
+
 const sendMail = async (args: SendArgs): Promise<void> => {
+  // Per-message dedupe, atomically claimed via SET NX EX. If the key already
+  // exists the second caller gets `null` from SET — log it and bail. This is
+  // the single choke point for every email leaving the system.
+  try {
+    const claimed = await redis.set(
+      dedupeKey(args),
+      "1",
+      "EX",
+      EMAIL_DEDUPE_TTL_SECONDS,
+      "NX",
+    );
+    if (claimed === null) {
+      logger.warn(
+        { to: args.to, subject: args.subject },
+        "email dedupe: identical message sent within window, dropping duplicate",
+      );
+      return;
+    }
+  } catch (err) {
+    // Redis outage: fail-open. We'd rather risk a rare double-send than fail
+    // the verification/reset flow outright.
+    logger.error({ err, to: args.to, subject: args.subject }, "email dedupe lookup failed");
+  }
+
   const transporter = getTransporter();
   if (!transporter) {
     // Dev fallback: render the email to logs so flows are inspectable.

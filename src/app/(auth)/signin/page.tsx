@@ -24,6 +24,18 @@ const KNOWN_SAFE_ERRORS = new Set([
   "Authenticator code is incorrect or expired.",
 ]);
 
+// Map Auth.js OAuth error codes (delivered via `?error=` on the configured
+// `pages.error: "/signin"`) to user-facing copy. Anything not listed falls
+// back to a generic message so we never expose internal failure details.
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  BattleNetNotLinked:
+    "No account is linked to that Battle.net identity. Sign in with your email and password first, then link Battle.net from your profile.",
+  AccessDenied: "Sign-in was cancelled.",
+  OAuthCallbackError: "Battle.net sign-in failed. Please try again.",
+  OAuthSignInError: "Battle.net sign-in failed. Please try again.",
+  Configuration: "Sign-in is misconfigured. Please contact an administrator.",
+};
+
 // Read `?callbackUrl=` from window.location after hydration. Using
 // `useSearchParams()` on a `/signin` page that's served as static HTML
 // under Next 16 + cacheComponents leaves the inner Suspense waiting
@@ -47,8 +59,31 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [needsMfa, setNeedsMfa] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Seed `error` from `?error=...` so OAuth failures (Auth.js redirects here
+  // when `pages.error: "/signin"`) actually surface to the user instead of
+  // silently swallowing themselves.
+  const [error, setError] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (!code) return null;
+    return OAUTH_ERROR_MESSAGES[code] ?? "Sign-in failed. Please try again.";
+  });
   const [pending, setPending] = useState(false);
+  const [bnetPending, setBnetPending] = useState(false);
+
+  const onBattleNetClick = async () => {
+    setError(null);
+    setBnetPending(true);
+    try {
+      // Let Auth.js drive the full OAuth redirect. On success we end up at
+      // `callbackUrl`; on failure we land back here with `?error=...` which
+      // the lazy initializer above turns into a visible message.
+      await signIn("battlenet", { callbackUrl });
+    } catch {
+      setError("Battle.net sign-in failed. Please try again.");
+      setBnetPending(false);
+    }
+  };
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -153,13 +188,35 @@ export default function SignInPage() {
           )}
         </CardContent>
         <CardFooter className="flex flex-col items-stretch gap-3">
-          <Button type="submit" disabled={pending}>
+          <Button type="submit" disabled={pending || bnetPending}>
             {pending
               ? "Signing in…"
               : needsMfa
                 ? "Verify and sign in"
                 : "Sign in"}
           </Button>
+          {!needsMfa && (
+            <>
+              <div className="text-muted-foreground flex items-center gap-2 text-xs uppercase tracking-wider">
+                <span className="bg-border h-px flex-1" />
+                <span>or</span>
+                <span className="bg-border h-px flex-1" />
+              </div>
+              {/* Battle.net sign-in. Only usable if the user has already
+                  linked their Battle.net identity from /account — the
+                  signIn callback refuses to auto-create accounts from
+                  OAuth and redirects back here with
+                  ?error=BattleNetNotLinked otherwise. */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onBattleNetClick}
+                disabled={pending || bnetPending}
+              >
+                {bnetPending ? "Redirecting…" : "Sign in with Battle.net"}
+              </Button>
+            </>
+          )}
           {needsMfa && (
             <button
               type="button"

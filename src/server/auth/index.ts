@@ -208,32 +208,79 @@ const config: NextAuthConfig = {
   ],
 
   callbacks: {
-    async signIn({ account, profile }) {
-      // Battle.net is a link-to-existing-account flow, not a primary identity.
-      // The user must already be signed in (via Credentials) when they click
-      // "Link Battle.net". We attach the Battle.net Account row to their
-      // current session's user, and refuse to create a new user from Battle.net.
+    async signIn({ user, account, profile }) {
+      // Battle.net has two flows behind the same OAuth callback:
+      //   1. LINK   — user is already signed in (via Credentials) and clicked
+      //               "Link Battle.net" on /account. Attach the OAuth account
+      //               to their session user.
+      //   2. SIGN-IN — user is NOT signed in but they already linked their
+      //               Battle.net identity in a previous session. Auth.js's
+      //               adapter has resolved the existing User via
+      //               getUserByAccount, so we just let the sign-in proceed.
+      // We still refuse to AUTO-CREATE users from Battle.net (no link, no
+      // session → bounce to /signin with a clear error).
       if (account?.provider === "battlenet") {
         const battletag =
           typeof profile?.battle_tag === "string" ? profile.battle_tag : "unknown";
 
-        // Read the current session cookie. If absent, the click can't be
-        // attributed to an existing user — refuse.
         const current = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
-        if (!current?.user?.id) {
-          logger.warn({ battletag }, "rejected Battle.net sign-in: not currently signed in");
-          return false;
-        }
-
-        // Already linked? Confirm it's the same user.
         const existing = await db.account.findFirst({
           where: { provider: "battlenet", providerAccountId: account.providerAccountId },
         });
+
+        // SIGN-IN flow: not currently signed in, but the Battle.net identity
+        // is already linked → let Auth.js mint a JWT for the linked user.
+        if (!current?.user?.id) {
+          if (!existing) {
+            logger.warn(
+              { battletag },
+              "rejected Battle.net sign-in: no linked account and not signed in",
+            );
+            // Bounce back to /signin with a code the signin page maps to a
+            // human-readable explanation.
+            return "/signin?error=BattleNetNotLinked";
+          }
+          // Defensive: Auth.js should have already resolved `user` via
+          // adapter.getUserByAccount before this callback fires, but a race
+          // where the User row is deleted between our Account lookup and
+          // Auth.js's would leave `user` undefined — returning `true` then
+          // would mint a JWT with no `userId`, producing a broken session.
+          // Bail to the no-link error path instead.
+          if (!user?.id) {
+            logger.error(
+              { battletag, accountUserId: existing.userId },
+              "Battle.net sign-in aborted: adapter did not resolve a user",
+            );
+            return "/signin?error=BattleNetNotLinked";
+          }
+          // Refresh tokens on the existing row so refresh_token rotation
+          // doesn't drift. Returning `true` lets Auth.js sign the user in;
+          // by this point Auth.js's adapter.getUserByAccount has resolved
+          // the existing User via the (provider, providerAccountId) unique.
+          await db.account.update({
+            where: { id: existing.id },
+            data: {
+              access_token: account.access_token,
+              refresh_token: account.refresh_token,
+              id_token: account.id_token,
+              expires_at: account.expires_at,
+              token_type: account.token_type,
+              scope: account.scope,
+            },
+          });
+          logger.info(
+            { battletag, userId: existing.userId, resolvedUserId: user.id },
+            "Battle.net sign-in as previously-linked user",
+          );
+          return true;
+        }
+
+        // LINK flow: already signed in.
         if (existing) {
           if (existing.userId !== current.user.id) {
             logger.warn(
               { battletag, currentUserId: current.user.id, owningUserId: existing.userId },
-              "rejected Battle.net sign-in: providerAccountId belongs to a different user",
+              "rejected Battle.net link: providerAccountId belongs to a different user",
             );
             return false;
           }
