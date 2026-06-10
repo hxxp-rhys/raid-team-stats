@@ -1,8 +1,8 @@
 # Raid-leader widget research
 
 Distilled from the reference Google Sheet (Eclipse Midnight / "With the Sun"
-WoW Audit spreadsheet) plus standard raid-leader workflows on
-raider.io / warcraftlogs / wowaudit.com / Mr. Mythical / WoWAnalyzer.
+roster spreadsheet) plus standard raid-leader workflows on
+raider.io / warcraftlogs / Mr. Mythical / WoWAnalyzer.
 
 ## What the reference spreadsheet tracks (per column)
 

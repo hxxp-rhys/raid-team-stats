@@ -27,7 +27,7 @@ relaunch VSCode from inside itself.
    /profile had no target. Now `<Card id="mfa">` on MfaCard.
 3. **Raid-leader stat research** — docs/widget-research.md captures the
    reference spreadsheet column inventory + standard tool patterns
-   (WoW Audit, raider.io, WCL).
+   (raider.io, WCL).
 4. **5 new widgets** (commit ef679b4-area)
    - class_composition (class + role bars, tank/heal/dps counts)
    - ilvl_distribution (histogram with min/median/mean/max)

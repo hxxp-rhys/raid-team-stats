@@ -77,7 +77,7 @@ export const queueDepth = new Gauge({
 export const upstreamRequestsTotal = new Counter({
   name: "rts_upstream_requests_total",
   help: "Outbound HTTP requests to ingestion sources, by status class",
-  labelNames: ["source", "status_class"] as const, // source: blizzard | wcl | raiderio | wowaudit
+  labelNames: ["source", "status_class"] as const, // source: blizzard | wcl | raiderio
   registers: [registry],
 });
 

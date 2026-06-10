@@ -84,6 +84,19 @@ then `prisma migrate deploy`. **After any migration:** clear
 `persistent_data/web/next-cache` (else *all* routes 404) and
 `npx prisma generate` (stale client). Then do the §C web dance.
 
+**The §C dance recreates `web` ONLY — a schema migration ALSO needs the
+worker.** `rts-worker` is a long-lived process that runs the ingestion
+jobs (roster refresh, tracked-member sync, etc.) and holds its own loaded
+Prisma client. After a migration you MUST also
+`docker exec rts-worker … npx prisma generate` then
+`docker compose up -d --force-recreate worker`, or every queued job that
+touches the changed model fails with a stale-client error
+(`SyncRun ok=false`) while the website looks fine. Forgetting this cost a
+failed roster-refresh run. Data-migration ordering also matters: if a
+migration adds/narrows a UNIQUE index, run the dedupe/merge SQL FIRST
+(while the old constraint still allows the duplicates) so
+`CREATE UNIQUE INDEX` doesn't fail.
+
 ## E. Cloudflare (raiders.hxxp.io is proxied)
 
 - **New `/api/*` paths 404 at the CF edge** (edge-cached pre-deploy

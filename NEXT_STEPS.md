@@ -23,10 +23,9 @@ ship. Roughly ordered by impact-per-effort.
 ## High value, medium change
 
 5. **Add dedicated AuditEvent enum values** for the cases currently
-   reusing other events (`DASHBOARD_CREATED`, `WOWAUDIT_CONFIGURED`,
-   `WOWAUDIT_CLEARED`, `AUTH_EMAIL_VERIFIED`). Requires a Prisma
-   migration + updating call sites. Search for `// reuse for now` in
-   `src/server/api/routers/`.
+   reusing other events (`DASHBOARD_CREATED`, `AUTH_EMAIL_VERIFIED`).
+   Requires a Prisma migration + updating call sites. Search for
+   `// reuse for now` in `src/server/api/routers/`.
 6. **Wire Raider.IO ingestion**. Client stub exists at
    `src/server/ingestion/raiderio/client.ts`. Mostly duplicates
    Blizzard, but raid-progression rank percentile is RIO-unique.

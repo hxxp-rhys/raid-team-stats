@@ -280,13 +280,6 @@ model Guild {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  // WoW Audit integration. The API key is stored AES-256-GCM-encrypted via
-  // the token cipher (see src/server/ingestion/wowaudit/config.ts). Never
-  // returned to clients raw — only "configured? yes/no" + last-4 preview.
-  wowauditApiKey  String? @db.Text
-  wowauditTeamId  String?
-  wowauditBaseUrl String?
-
   claimedBy      User?                @relation("GuildClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
   memberships    GuildMembership[]
   characterLinks GuildCharacterLink[]
@@ -412,7 +405,6 @@ enum SnapshotSource {
   BLIZZARD
   WARCRAFT_LOGS
   RAIDERIO
-  WOWAUDIT
 }
 
 model CharacterSnapshot {

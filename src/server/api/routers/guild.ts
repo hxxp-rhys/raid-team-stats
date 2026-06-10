@@ -11,13 +11,6 @@ import { audit } from "@/server/security/audit";
 import { GuildMemberRole, GuildMembershipStatus } from "@/generated/prisma/enums";
 import { claimByAdmin } from "@/server/guild-auth/claim";
 import { env } from "@/env";
-import {
-  getPublicStatus as getWowauditPublicStatus,
-  setConfig as setWowauditConfigStore,
-  clearConfig as clearWowauditConfigStore,
-  DEFAULT_WOWAUDIT_BASE_URL,
-} from "@/server/ingestion/wowaudit/config";
-import { WowauditClient } from "@/server/ingestion/wowaudit/client";
 
 const memberRoleSchema = z.enum(["MEMBER", "OFFICER", "OWNER"]);
 
@@ -570,75 +563,4 @@ export const guildRouter = router({
     };
   }),
 
-  // ────────────────────────────────────────────────────────────────────────
-  // WoW Audit integration (per-guild API key, encrypted at rest)
-  //
-  // Reads: any ACTIVE guild member can see whether WoW Audit is configured
-  // and a 4-char hint of the key, but never the raw key.
-  // Writes: OFFICER+ only. Each write is audit-logged.
-  // ────────────────────────────────────────────────────────────────────────
-
-  wowauditStatus: protectedProcedure
-    .input(z.object({ guildId: z.string().cuid() }))
-    .query(async ({ ctx, input }) => {
-      await assertGuildRole(ctx, input.guildId, "MEMBER");
-      const status = await getWowauditPublicStatus(input.guildId);
-      return { ...status, defaultBaseUrl: DEFAULT_WOWAUDIT_BASE_URL };
-    }),
-
-  setWowauditConfig: protectedProcedure
-    .input(
-      z.object({
-        guildId: z.string().cuid(),
-        apiKey: z.string().trim().min(8).max(512),
-        teamId: z.string().trim().max(64).optional(),
-        baseUrl: z.string().url().max(256).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await assertGuildRole(ctx, input.guildId, "OFFICER");
-      await setWowauditConfigStore(input.guildId, {
-        apiKey: input.apiKey,
-        teamId: input.teamId ?? null,
-        baseUrl: input.baseUrl ?? null,
-      });
-      await audit({
-        event: "GUILD_ROLE_CHANGED", // reuse for now; consider dedicated event
-        actorUserId: ctx.session.user.id,
-        subjectType: "guild",
-        subjectId: input.guildId,
-        metadata: {
-          action: "wowaudit_configured",
-          teamId: input.teamId ?? null,
-          baseUrl: input.baseUrl ?? null,
-        },
-      });
-      return { ok: true };
-    }),
-
-  clearWowauditConfig: protectedProcedure
-    .input(z.object({ guildId: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertGuildRole(ctx, input.guildId, "OFFICER");
-      await clearWowauditConfigStore(input.guildId);
-      await audit({
-        event: "GUILD_ROLE_CHANGED",
-        actorUserId: ctx.session.user.id,
-        subjectType: "guild",
-        subjectId: input.guildId,
-        metadata: { action: "wowaudit_cleared" },
-      });
-      return { ok: true };
-    }),
-
-  testWowauditConnection: protectedProcedure
-    .input(z.object({ guildId: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertGuildRole(ctx, input.guildId, "OFFICER");
-      const client = await WowauditClient.forGuild(input.guildId);
-      if (!client) {
-        return { ok: false as const, error: "No WoW Audit key configured." };
-      }
-      return client.ping();
-    }),
 });

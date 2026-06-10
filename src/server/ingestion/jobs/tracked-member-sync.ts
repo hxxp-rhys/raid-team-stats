@@ -32,7 +32,6 @@ import {
   characterProfileFields,
 } from "@/server/ingestion/raiderio/client";
 import { raiderIOCharacterProfileSchema } from "@/server/ingestion/raiderio/schemas";
-import { resolveWorldVault } from "@/server/ingestion/wowaudit/world-vault";
 import { computeGearAudit } from "@/server/ingestion/gear-audit";
 import type { Region } from "@/generated/prisma/enums";
 import { z } from "zod";
@@ -746,41 +745,17 @@ export async function handleTrackedMemberSync(
     // World (Delve) Great Vault row. Blizzard's public character API does
     // NOT expose Delve/World vault progress, so WoW Audit (fed by its
     // in-game companion addon) is the only reliable source. Resolved per
-    // the character's active guild; stays `tracked:false` unless that
-    // guild has a WoW Audit key configured AND the character is in its
-    // WoW Audit roster with a usable vault signal.
-    let world: {
+    // Blizzard's public character API does NOT expose Delve / World Vault
+    // progress. The Stat Smith in-game addon + companion uploader writes
+    // these into the live-vault tables on the snapshot side; this Tier-A
+    // job stores `tracked: false` so the widget knows to fall back to the
+    // addon-fed signal rather than render a wrong "0/3".
+    const world: {
       unlocked: number;
       total: number;
       tracks: Track[];
       tracked: boolean;
     } = { unlocked: 0, total: 3, tracks: [], tracked: false };
-    try {
-      const link = await db.guildCharacterLink.findFirst({
-        where: { characterId: character.id, status: "ACTIVE" },
-        select: { guildId: true },
-      });
-      if (link) {
-        const wv = await resolveWorldVault({
-          guildId: link.guildId,
-          name: character.name,
-          realmSlug: character.realmSlug,
-        });
-        if (wv) {
-          world = {
-            unlocked: wv.unlocked,
-            total: wv.total,
-            tracks: [],
-            tracked: true,
-          };
-        }
-      }
-    } catch (err) {
-      logger.warn(
-        { err, characterId: character.id },
-        "world-vault resolve failed; leaving World untracked",
-      );
-    }
 
     await writeVaultSnapshot({
       characterId: character.id,

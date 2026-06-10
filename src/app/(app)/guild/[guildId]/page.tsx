@@ -15,8 +15,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-import { WowauditConfigCard } from "./wowaudit-config";
-
 type Params = Promise<{ guildId: string }>;
 
 /**
@@ -233,7 +231,6 @@ function GuildDetailInner({ params }: { params: Params }) {
         </CardContent>
       </Card>
 
-      <WowauditConfigCard guildId={guildId} canEdit={isStaff} />
     </main>
   );
 }

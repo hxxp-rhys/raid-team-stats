@@ -77,7 +77,7 @@ The script asserts p95 latencies on `/api/health` and `/signin` and a
 regression — either the rate-limit middleware is mis-sized for the
 expected load or a dependency (Postgres, Redis) is saturating.
 
-## Battle.net + WoW Audit (manual)
+## Battle.net (manual)
 
 These flows depend on external IdPs/APIs and can't be reliably
 automated in CI. Smoke-test checklist before each deploy:
@@ -93,10 +93,6 @@ automated in CI. Smoke-test checklist before each deploy:
 - [ ] Tier C manual sync: from `/guild/<id>`, click **Refresh roster
       from Battle.net**. Confirm a job ID is returned and that a
       `SyncRun` row appears in the DB (or the worker logs).
-- [ ] WoW Audit: from the guild settings card, paste the team API key
-      and click **Test connection**. Connection should succeed against
-      the configured `wowauditBaseUrl` (default `https://wowaudit.com/v1`).
-      A failed connection should not corrupt stored config.
 
 ## Security-test matrix (manual quarterly review)
 

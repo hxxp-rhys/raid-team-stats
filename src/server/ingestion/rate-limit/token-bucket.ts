@@ -176,12 +176,3 @@ export const raiderioBucket = new TokenBucket({
   capacity: 60,
   refillPerSec: 4,
 });
-
-// WoW Audit rate limits are not publicly documented. Conservative defaults
-// until we have specifics: 30 req/min sustained, 30 burst.
-// Tune once the real WoW Audit docs land — see SECURITY.md.
-export const wowauditBucket = new TokenBucket({
-  provider: "wowaudit",
-  capacity: 30,
-  refillPerSec: 0.5,
-});
