@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
@@ -15,6 +15,7 @@ function percentileColor(p: number): string {
 }
 
 const MYTHIC = 5; // WCL difficulty 5 = Mythic
+type TimeWindow = "week" | "season";
 
 function relativeAge(fromMs: number, nowMs: number): string {
   const diff = nowMs - fromMs;
@@ -29,23 +30,33 @@ function relativeAge(fromMs: number, nowMs: number): string {
 }
 
 /**
- * Best Mythic DPS percentile per character for the CURRENT raid lockout.
+ * Best Mythic DPS percentile per character. Toggle between:
+ *   - Week (default): scoped to the current raid lockout via
+ *     `weekPercentile` (per-kill ranks from WCL's `encounterRankings`).
+ *   - Season: WCL's season/partition cumulative best via `percentile`.
  *
- * The server computes `weekPercentile` + `reportStartTime` from WCL's
- * `encounterRankings` (per-kill ranks scoped to the Tue-reset week — WCL's
- * `zoneRankings` aggregate has no timestamps and can't answer "this week").
- * A character with no Mythic kill this lockout shows "—".
+ * A character with no Mythic kill this lockout shows "—" in Week view;
+ * a character with no Mythic ranking yet shows "—" in Season view too.
  */
 export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
   // Capture "now" once at mount so render stays pure (Date.now() in render
   // trips react-hooks/purity in React 19).
   const [nowMs] = useState(() => Date.now());
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>("week");
+  // useId() — the page might host two of this widget; a hard-coded id would
+  // collide and break label/select association on the second instance.
+  const windowSelectId = useId();
+  const isWeek = timeWindow === "week";
 
   return (
     <WidgetShell
       title="Warcraft Logs parses"
-      description="Best Mythic DPS percentile this raid lockout only (Tue reset → Tue reset). Bosses = Mythic encounters killed this week with a ranked log; Age = time since that kill's log."
+      description={
+        isWeek
+          ? "Best Mythic DPS percentile this raid lockout only (Tue reset → Tue reset)."
+          : "Best Mythic DPS percentile across the full season."
+      }
     >
       {q.isPending ? (
         <WidgetLoading />
@@ -54,7 +65,28 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
       ) : q.data.members.length === 0 ? (
         <WidgetEmpty>No tracked members yet.</WidgetEmpty>
       ) : (
-        <table className="w-full text-sm">
+        <>
+          {/* Time-window toggle — local to this widget instance (not
+              persisted yet). Defaults to Week, matching the prior
+              hard-coded behaviour. */}
+          <div className="mb-2 flex items-center justify-end gap-2 text-xs">
+            <label
+              htmlFor={windowSelectId}
+              className="text-muted-foreground"
+            >
+              Window
+            </label>
+            <select
+              id={windowSelectId}
+              value={timeWindow}
+              onChange={(e) => setTimeWindow(e.target.value as TimeWindow)}
+              className="bg-background border-border h-7 rounded-md border px-1.5 text-xs"
+            >
+              <option value="week">This week</option>
+              <option value="season">Season best</option>
+            </select>
+          </div>
+          <table className="w-full text-sm">
           <caption className="sr-only">
             Best current-lockout Mythic Warcraft Logs percentile per character
           </caption>
@@ -69,27 +101,27 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
           </thead>
           <tbody className="divide-border divide-y">
             {q.data.members.map((m) => {
-              // Current raid tier (server-resolved zone) + Mythic + a
-              // logged kill THIS lockout (server-set weekPercentile).
+              // Current raid tier (server-resolved zone) + Mythic. The
+              // active field is `weekPercentile` (this-lockout kills) when
+              // the user picks "This week" and `percentile` (season best)
+              // otherwise — both come from the same wclParse rows.
               const zone = q.data.currentRaidZoneId;
+              const pickPct = (p: { weekPercentile: number | null; percentile: number | null }) =>
+                isWeek ? p.weekPercentile : p.percentile;
               const parses = (m.latest.wclParses ?? []).filter(
                 (p) =>
                   (zone == null || p.zoneId === zone) &&
                   p.difficulty === MYTHIC &&
-                  p.weekPercentile != null,
+                  pickPct(p) != null,
               );
               const best = parses.reduce<
                 { pct: number; name: string | null } | null
-              >(
-                (acc, p) =>
-                  acc === null || (p.weekPercentile ?? 0) > acc.pct
-                    ? {
-                        pct: p.weekPercentile ?? 0,
-                        name: p.encounterName ?? null,
-                      }
-                    : acc,
-                null,
-              );
+              >((acc, p) => {
+                const pct = pickPct(p) ?? 0;
+                return acc === null || pct > acc.pct
+                  ? { pct, name: p.encounterName ?? null }
+                  : acc;
+              }, null);
               const bosses = new Set(parses.map((p) => p.encounterId)).size;
               const newest = parses.reduce<number | null>((acc, p) => {
                 const t = p.reportStartTime
@@ -135,6 +167,7 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
             })}
           </tbody>
         </table>
+        </>
       )}
     </WidgetShell>
   );

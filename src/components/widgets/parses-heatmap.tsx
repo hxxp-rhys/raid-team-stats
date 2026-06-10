@@ -1,12 +1,18 @@
 "use client";
 
+import { useId, useState } from "react";
+
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+
+type TimeWindow = "week" | "season";
 
 /**
  * Per-character × per-encounter best-percentile heatmap. The single most
  * useful officer view: spot a character who parses fine on most fights but
- * dies on a specific boss. Each cell colour-codes by percentile.
+ * dies on a specific boss. Each cell colour-codes by percentile. A "Window"
+ * dropdown switches between this-lockout best (`weekPercentile`) and
+ * season-cumulative best (`percentile`).
  */
 
 function colorFor(p: number | null): string {
@@ -31,6 +37,13 @@ function textColorFor(p: number | null): string {
 
 export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
+  // Default to "season" — matches the prior hard-coded behaviour. A user
+  // who wants the lockout-only view can flip to "week".
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>("season");
+  // useId() — a dashboard may host two heatmap widgets; a hard-coded id
+  // would collide and break the label/select association on the second.
+  const windowSelectId = useId();
+  const isWeek = timeWindow === "week";
 
   if (q.isPending) {
     return (
@@ -94,17 +107,20 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
   }
 
   // Build a Map<characterId, Map<encounterId, bestPercentile>> for O(1) lookup.
+  // The "active" percentile field swaps with the dropdown — both come from
+  // the same wclParse rows so this is purely a render-time projection.
   const byChar = new Map<string, Map<number, number>>();
   for (const m of q.data.members) {
     const cellByEnc = new Map<number, number>();
     for (const p of m.latest.wclParses ?? []) {
       if (typeof p.encounterId !== "number") continue;
-      if (typeof p.percentile !== "number") continue;
+      const pct = isWeek ? p.weekPercentile : p.percentile;
+      if (typeof pct !== "number") continue;
       if (p.zoneId !== currentZone) continue; // current raid only
       if (typeof p.difficulty === "number" && p.difficulty !== MYTHIC) continue;
       const prior = cellByEnc.get(p.encounterId);
-      if (prior === undefined || p.percentile > prior) {
-        cellByEnc.set(p.encounterId, p.percentile);
+      if (prior === undefined || pct > prior) {
+        cellByEnc.set(p.encounterId, pct);
       }
     }
     byChar.set(m.character.id, cellByEnc);
@@ -125,8 +141,29 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Parses heatmap"
-      description="Best Mythic percentile per character per boss. Hover a cell or header for detail."
+      description={
+        isWeek
+          ? "Best Mythic percentile per character per boss, this lockout only. Hover a cell or header for detail."
+          : "Best Mythic percentile per character per boss, season cumulative. Hover a cell or header for detail."
+      }
     >
+      <div className="mb-2 flex items-center justify-end gap-2 text-xs">
+        <label
+          htmlFor={windowSelectId}
+          className="text-muted-foreground"
+        >
+          Window
+        </label>
+        <select
+          id={windowSelectId}
+          value={timeWindow}
+          onChange={(e) => setTimeWindow(e.target.value as TimeWindow)}
+          className="bg-background border-border h-7 rounded-md border px-1.5 text-xs"
+        >
+          <option value="week">This week</option>
+          <option value="season">Season best</option>
+        </select>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <caption className="sr-only">WCL parses by character and boss</caption>
