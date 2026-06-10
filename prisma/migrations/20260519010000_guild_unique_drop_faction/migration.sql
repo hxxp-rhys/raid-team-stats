@@ -4,5 +4,8 @@
 -- split its roster across two rows. Faction is now a plain attribute, not
 -- part of the identity. Any pre-existing duplicate rows are merged in the
 -- same release BEFORE this migration runs, so the new unique index holds.
-DROP INDEX "Guild_region_realmSlug_guildSlug_faction_key";
-CREATE UNIQUE INDEX "Guild_region_realmSlug_guildSlug_key" ON "Guild" ("region", "realmSlug", "guildSlug");
+-- Idempotent: a previous partial apply (data not deduped first) may have
+-- already dropped the old index, and a recovery may have already created
+-- the new one — so guard both statements.
+DROP INDEX IF EXISTS "Guild_region_realmSlug_guildSlug_faction_key";
+CREATE UNIQUE INDEX IF NOT EXISTS "Guild_region_realmSlug_guildSlug_key" ON "Guild" ("region", "realmSlug", "guildSlug");
