@@ -78,7 +78,54 @@ export function ControlPanel({
   // ─── Source data ─────────────────────────────────────────────────────────
   const team = api.raidTeam.get.useQuery({ raidTeamId: teamId });
   const dashboards = api.dashboard.list.useQuery({ raidTeamId: teamId });
-  const refresh = api.raidTeam.triggerTeamRefresh.useMutation();
+
+  // ─── Manual data-refresh + live progress ─────────────────────────────────
+  // Mirrors the AccountRefreshButton pattern: capture `{ since, total }` on
+  // mutation success, poll `raidTeam.syncProgress` every 2s until all
+  // characters have synced, then stop. Stable EPOCH placeholder keeps the
+  // disabled-query key from churning while no refresh is in flight.
+  //
+  // Reload note: this state is component-local — refreshing the page loses
+  // the progress bar even though the server-side sync continues. The
+  // underlying character timestamps still update via `raidTeam.get` polling
+  // so the rest of the UI corrects itself; we accept the lost progress bar
+  // as a v1 limitation rather than persist to sessionStorage.
+  const REFRESH_EPOCH = useMemo(() => new Date(0), []);
+  const [refreshProgress, setRefreshProgress] = useState<{
+    since: Date;
+    total: number;
+  } | null>(null);
+  const refresh = api.raidTeam.triggerTeamRefresh.useMutation({
+    onSuccess: (data) => {
+      if (data.ok && data.enqueued > 0) {
+        // Drop any cached syncProgress rows from a previous refresh so the
+        // next poll always starts from a fresh server fetch — defensive
+        // against React Query reusing stale data across keys.
+        void utils.raidTeam.syncProgress.invalidate();
+        setRefreshProgress({ since: data.at, total: data.enqueued });
+      } else {
+        setRefreshProgress(null);
+      }
+    },
+    onError: () => setRefreshProgress(null),
+  });
+  const refreshSync = api.raidTeam.syncProgress.useQuery(
+    { raidTeamId: teamId, since: refreshProgress?.since ?? REFRESH_EPOCH },
+    {
+      enabled: refreshProgress != null,
+      refetchInterval: (q) => {
+        const d = q.state.data;
+        return d && d.synced >= d.total ? false : 2000;
+      },
+      refetchOnWindowFocus: false,
+    },
+  );
+  const refreshSynced = refreshProgress
+    ? Math.min(refreshSync.data?.synced ?? 0, refreshProgress.total)
+    : 0;
+  const refreshDone =
+    refreshProgress != null && refreshSynced >= refreshProgress.total;
+  const refreshActive = refreshProgress != null && !refreshDone;
 
   // ─── Active dashboard selection ──────────────────────────────────────────
   // Derived during render (no effect): the explicitly-picked dashboard, else
@@ -587,9 +634,15 @@ export function ControlPanel({
         )}
         <ActionButton
           icon="↻"
-          label={refresh.isPending ? "Refreshing…" : "Refresh data"}
+          label={
+            refresh.isPending
+              ? "Refreshing…"
+              : refreshActive
+                ? `Syncing ${refreshSynced}/${refreshProgress!.total}…`
+                : "Refresh data"
+          }
           onClick={() => refresh.mutate({ raidTeamId: teamId })}
-          disabled={refresh.isPending}
+          disabled={refresh.isPending || refreshActive}
         />
         <ActionButton
           icon="🔗"
@@ -600,8 +653,11 @@ export function ControlPanel({
       </div>
 
       {/* Refresh status — its own line so it never crowds the action bar
-          buttons or the share UI. Auto-clears on the next interaction. */}
-      {(refresh.data || refresh.error) && !refresh.isPending && (
+          buttons or the share UI. While the bulk job is running, render a
+          live progress bar driven by `raidTeam.syncProgress`; once every
+          tracked character's `lastSyncedAt` advances past the enqueue
+          timestamp, the bar fills and the box shows "Up to date". */}
+      {(refresh.data || refresh.error || refreshActive) && !refresh.isPending && (
         <div
           role="status"
           aria-live="polite"
@@ -612,17 +668,51 @@ export function ControlPanel({
               : "border-border bg-muted/40 text-muted-foreground",
           )}
         >
-          {refresh.error
-            ? `Refresh failed: ${refresh.error.message}. Try again in a moment.`
-            : refresh.data?.ok
-              ? `Queued a fresh sync for ${refresh.data.enqueued} character${
-                  refresh.data.enqueued === 1 ? "" : "s"
-                }. New data appears within ~1 minute.`
-              : refresh.data && refresh.data.ok === false
-                ? refresh.data.reason === "no_members"
-                  ? "No active members to refresh."
-                  : "Refresh was rate-limited. Try again shortly."
-                : null}
+          {refresh.error ? (
+            `Refresh failed: ${refresh.error.message}. Try again in a moment.`
+          ) : refresh.data && refresh.data.ok === false ? (
+            refresh.data.reason === "no_members"
+              ? "No active members to refresh."
+              : "Refresh was rate-limited. Try again shortly."
+          ) : refreshProgress ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-3 tabular-nums">
+                <span>
+                  {refreshDone
+                    ? `Up to date — ${refreshProgress.total}/${refreshProgress.total} synced`
+                    : `Syncing characters from Battle.net + WCL…`}
+                </span>
+                <span className="text-foreground font-medium">
+                  {refreshSynced}/{refreshProgress.total}
+                </span>
+              </div>
+              {/* Determinate bar; aria attrs make it screen-reader-friendly. */}
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={refreshProgress.total}
+                aria-valuenow={refreshSynced}
+                aria-label="Team refresh progress"
+                className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
+              >
+                <div
+                  className={cn(
+                    "h-full transition-[width] duration-500 ease-out",
+                    refreshDone ? "bg-emerald-500" : "bg-primary",
+                  )}
+                  style={{
+                    width: `${
+                      refreshProgress.total > 0
+                        ? Math.round(
+                            (refreshSynced / refreshProgress.total) * 100,
+                          )
+                        : 0
+                    }%`,
+                  }}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 
