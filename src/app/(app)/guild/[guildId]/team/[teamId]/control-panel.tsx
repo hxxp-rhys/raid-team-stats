@@ -6,6 +6,8 @@ import type { Route } from "next";
 
 import { api } from "@/lib/trpc-client";
 import {
+  DEFAULT_WIDGET_COLS,
+  DEFAULT_WIDGET_ROWS,
   DESKTOP_GRID_COLS,
   MOBILE_GRID_COLS,
   ROW_HEIGHT_PX,
@@ -18,6 +20,8 @@ import {
   type WidgetInstance,
   type WidgetType,
 } from "@/lib/widgets/types";
+import { findCollider } from "@/lib/widgets/collision";
+import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -156,14 +160,28 @@ export function ControlPanel({
   }, [layout, mobile]);
   const activeTab = currentTabs.find((t) => t.id === activeTabId);
 
+  // Returning the input `l` from the mutator signals "no change" — skip the
+  // debounced save instead of writing identical layout JSON back to the DB.
+  // Strict-mode blocks (collisions) and any future "drag cancelled" branches
+  // can return early without triggering network round-trips.
   const writeLayout = useCallback(
     (mutator: (l: DashboardLayout) => DashboardLayout) => {
-      setLayout((l) => (l ? mutator(l) : l));
-      setPendingFlush(true);
+      let dirty = false;
+      setLayout((l) => {
+        if (!l) return l;
+        const next = mutator(l);
+        if (next !== l) dirty = true;
+        return next;
+      });
+      if (dirty) setPendingFlush(true);
     },
     [],
   );
 
+  // Same convention as writeLayout: the `fn` can return its input `t`
+  // unchanged to signal "no-op". We detect that here and short-circuit the
+  // outer layout rebuild so writeLayout sees `l` referentially equal and
+  // skips setPendingFlush.
   const updateCurrentTab = useCallback(
     (fn: (t: DashboardTab) => DashboardTab) => {
       writeLayout((l) => {
@@ -180,15 +198,25 @@ export function ControlPanel({
                     cols: MOBILE_GRID_COLS,
                   })),
                 }));
-          return {
-            ...l,
-            mobileTabs: base.map((t) => (t.id === activeTabId ? fn(t) : t)),
-          };
+          let changed = base !== l.mobileTabs;
+          const nextTabs = base.map((t) => {
+            if (t.id !== activeTabId) return t;
+            const updated = fn(t);
+            if (updated !== t) changed = true;
+            return updated;
+          });
+          if (!changed) return l;
+          return { ...l, mobileTabs: nextTabs };
         }
-        return {
-          ...l,
-          tabs: l.tabs.map((t) => (t.id === activeTabId ? fn(t) : t)),
-        };
+        let changed = false;
+        const nextTabs = l.tabs.map((t) => {
+          if (t.id !== activeTabId) return t;
+          const updated = fn(t);
+          if (updated !== t) changed = true;
+          return updated;
+        });
+        if (!changed) return l;
+        return { ...l, tabs: nextTabs };
       });
     },
     [writeLayout, mobile, activeTabId],
@@ -294,22 +322,64 @@ export function ControlPanel({
     }));
   };
 
+  // ─── Strict-layout (collision prevention) ────────────────────────────────
+  // Default-on user preference (localStorage-backed). When ON, a resize or
+  // move that would overlap another placed widget is silently dropped —
+  // the widget snaps back to its prior position via React state. The
+  // toggle lives in the header and applies to every dashboard the user
+  // opens in this browser.
+  const { strict: strictLayout, setStrict: setStrictLayout } =
+    useStrictLayout();
+  const strictDefaults = useMemo(
+    () => ({ cols: DEFAULT_WIDGET_COLS, rows: DEFAULT_WIDGET_ROWS }),
+    [],
+  );
+
   const resizeWidget = (widgetId: string, cols: number, rows: number) => {
-    updateCurrentTab((t) => ({
-      ...t,
-      widgets: t.widgets.map((w) =>
-        w.id === widgetId ? { ...w, cols, rows } : w,
-      ),
-    }));
+    updateCurrentTab((t) => {
+      if (strictLayout) {
+        const target = t.widgets.find((w) => w.id === widgetId);
+        // Only widgets with an explicit position can collide. An unplaced
+        // widget being resized still flows via auto-place, so skip the
+        // check until it gets x/y.
+        if (target && typeof target.x === "number" && typeof target.y === "number") {
+          const blocker = findCollider(
+            t.widgets,
+            { id: widgetId, x: target.x, y: target.y, cols, rows },
+            strictDefaults,
+          );
+          if (blocker) return t;
+        }
+      }
+      return {
+        ...t,
+        widgets: t.widgets.map((w) =>
+          w.id === widgetId ? { ...w, cols, rows } : w,
+        ),
+      };
+    });
   };
 
   const moveWidget = (widgetId: string, x: number, y: number) => {
-    updateCurrentTab((t) => ({
-      ...t,
-      widgets: t.widgets.map((w) =>
-        w.id === widgetId ? { ...w, x, y } : w,
-      ),
-    }));
+    updateCurrentTab((t) => {
+      if (strictLayout) {
+        const target = t.widgets.find((w) => w.id === widgetId);
+        const cols = target?.cols ?? DEFAULT_WIDGET_COLS;
+        const rows = target?.rows ?? DEFAULT_WIDGET_ROWS;
+        const blocker = findCollider(
+          t.widgets,
+          { id: widgetId, x, y, cols, rows },
+          strictDefaults,
+        );
+        if (blocker) return t;
+      }
+      return {
+        ...t,
+        widgets: t.widgets.map((w) =>
+          w.id === widgetId ? { ...w, x, y } : w,
+        ),
+      };
+    });
   };
 
   // ─── Edit-mode + permissions ─────────────────────────────────────────────
@@ -430,6 +500,28 @@ export function ControlPanel({
         </div>
         <div className="flex flex-col items-end gap-1.5 text-sm">
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {editing && (
+              <label
+                className={cn(
+                  "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
+                  strictLayout && "border-primary text-primary",
+                )}
+                title={
+                  strictLayout
+                    ? "Strict layout ON — widgets can't overlap. Click to allow overlap."
+                    : "Strict layout OFF — widgets may overlap. Click to enforce no-overlap."
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={strictLayout}
+                  onChange={(e) => setStrictLayout(e.target.checked)}
+                  className="sr-only"
+                />
+                <span aria-hidden>🔒</span>
+                <span>Strict layout</span>
+              </label>
+            )}
             <label
               className={cn(
                 "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
