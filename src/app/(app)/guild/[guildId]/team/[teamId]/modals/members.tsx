@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
 
@@ -28,6 +29,36 @@ export function MembersModal({
   });
   const [pick, setPick] = useState<string>("");
   const [pickRole, setPickRole] = useState<"MEMBER" | "CO_LEADER">("MEMBER");
+  const [query, setQuery] = useState<string>("");
+
+  // Always show the active roster in alphabetical order (case-insensitive,
+  // locale-aware) — the API doesn't guarantee any ordering. Search filters
+  // by character name OR realm so a manager can quickly find a member on a
+  // specific server.
+  const visibleMemberships = useMemo(() => {
+    const all = team.data?.memberships ?? [];
+    const sorted = [...all].sort((a, b) => {
+      const byName = a.character.name.localeCompare(
+        b.character.name,
+        undefined,
+        { sensitivity: "base" },
+      );
+      if (byName !== 0) return byName;
+      // Tie-break by realm so same-name alts on different realms have a
+      // stable, deterministic order (e.g. two "Foo" characters always sort
+      // by realm slug).
+      return a.character.realmSlug.localeCompare(b.character.realmSlug);
+    });
+    const q = query.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      (m) =>
+        m.character.name.toLowerCase().includes(q) ||
+        m.character.realmSlug.toLowerCase().includes(q),
+    );
+  }, [team.data?.memberships, query]);
+
+  const totalCount = team.data?.memberships.length ?? 0;
 
   const invalidate = async () => {
     await Promise.all([
@@ -62,11 +93,34 @@ export function MembersModal({
       }
     >
       <div className="space-y-4 text-sm">
-        {team.data && team.data.memberships.length === 0 ? (
+        {totalCount > 1 && (
+          <div className="flex items-center gap-2">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or realm…"
+              aria-label="Search members"
+              className="h-8 flex-1"
+            />
+            {query && (
+              <span className="text-muted-foreground shrink-0 text-xs">
+                {visibleMemberships.length} of {totalCount}
+              </span>
+            )}
+          </div>
+        )}
+        {team.isPending ? (
+          <p className="text-muted-foreground">Loading…</p>
+        ) : totalCount === 0 ? (
           <p className="text-muted-foreground">No members yet.</p>
+        ) : visibleMemberships.length === 0 ? (
+          <p className="text-muted-foreground">
+            No members match &ldquo;{query}&rdquo;.
+          </p>
         ) : (
           <ul className="divide-border divide-y">
-            {team.data?.memberships.map((m) => (
+            {visibleMemberships.map((m) => (
               <li
                 key={m.id}
                 className="flex items-center justify-between gap-3 py-2"
