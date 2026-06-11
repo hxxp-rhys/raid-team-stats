@@ -22,6 +22,7 @@ import {
 } from "@/lib/widgets/types";
 import { findCollider } from "@/lib/widgets/collision";
 import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
+import { THEME_IDS, THEME_META } from "@/lib/theme";
 import {
   useRefreshInterval,
   REFRESH_OPTIONS,
@@ -660,6 +661,38 @@ export function ControlPanel({
                 ))}
               </select>
             </label>
+            {/* Shared-link theme — owner-only. Sets a palette that applies on
+                the public /share/[token] view, regardless of the viewer's
+                personal theme. Empty = the viewer keeps their own theme. */}
+            {editing && layout && (
+              <label
+                className={cn(
+                  "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
+                  layout.theme && "border-primary text-primary",
+                )}
+                title="Theme used when someone opens this dashboard's shared link. Doesn't change your own view."
+              >
+                <span aria-hidden>🎨</span>
+                <span className="sr-only">Shared-link theme</span>
+                <select
+                  value={layout.theme ?? ""}
+                  onChange={(e) =>
+                    writeLayout((l) => ({
+                      ...l,
+                      theme: e.target.value || undefined,
+                    }))
+                  }
+                  className="bg-background cursor-pointer text-sm focus:outline-none"
+                >
+                  <option value="">Share theme: viewer&apos;s own</option>
+                  {THEME_IDS.map((id) => (
+                    <option key={id} value={id}>
+                      Share theme: {THEME_META[id].name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {pendingFlush ? (
               <span className="text-amber-400 text-xs">Saving…</span>
             ) : update.error ? (

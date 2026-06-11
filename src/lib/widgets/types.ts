@@ -161,6 +161,12 @@ export const dashboardLayoutSchema = z.object({
   defaultTabId: z.string().optional(),
   tabs: z.array(dashboardTabSchema).default([]),
   mobileTabs: z.array(dashboardTabSchema).optional(),
+  // Optional dashboard-exclusive theme (a built-in theme id). When set, the
+  // shared (/share/[token]) view renders in this palette regardless of the
+  // viewer's personal theme. Stored as a plain string and validated against
+  // the theme catalogue where it's applied (keeps this module decoupled from
+  // the theme list). Absent = use the viewer's own theme.
+  theme: z.string().optional(),
 });
 export type DashboardLayout = z.infer<typeof dashboardLayoutSchema>;
 
@@ -218,6 +224,7 @@ export const parseLayout = (raw: unknown): DashboardLayout => {
       defaultTabId: parsed.data.defaultTabId,
       tabs: parsed.data.tabs.map(scale),
       mobileTabs: parsed.data.mobileTabs?.map(scale),
+      theme: parsed.data.theme,
     };
   }
   const v1 = legacyLayoutSchema.safeParse(raw);

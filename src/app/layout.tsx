@@ -7,10 +7,16 @@ import { cn } from "@/lib/utils";
 import { Providers } from "@/app/providers";
 import { CSP_NONCE_HEADER } from "@/server/security/csp";
 import {
+  CUSTOM_THEME,
+  customPaletteToCss,
+  DEFAULT_CUSTOM_PALETTE,
   DEFAULT_THEME,
+  isLightHex,
   isLightTheme,
   isValidTheme,
+  parseCustomPalette,
   THEME_COOKIE,
+  THEME_CUSTOM_COOKIE,
   type ThemeId,
 } from "@/lib/theme";
 import "./globals.css";
@@ -52,11 +58,29 @@ export const metadata: Metadata = {
 async function ThemeScript() {
   const [jar, hdrs] = await Promise.all([cookies(), headers()]);
   const raw = jar.get(THEME_COOKIE)?.value;
-  const theme: ThemeId = isValidTheme(raw) ? raw : DEFAULT_THEME;
-  const light = isLightTheme(theme);
   // The proxy sets a fresh nonce on every request; the strict CSP has no
   // 'unsafe-inline', so this script is rejected without it.
   const nonce = hdrs.get(CSP_NONCE_HEADER) ?? undefined;
+
+  // Custom theme: inject the user's palette as inline CSS variables on
+  // <html>. Every value is validated hex (parseCustomPalette) before it's
+  // inlined, and JSON.stringify quotes the declaration string — no injection.
+  if (raw === CUSTOM_THEME) {
+    const palette =
+      parseCustomPalette(jar.get(THEME_CUSTOM_COOKIE)?.value) ??
+      DEFAULT_CUSTOM_PALETTE;
+    const css = customPaletteToCss(palette);
+    const light = isLightHex(palette.bg);
+    const js =
+      `try{var d=document.documentElement;` +
+      `d.setAttribute("data-theme","custom");` +
+      `d.style.cssText+=${JSON.stringify(";" + css)};` +
+      `d.classList.${light ? "remove" : "add"}("dark");}catch(e){}`;
+    return <script nonce={nonce} dangerouslySetInnerHTML={{ __html: js }} />;
+  }
+
+  const theme: ThemeId = isValidTheme(raw) ? raw : DEFAULT_THEME;
+  const light = isLightTheme(theme);
 
   // `theme` is already validated server-side, so JSON.stringify of a known
   // ThemeId is safe to inline. Toggling only the `.dark` class preserves

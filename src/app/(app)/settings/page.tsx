@@ -5,9 +5,13 @@ import type { Session } from "next-auth";
 import { auth } from "@/server/auth";
 import { ThemeSelector } from "@/app/(app)/profile/theme-selector";
 import {
+  CUSTOM_THEME,
+  DEFAULT_CUSTOM_PALETTE,
   DEFAULT_THEME,
   isValidTheme,
+  parseCustomPalette,
   THEME_COOKIE,
+  THEME_CUSTOM_COOKIE,
   type ThemeId,
 } from "@/lib/theme";
 
@@ -20,7 +24,16 @@ export default async function SettingsPage() {
 
   const jar = await cookies();
   const themeRaw = jar.get(THEME_COOKIE)?.value;
-  const theme: ThemeId = isValidTheme(themeRaw) ? themeRaw : DEFAULT_THEME;
+  // `current` can be a built-in ThemeId or the literal "custom".
+  const current: ThemeId | typeof CUSTOM_THEME =
+    themeRaw === CUSTOM_THEME
+      ? CUSTOM_THEME
+      : isValidTheme(themeRaw)
+        ? themeRaw
+        : DEFAULT_THEME;
+  const customPalette =
+    parseCustomPalette(jar.get(THEME_CUSTOM_COOKIE)?.value) ??
+    DEFAULT_CUSTOM_PALETTE;
 
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
@@ -33,7 +46,7 @@ export default async function SettingsPage() {
       </header>
 
       <div className="space-y-6">
-        <ThemeSelector current={theme} />
+        <ThemeSelector current={current} customPalette={customPalette} />
       </div>
     </main>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use, useState } from "react";
+import { Suspense, use, useEffect, useState } from "react";
 
 import {
   Card,
@@ -15,6 +15,7 @@ import {
   parseLayout,
   resolveDefaultTabId,
 } from "@/lib/widgets/types";
+import { isLightTheme, isValidTheme } from "@/lib/theme";
 import { WidgetCell } from "@/app/(app)/guild/[guildId]/team/[teamId]/widget-cell";
 
 type Params = Promise<{ token: string }>;
@@ -47,6 +48,27 @@ function Inner({ params }: { params: Params }) {
   const q = api.dashboard.getByShareToken.useQuery({ token });
   // Hooks must run on every render path — keep above early returns.
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  // Dashboard-exclusive theme: if the owner set one, apply it to <html> for
+  // the duration of this shared view, then restore the visitor's own theme
+  // on unmount. Computed above the early returns so the effect's hook order
+  // stays stable across loading/error/data renders.
+  const dashTheme = q.data
+    ? parseLayout(q.data.dashboard.layout).theme
+    : undefined;
+  useEffect(() => {
+    if (!dashTheme || !isValidTheme(dashTheme)) return;
+    const el = document.documentElement;
+    const prevTheme = el.getAttribute("data-theme");
+    const prevDark = el.classList.contains("dark");
+    el.setAttribute("data-theme", dashTheme);
+    el.classList.toggle("dark", !isLightTheme(dashTheme));
+    return () => {
+      if (prevTheme !== null) el.setAttribute("data-theme", prevTheme);
+      else el.removeAttribute("data-theme");
+      el.classList.toggle("dark", prevDark);
+    };
+  }, [dashTheme]);
 
   if (q.isPending) {
     return (
