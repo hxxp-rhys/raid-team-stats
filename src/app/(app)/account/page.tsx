@@ -76,7 +76,10 @@ export default async function AccountPage() {
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <Row label="Display name" value={user.displayName ?? "—"} />
-            <Row label="Email" value={user.email} />
+            <Row
+              label="Email"
+              value={user.email ?? "Not set (Battle.net sign-in)"}
+            />
             <Row
               label="Email verified"
               value={user.emailVerified ? "Yes" : "Not yet"}

@@ -66,22 +66,37 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-3">
-        {/* 1. Gateway action. Battle.net tokens expire ~24h with no
-            refresh token, so "Refresh Battle.net" re-runs OAuth (the
-            signIn callback updates the existing Account row's token in
-            place); before linking it's the primary "Link Battle.net". */}
-        <Button
-          variant={battlenetLinked ? "outline" : "default"}
-          onClick={() =>
-            signIn("battlenet", {
-              callbackUrl: battlenetLinked
-                ? "/account?bnet=reconnected"
-                : "/account?bnet=linked",
-            })
-          }
-        >
-          {battlenetLinked ? "Refresh Battle.net" : "Link Battle.net"}
-        </Button>
+        {/* 1. Gateway action. When NOT linked this is the primary
+            "Link Battle.net" CTA. Once linked, there's nothing to link, so
+            we drop the CTA and show a non-prominent "Connected" chip plus a
+            subtle "Refresh" (Battle.net tokens expire ~24h with no refresh
+            token, so re-running OAuth keeps sync working). */}
+        {battlenetLinked ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-green-500/40 bg-green-500/10 px-2.5 text-sm font-medium text-green-600 dark:text-green-400">
+              <span aria-hidden>✓</span> Battle.net connected
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                signIn("battlenet", { callbackUrl: "/account?bnet=reconnected" })
+              }
+              className="text-muted-foreground hover:text-foreground text-xs underline-offset-4 hover:underline"
+              title="Re-run Battle.net sign-in to refresh the connection (tokens expire ~24h)"
+            >
+              Refresh
+            </button>
+          </span>
+        ) : (
+          <Button
+            variant="default"
+            onClick={() =>
+              signIn("battlenet", { callbackUrl: "/account?bnet=linked" })
+            }
+          >
+            Link Battle.net
+          </Button>
+        )}
 
         {/* Guild discovery moved to the "Add Guild" lightbox on /guild,
             which lets the user pick WHICH guilds to add. Battle.net link

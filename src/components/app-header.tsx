@@ -28,9 +28,10 @@ export async function AppHeader() {
   const isAdmin =
     user.isAdmin ||
     env.ADMIN_USER_IDS.includes(user.id) ||
-    env.ADMIN_EMAILS.includes(user.email.toLowerCase());
+    (!!user.email && env.ADMIN_EMAILS.includes(user.email.toLowerCase()));
 
-  const label = user.displayName ?? user.email;
+  // Battle.net-only users have no email; fall back to a neutral label.
+  const label = user.displayName ?? user.email ?? "Account";
 
   return (
     <header className="border-border bg-background/95 sticky top-0 z-40 border-b backdrop-blur">

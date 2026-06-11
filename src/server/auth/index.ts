@@ -2,10 +2,10 @@ import NextAuth from "next-auth";
 import type { NextAuthConfig, Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import BattleNet, { type BattleNetIssuer } from "next-auth/providers/battlenet";
-import { PrismaAdapter } from "@auth/prisma-adapter";
 import { headers } from "next/headers";
 
 import { db } from "@/lib/db";
+import { buildAuthAdapter } from "@/server/auth/adapter";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
 import { verifyPassword, needsRehash, hashPassword } from "@/server/crypto/kdf";
@@ -26,16 +26,17 @@ const REVOKED_TOKEN_KEY = (jti: string) => `auth:revoked:${jti}`;
  * `signOut` adds the current jti to the set, and the `jwt` callback rejects
  * tokens whose jti is present.
  *
- * Battle.net provider is registered as a *secondary* identity — the user must
- * already have an email-verified account before linking. The `signIn`
- * callback enforces this (refuses to create new users from Battle.net
- * sign-in). Linking flow lives in `src/server/auth/link-battlenet.ts`.
+ * Battle.net is a PRIMARY identity: signing in with it either signs you in as
+ * the user who owns that Battle.net link, or — if it's not linked to anyone —
+ * auto-creates a new (email-less) account and links it. The `signIn` callback
+ * below implements the three cases. Email/password remains a parallel
+ * identity; a user can have either or both.
  */
 const config: NextAuthConfig = {
-  // Cast: the extended client structurally matches the adapter's expected shape;
-  // Prisma 7 type-narrowing through $extends doesn't preserve the loose
-  // PrismaClient interface PrismaAdapter declares.
-  adapter: PrismaAdapter(db as unknown as Parameters<typeof PrismaAdapter>[0]),
+  // Wrapped adapter maps our displayName/avatarUrl ↔ the adapter's name/image
+  // and tolerates a null email, so Auth.js can auto-create Battle.net users
+  // against this schema. See src/server/auth/adapter.ts.
+  adapter: buildAuthAdapter(),
   secret: env.AUTH_SECRET,
   trustHost: true, // proxy.ts validates request origin and rate-limits
 
@@ -209,54 +210,43 @@ const config: NextAuthConfig = {
 
   callbacks: {
     async signIn({ user, account, profile }) {
-      // Battle.net has two flows behind the same OAuth callback:
-      //   1. LINK   — user is already signed in (via Credentials) and clicked
-      //               "Link Battle.net" on /account. Attach the OAuth account
-      //               to their session user.
-      //   2. SIGN-IN — user is NOT signed in but they already linked their
-      //               Battle.net identity in a previous session. Auth.js's
-      //               adapter has resolved the existing User via
-      //               getUserByAccount, so we just let the sign-in proceed.
-      // We still refuse to AUTO-CREATE users from Battle.net (no link, no
-      // session → bounce to /signin with a clear error).
+      // Battle.net is a PRIMARY identity. Three cases behind the one OAuth
+      // callback, distinguished by (is this Battle.net already linked?) and
+      // (is there a current session?):
+      //
+      //   1. LINKED → sign in AS the owning user. If the current session is a
+      //      different user, this SWITCHES to the Battle.net owner (a button
+      //      labelled "Sign in with Battle.net" should make you the
+      //      Battle.net user). Re-link/refresh of your own account also lands
+      //      here and just refreshes tokens.
+      //   2. NOT linked, signed in → attach Battle.net to the current user
+      //      (the /account "Link Battle.net" flow). Manual create + redirect
+      //      keeps the existing session.
+      //   3. NOT linked, not signed in → AUTO-CREATE a new (email-less) user
+      //      and link it. Returning true lets the wrapped adapter.createUser +
+      //      linkAccount run, then Auth.js mints a JWT for the new user.
       if (account?.provider === "battlenet") {
         const battletag =
           typeof profile?.battle_tag === "string" ? profile.battle_tag : "unknown";
 
-        const current = (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
         const existing = await db.account.findFirst({
-          where: { provider: "battlenet", providerAccountId: account.providerAccountId },
+          where: {
+            provider: "battlenet",
+            providerAccountId: account.providerAccountId,
+          },
         });
 
-        // SIGN-IN flow: not currently signed in, but the Battle.net identity
-        // is already linked → let Auth.js mint a JWT for the linked user.
-        if (!current?.user?.id) {
-          if (!existing) {
-            logger.warn(
-              { battletag },
-              "rejected Battle.net sign-in: no linked account and not signed in",
-            );
-            // Bounce back to /signin with a code the signin page maps to a
-            // human-readable explanation.
-            return "/signin?error=BattleNetNotLinked";
-          }
-          // Defensive: Auth.js should have already resolved `user` via
-          // adapter.getUserByAccount before this callback fires, but a race
-          // where the User row is deleted between our Account lookup and
-          // Auth.js's would leave `user` undefined — returning `true` then
-          // would mint a JWT with no `userId`, producing a broken session.
-          // Bail to the no-link error path instead.
+        // CASE 1 — already linked: sign in as the owner (switch if needed).
+        if (existing) {
           if (!user?.id) {
+            // Auth.js resolves `user` via adapter.getUserByAccount before this
+            // callback; a missing id means a deleted-user race. Bail cleanly.
             logger.error(
               { battletag, accountUserId: existing.userId },
               "Battle.net sign-in aborted: adapter did not resolve a user",
             );
-            return "/signin?error=BattleNetNotLinked";
+            return "/signin?error=Configuration";
           }
-          // Refresh tokens on the existing row so refresh_token rotation
-          // doesn't drift. Returning `true` lets Auth.js sign the user in;
-          // by this point Auth.js's adapter.getUserByAccount has resolved
-          // the existing User via the (provider, providerAccountId) unique.
           await db.account.update({
             where: { id: existing.id },
             data: {
@@ -269,65 +259,54 @@ const config: NextAuthConfig = {
             },
           });
           logger.info(
-            { battletag, userId: existing.userId, resolvedUserId: user.id },
-            "Battle.net sign-in as previously-linked user",
+            { battletag, userId: existing.userId },
+            "Battle.net sign-in as linked user",
           );
           return true;
         }
 
-        // LINK flow: already signed in.
-        if (existing) {
-          if (existing.userId !== current.user.id) {
-            logger.warn(
-              { battletag, currentUserId: current.user.id, owningUserId: existing.userId },
-              "rejected Battle.net link: providerAccountId belongs to a different user",
-            );
-            return false;
-          }
-          // Idempotent re-link: refresh tokens on the existing row.
-          await db.account.update({
-            where: { id: existing.id },
+        // Not linked yet — link-to-current vs auto-create depends on session.
+        const current =
+          (await (auth as unknown as () => Promise<Session | null>)()) ?? null;
+
+        // CASE 2 — signed in: link Battle.net to the current user. Manual
+        // create + redirect keeps the existing session (returning true here
+        // would make the adapter mint a brand-new user instead of linking).
+        if (current?.user?.id) {
+          await db.account.create({
             data: {
+              userId: current.user.id,
+              type: account.type,
+              provider: account.provider,
+              providerAccountId: account.providerAccountId,
               access_token: account.access_token,
               refresh_token: account.refresh_token,
               id_token: account.id_token,
               expires_at: account.expires_at,
               token_type: account.token_type,
               scope: account.scope,
+              session_state:
+                typeof account.session_state === "string"
+                  ? account.session_state
+                  : null,
             },
           });
-          return "/account?bnet=reconnected";
+          await audit({
+            event: "AUTH_BATTLENET_LINKED",
+            actorUserId: current.user.id,
+            metadata: { battletag },
+          });
+          logger.info(
+            { battletag, userId: current.user.id },
+            "Battle.net linked to existing user",
+          );
+          return "/account?bnet=linked";
         }
 
-        // First link: manually create the Account row attached to the current
-        // session user. The Prisma extension transparently encrypts tokens.
-        await db.account.create({
-          data: {
-            userId: current.user.id,
-            type: account.type,
-            provider: account.provider,
-            providerAccountId: account.providerAccountId,
-            access_token: account.access_token,
-            refresh_token: account.refresh_token,
-            id_token: account.id_token,
-            expires_at: account.expires_at,
-            token_type: account.token_type,
-            scope: account.scope,
-            session_state:
-              typeof account.session_state === "string" ? account.session_state : null,
-          },
-        });
-
-        logger.info(
-          { battletag, userId: current.user.id },
-          "Battle.net account linked to existing user",
-        );
-
-        // Returning a redirect URL keeps the user on their existing JWT session
-        // (Auth.js does not mint a new session for the synthesized Battle.net
-        // user) and avoids the duplicate-User-row that returning `true` would
-        // produce.
-        return "/account?bnet=linked";
+        // CASE 3 — not linked, not signed in: auto-create + link via the
+        // wrapped adapter (createUser maps battle_tag → displayName, no email).
+        logger.info({ battletag }, "Battle.net sign-up: creating new account");
+        return true;
       }
       return true;
     },
@@ -394,6 +373,16 @@ const config: NextAuthConfig = {
           account.provider === "battlenet" ? "AUTH_BATTLENET_LINKED" : "AUTH_LOGIN_SUCCESS",
         actorUserId: user.id,
         metadata: { provider: account.provider },
+      });
+    },
+    async createUser({ user }) {
+      // Fires when the wrapped adapter auto-creates a user — i.e. a Battle.net
+      // first-time sign-up (credential signup creates its User directly in the
+      // auth router, not via the adapter).
+      await audit({
+        event: "USER_CREATED",
+        actorUserId: user.id,
+        metadata: { via: "battlenet_oauth" },
       });
     },
   },

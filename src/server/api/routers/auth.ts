@@ -88,7 +88,9 @@ export const authRouter = router({
       });
 
       const { raw } = await issueToken("verify_email", user.id);
-      await sendVerificationEmail(user.email, buildVerifyUrl(raw));
+      // input.email is the just-created user's email (non-null zod string);
+      // User.email is now nullable in the type, so use the input source.
+      await sendVerificationEmail(input.email, buildVerifyUrl(raw));
 
       await audit({
         event: "USER_CREATED",
@@ -121,7 +123,9 @@ export const authRouter = router({
       });
       if (user && !user.emailVerified) {
         const { raw } = await issueToken("verify_email", user.id);
-        await sendVerificationEmail(user.email, buildVerifyUrl(raw));
+        // Looked up by `email: input.email`, so it equals input.email (a
+        // non-null zod string). User.email is nullable in the type now.
+        await sendVerificationEmail(input.email, buildVerifyUrl(raw));
         await audit({
           event: "USER_CREATED",
           actorUserId: user.id,
@@ -184,7 +188,8 @@ export const authRouter = router({
 
       try {
         const { raw } = await issueToken("password_reset", user.id);
-        await sendPasswordResetEmail(user.email, buildResetUrl(raw));
+        // Looked up by `email: input.email` → equals input.email (non-null).
+        await sendPasswordResetEmail(input.email, buildResetUrl(raw));
       } catch (err) {
         // Same response either way; log internally.
         logger.error({ err, userId: user.id }, "password reset issuance failed");

@@ -19,7 +19,11 @@ datasource db {
 
 model User {
   id            String    @id @default(cuid())
-  email         String    @unique
+  // Nullable: a user who signs up via Battle.net has no email (Battle.net's
+  // OAuth exposes only `sub` + `battle_tag`). They can add + verify an email
+  // later for password login. Postgres permits multiple NULLs under a unique
+  // index, so email-less Battle.net users don't collide.
+  email         String?   @unique
   emailVerified DateTime?
   displayName   String?
   avatarUrl     String?

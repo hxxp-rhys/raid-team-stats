@@ -176,7 +176,7 @@ export async function isPlatformAdmin(
     where: { id: userId },
     select: { email: true, isAdmin: true, mfaEnabled: true },
   });
-  const email = u?.email.toLowerCase();
+  const email = u?.email?.toLowerCase();
 
   // (1) Is this principal a platform admin by any of the three sources?
   const baseAdmin =
