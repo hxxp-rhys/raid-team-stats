@@ -8,8 +8,18 @@ import {
   isPlatformAdmin,
 } from "@/server/api/trpc";
 import { audit } from "@/server/security/audit";
-import { GuildMemberRole, GuildMembershipStatus } from "@/generated/prisma/enums";
+import {
+  GuildMemberRole,
+  GuildMembershipStatus,
+  type Region,
+} from "@/generated/prisma/enums";
 import { claimByAdmin } from "@/server/guild-auth/claim";
+import { applyVerification } from "@/server/guild-auth/verify";
+import {
+  observeBattlenetGuilds,
+  candidateKey,
+} from "@/server/guild-auth/observe-battlenet";
+import { normalizeRealmSlug, normalizeGuildSlug } from "@/lib/realm";
 import { env } from "@/env";
 
 const memberRoleSchema = z.enum(["MEMBER", "OFFICER", "OWNER"]);
@@ -385,156 +395,11 @@ export const guildRouter = router({
    * Used by the "Discover my guilds" button on /profile.
    */
   discoverFromBattlenet: protectedProcedure.mutation(async ({ ctx }) => {
-    const account = await ctx.db.account.findFirst({
-      where: { userId: ctx.session.user.id, provider: "battlenet" },
-      select: { access_token: true, expires_at: true },
-    });
-    if (!account?.access_token) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "Link your Battle.net account on the Account page first " +
-          "(Link Battle.net).",
-      });
-    }
-    // Battle.net access tokens are short-lived (~24h) and the auth-code
-    // flow issues NO refresh token, so a stored token simply goes stale.
-    // Catch that up-front (30s skew) with an actionable message instead
-    // of letting it surface as a raw "blizzard 401".
-    const RELINK_MSG =
-      "Your Battle.net sign-in has expired. On the Account page click " +
-      "“Reconnect Battle.net”, then try Discover guilds again.";
-    if (
-      typeof account.expires_at === "number" &&
-      account.expires_at * 1000 <= Date.now() + 30_000
-    ) {
-      throw new TRPCError({ code: "PRECONDITION_FAILED", message: RELINK_MSG });
-    }
-
-    const { blizzardClient } = await import("@/server/ingestion/blizzard/client");
-    const { endpoints } = await import("@/server/ingestion/blizzard/endpoints");
-    const {
-      userCharactersResponseSchema,
-      characterSummaryResponseSchema,
-      guildRosterResponseSchema,
-      FACTION_MAP,
-    } = await import("@/server/ingestion/blizzard/schemas");
-    const { normalizeRealmSlug, normalizeGuildSlug } = await import("@/lib/realm");
-    const { applyVerification } = await import("@/server/guild-auth/verify");
-    type Observation = import("@/server/guild-auth/verify").VerifiedCharacterObservation;
-
-    const region = env.BLIZZARD_REGION;
-    const client = blizzardClient();
-    const characters = await client
-      .request(endpoints.userCharacters(region), {
-        region,
-        schema: userCharactersResponseSchema,
-        auth: { kind: "user", accessToken: account.access_token },
-      })
-      .catch((err: unknown) => {
-        // No refresh-token path for Battle.net — a 401 here means the
-        // token went stale; turn it into the same re-link guidance.
-        if (err instanceof Error && /\b401\b/.test(err.message)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: RELINK_MSG,
-          });
-        }
-        throw err;
-      });
-
-    type Faction = "ALLIANCE" | "HORDE" | "NEUTRAL";
-    const factionFromRaw = (raw: string | undefined, fallback: Faction): Faction =>
-      raw ? ((FACTION_MAP[raw] ?? fallback) as Faction) : fallback;
-
-    const observations: Observation[] = [];
-    for (const wowAccount of characters.wow_accounts) {
-      for (const c of wowAccount.characters) {
-        const realmSlug = normalizeRealmSlug(c.realm.slug);
-        if (!realmSlug) continue;
-        try {
-          const summary = await client.request(
-            endpoints.characterSummary(region, realmSlug, c.name),
-            {
-              region,
-              schema: characterSummaryResponseSchema,
-              auth: { kind: "app" },
-            },
-          );
-          const charFaction = factionFromRaw(summary.faction?.type, "ALLIANCE");
-          observations.push({
-            blizzardCharacterId: c.id,
-            region: region.toUpperCase() as "US" | "EU" | "KR" | "TW",
-            realmSlug,
-            characterName: c.name,
-            faction: charFaction,
-            level: summary.level ?? c.level ?? null,
-            classId: summary.character_class?.id ?? c.playable_class?.id ?? null,
-            race: undefined,
-            guild: summary.guild
-              ? {
-                  name: summary.guild.name,
-                  realmSlug: summary.guild.realm.slug,
-                  faction: factionFromRaw(summary.guild.faction?.type, charFaction),
-                  rosterRank: null,
-                }
-              : null,
-          });
-        } catch {
-          // Skip transient per-character failures — they'll be picked up on
-          // the next sync.
-        }
-      }
-    }
-
-    // Battle.net's /profile/user/wow doesn't expose the user's rank within
-    // each guild — only the guild's identity. To enable the rank-0 GM
-    // auto-claim path, we look up the guild roster (app credentials, no user
-    // OAuth needed) for each distinct guild observed and patch the matching
-    // characters' rosterRank into the observations before applyVerification.
-    type GuildKey = string;
-    const guildKey = (g: { realmSlug: string; name: string }): GuildKey =>
-      `${g.realmSlug}|${normalizeGuildSlug(g.name) ?? ""}`;
-    const distinctGuilds = new Map<
-      GuildKey,
-      { realmSlug: string; name: string }
-    >();
-    for (const obs of observations) {
-      if (!obs.guild) continue;
-      distinctGuilds.set(guildKey(obs.guild), obs.guild);
-    }
-
-    // characterName -> rosterRank, keyed by guild
-    const rankByCharacter = new Map<GuildKey, Map<string, number>>();
-    for (const [key, g] of distinctGuilds) {
-      const slug = normalizeGuildSlug(g.name);
-      if (!slug) continue;
-      try {
-        const roster = await client.request(
-          endpoints.guildRoster(region, g.realmSlug, slug),
-          { region, schema: guildRosterResponseSchema, auth: { kind: "app" } },
-        );
-        const ranks = new Map<string, number>();
-        for (const m of roster.members) {
-          ranks.set(m.character.name.toLowerCase(), m.rank);
-        }
-        rankByCharacter.set(key, ranks);
-      } catch {
-        // Roster fetch is best-effort. Without it, auto-claim won't fire for
-        // this guild, but the PENDING membership is still useful and an
-        // admin / Tier C run can claim it later.
-      }
-    }
-
-    for (const obs of observations) {
-      if (!obs.guild) continue;
-      const rank = rankByCharacter
-        .get(guildKey(obs.guild))
-        ?.get(obs.characterName.toLowerCase());
-      if (typeof rank === "number") {
-        obs.guild = { ...obs.guild, rosterRank: rank };
-      }
-    }
+    // Full discover-and-add. Used by the on-link auto-discovery redirect
+    // (?bnet=linked). Observes every Battle.net character and applies the
+    // result with the normal absence sweep + GM auto-claim. The selective
+    // "Add Guild" lightbox uses the candidate/add pair below instead.
+    const { observations } = await observeBattlenetGuilds(ctx.session.user.id);
 
     const result = await applyVerification({
       userId: ctx.session.user.id,
@@ -562,6 +427,177 @@ export const guildRouter = router({
       pendingDashboardsClaimed: result.pendingDashboardsClaimed,
     };
   }),
+
+  /**
+   * Step 1 of the "Add Guild" lightbox. Observes the caller's Battle.net
+   * characters and returns the DISTINCT guilds found, WITHOUT writing
+   * anything (no Character upsert, no membership, no claim). Each candidate
+   * carries an opaque `key` the client passes back to `addDiscoveredGuilds`.
+   *
+   * `alreadyMember` lets the UI disable guilds the user already belongs to;
+   * `isGuildMaster` lets it warn "you are GM — adding will claim ownership".
+   */
+  discoverGuildCandidates: protectedProcedure.mutation(async ({ ctx }) => {
+    const { observations, charactersObserved } = await observeBattlenetGuilds(
+      ctx.session.user.id,
+    );
+
+    // Collapse observations to distinct guilds (a user may have several
+    // characters in one guild). `isGM` is true if ANY of the user's chars in
+    // that guild is rosterRank 0.
+    type Cand = {
+      key: string;
+      name: string;
+      region: string;
+      realmSlug: string;
+      faction: string;
+      guildSlug: string;
+      isGuildMaster: boolean;
+    };
+    const distinct = new Map<string, Cand>();
+    for (const obs of observations) {
+      if (!obs.guild) continue;
+      const gRealm = normalizeRealmSlug(obs.guild.realmSlug);
+      const gSlug = normalizeGuildSlug(obs.guild.name);
+      if (!gRealm || !gSlug) continue;
+      const key = candidateKey(obs.region, gRealm, gSlug);
+      const isGM = obs.guild.rosterRank === 0;
+      const existing = distinct.get(key);
+      if (!existing) {
+        distinct.set(key, {
+          key,
+          name: obs.guild.name,
+          region: obs.region,
+          realmSlug: gRealm,
+          faction: obs.guild.faction,
+          guildSlug: gSlug,
+          isGuildMaster: isGM,
+        });
+      } else if (isGM) {
+        existing.isGuildMaster = true;
+      }
+    }
+
+    // Annotate each candidate with the caller's existing membership status
+    // (read-only). Guild rows may not exist yet on a first-ever discovery.
+    const candidates = await Promise.all(
+      [...distinct.values()].map(async (c) => {
+        const guildRow = await ctx.db.guild.findUnique({
+          where: {
+            region_realmSlug_guildSlug: {
+              region: c.region as Region,
+              realmSlug: c.realmSlug,
+              guildSlug: c.guildSlug,
+            },
+          },
+          select: { id: true },
+        });
+        let membershipStatus: GuildMembershipStatus | null = null;
+        if (guildRow) {
+          const m = await ctx.db.guildMembership.findUnique({
+            where: {
+              userId_guildId: {
+                userId: ctx.session.user.id,
+                guildId: guildRow.id,
+              },
+            },
+            select: { status: true },
+          });
+          membershipStatus = m?.status ?? null;
+        }
+        return {
+          key: c.key,
+          name: c.name,
+          region: c.region,
+          realmSlug: c.realmSlug,
+          faction: c.faction,
+          isGuildMaster: c.isGuildMaster,
+          alreadyMember:
+            membershipStatus === "ACTIVE" || membershipStatus === "PENDING",
+          membershipStatus,
+        };
+      }),
+    );
+
+    // Stable order: alphabetical by guild name.
+    candidates.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+
+    return { ok: true, charactersObserved, candidates };
+  }),
+
+  /**
+   * Step 2 of the "Add Guild" lightbox. Adds ONLY the guilds the user ticked.
+   *
+   * SECURITY: re-derives the full observation set from the caller's own
+   * Battle.net OAuth token (never trusts the client). The `guildKeys` list is
+   * used purely as a filter — a key not in the re-derived set is silently
+   * dropped, so a forged key is a no-op. Passes `skipAbsenceSweep: true` so
+   * the FILTERED observation set can't be read as "every other guild is
+   * absent" (which would march untracked-this-call guilds toward departure).
+   */
+  addDiscoveredGuilds: protectedProcedure
+    .input(
+      z.object({
+        guildKeys: z.array(z.string().min(1).max(256)).min(1).max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { observations } = await observeBattlenetGuilds(ctx.session.user.id);
+      const requested = new Set(input.guildKeys);
+
+      // Keep only observations whose guild was both re-derived from OAuth AND
+      // ticked by the user. No guild → nothing to add.
+      const addedKeys = new Set<string>();
+      const filtered = observations.filter((o) => {
+        if (!o.guild) return false;
+        const gRealm = normalizeRealmSlug(o.guild.realmSlug);
+        const gSlug = normalizeGuildSlug(o.guild.name);
+        if (!gRealm || !gSlug) return false;
+        const key = candidateKey(o.region, gRealm, gSlug);
+        if (!requested.has(key)) return false;
+        addedKeys.add(key);
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        return {
+          ok: true,
+          added: 0,
+          guildsMatched: 0,
+          autoClaims: 0,
+        };
+      }
+
+      const result = await applyVerification({
+        userId: ctx.session.user.id,
+        observedAt: new Date(),
+        characters: filtered,
+        verifiedOwnership: true,
+        // CRITICAL: filtered subset — never run the absence sweep here.
+        skipAbsenceSweep: true,
+      });
+
+      await audit({
+        event: "SYNC_TRIGGERED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "user",
+        subjectId: ctx.session.user.id,
+        metadata: {
+          tier: "add_discovered_guilds",
+          addedKeys: [...addedKeys],
+          ...result,
+        },
+      });
+
+      return {
+        ok: true,
+        added: addedKeys.size,
+        guildsMatched: result.guildMatches,
+        autoClaims: result.autoClaims,
+      };
+    }),
 
   /**
    * Permanently delete a guild. High blast radius (per Prisma schema):

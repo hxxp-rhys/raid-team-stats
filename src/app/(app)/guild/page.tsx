@@ -7,6 +7,7 @@ import type { Route } from "next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AddGuildModal } from "@/components/guild/add-guild-modal";
 import { api } from "@/lib/trpc-client";
 import { cn } from "@/lib/utils";
 
@@ -28,16 +29,28 @@ const STATUS_BADGE: Record<string, string> = {
 export default function GuildIndexPage() {
   const guilds = api.guild.myGuilds.useQuery();
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-12">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Your guilds</h1>
-        <p className="text-muted-foreground text-sm">
-          Click a guild to see its raid teams. Click a team to open its
-          dashboard control panel.
-        </p>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Your guilds</h1>
+          <p className="text-muted-foreground text-sm">
+            Click a guild to see its raid teams. Click a team to open its
+            dashboard control panel.
+          </p>
+        </div>
+        <Button
+          type="button"
+          onClick={() => setShowAdd(true)}
+          className="shrink-0"
+        >
+          Add Guild
+        </Button>
       </header>
+
+      {showAdd && <AddGuildModal onClose={() => setShowAdd(false)} />}
 
       {guilds.isPending ? (
         <p className="text-muted-foreground text-sm">Loading…</p>
@@ -49,14 +62,15 @@ export default function GuildIndexPage() {
         <div className="border-border rounded-lg border bg-card p-6 text-sm">
           <p className="font-medium">No guilds yet.</p>
           <p className="text-muted-foreground mt-1">
-            Link Battle.net on your{" "}
+            Make sure Battle.net is linked on your{" "}
             <Link
               href={"/account" as Route}
               className="text-primary underline-offset-4 hover:underline"
             >
               account page
             </Link>
-            , then run <em>Discover guilds</em> to populate this list.
+            , then click <strong>Add Guild</strong> above to find and add your
+            guilds.
           </p>
         </div>
       ) : (

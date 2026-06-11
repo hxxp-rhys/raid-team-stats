@@ -83,16 +83,12 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
           {battlenetLinked ? "Refresh Battle.net" : "Link Battle.net"}
         </Button>
 
-        {/* 2. Sync guilds — disabled until Battle.net is linked. */}
-        <Button
-          variant="default"
-          onClick={() => discover.mutate()}
-          disabled={!battlenetLinked || discover.isPending}
-        >
-          {discover.isPending ? "Syncing…" : "Sync guilds"}
-        </Button>
+        {/* Guild discovery moved to the "Add Guild" lightbox on /guild,
+            which lets the user pick WHICH guilds to add. Battle.net link
+            (above) still auto-discovers once on first link via the
+            ?bnet=linked redirect handled below. */}
 
-        {/* 3. My guilds — disabled until Battle.net is linked. */}
+        {/* 2. My guilds — disabled until Battle.net is linked. */}
         {battlenetLinked ? (
           <Link
             href="/guild"

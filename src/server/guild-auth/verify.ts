@@ -50,6 +50,16 @@ type ApplyVerificationInput = {
    * Defaults to false to keep the safer behavior on existing callers.
    */
   verifiedOwnership?: boolean;
+  /**
+   * When true, SKIP the unobserved-absence sweep entirely. Required by the
+   * selective "add chosen guilds" path: that path passes a FILTERED subset
+   * of the user's observations (only the guilds they ticked). Running the
+   * normal sweep on a subset would treat every guild the user is genuinely
+   * in but did NOT tick as "absent" and march it toward the departure
+   * cascade -- silent roster corruption. Full-roster callers (Tier A/B/C,
+   * the on-link discover) leave this false so departure detection is intact.
+   */
+  skipAbsenceSweep?: boolean;
 };
 
 type ApplyVerificationResult = {
@@ -171,7 +181,13 @@ export async function applyVerification(
   // NOT include — increment absence counters. This drives the slow-burn
   // departure detection on Tier B (weekly full-guild sync) and on Tier A
   // when a tracked character changes guilds.
-  await markUnobservedAbsences(input);
+  //
+  // SKIPPED for the selective-add path: see `skipAbsenceSweep` doc above —
+  // a filtered observation set must never be read as "everything else is
+  // absent".
+  if (!input.skipAbsenceSweep) {
+    await markUnobservedAbsences(input);
+  }
 
   // If the caller proved ownership, claim any pending raid teams /
   // dashboards keyed off their newly-attributed characters. (The Blizzard
