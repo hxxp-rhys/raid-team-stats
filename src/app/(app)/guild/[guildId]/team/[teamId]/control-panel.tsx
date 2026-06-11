@@ -22,6 +22,10 @@ import {
 } from "@/lib/widgets/types";
 import { findCollider } from "@/lib/widgets/collision";
 import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
+import {
+  useRefreshInterval,
+  REFRESH_OPTIONS,
+} from "@/lib/widgets/use-refresh-interval";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -78,6 +82,23 @@ export function ControlPanel({
   // ─── Source data ─────────────────────────────────────────────────────────
   const team = api.raidTeam.get.useQuery({ raidTeamId: teamId });
   const dashboards = api.dashboard.list.useQuery({ raidTeamId: teamId });
+
+  // ─── Auto-refresh (live updates) ─────────────────────────────────────────
+  // A single polling observer on the SHARED snapshot query key. Every widget
+  // calls `snapshot.latestForTeam({ raidTeamId })` with the same input, so
+  // React Query dedupes them into one query; this observer's refetchInterval
+  // drives that query's refetch and ALL widgets receive the fresh data — no
+  // per-widget wiring. `refetchIntervalInBackground` stays false (default) so
+  // a hidden tab doesn't burn the WCL/Blizzard budget. Off by default.
+  const { intervalMs: refreshIntervalMs, setIntervalMs: setRefreshIntervalMs } =
+    useRefreshInterval();
+  api.snapshot.latestForTeam.useQuery(
+    { raidTeamId: teamId },
+    {
+      refetchInterval: refreshIntervalMs,
+      refetchOnWindowFocus: false,
+    },
+  );
 
   // ─── Manual data-refresh + live progress ─────────────────────────────────
   // Mirrors the AccountRefreshButton pattern: capture `{ since, total }` on
@@ -584,6 +605,36 @@ export function ControlPanel({
               />
               <span aria-hidden>📱</span>
               <span>Mobile view</span>
+            </label>
+            {/* Auto-refresh period — drives the shared snapshot poll. Visible
+                to viewers too (watching a live dashboard during raid). */}
+            <label
+              className={cn(
+                "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
+                refreshIntervalMs !== false && "border-primary text-primary",
+              )}
+              title="Auto-refresh the dashboard data on a timer. Pauses while the tab is in the background."
+            >
+              <span aria-hidden>🔄</span>
+              <span className="sr-only">Auto-refresh period</span>
+              <select
+                value={refreshIntervalMs === false ? "off" : String(refreshIntervalMs)}
+                onChange={(e) =>
+                  setRefreshIntervalMs(
+                    e.target.value === "off" ? false : Number(e.target.value),
+                  )
+                }
+                className="bg-background cursor-pointer text-sm focus:outline-none"
+              >
+                {REFRESH_OPTIONS.map((o) => (
+                  <option
+                    key={o.label}
+                    value={o.value === false ? "off" : String(o.value)}
+                  >
+                    {o.value === false ? "Auto-refresh: Off" : `Every ${o.label}`}
+                  </option>
+                ))}
+              </select>
             </label>
             {pendingFlush ? (
               <span className="text-amber-400 text-xs">Saving…</span>

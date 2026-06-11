@@ -6,13 +6,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // skipAbsenceSweep flag. The real normalize* helpers (from @/lib/realm) are
 // left intact because the key comparison depends on them.
 
-const recordGuildPresence = vi.fn(async () => {});
-const recordGuildAbsence = vi.fn(async () => {});
-const claimByGm = vi.fn(async () => ({ claimed: false }));
-const claimPendingAssetsForUser = vi.fn(async () => ({
-  teamsClaimed: 0,
-  dashboardsClaimed: 0,
-}));
+// vi.hoisted so the vi.mock factories (which are hoisted above imports) can
+// reference these spies directly — no forwarding wrappers needed. The vi.fn
+// callbacks take no params but still record every call with its arguments.
+const { recordGuildPresence, recordGuildAbsence, claimByGm, claimPendingAssetsForUser } =
+  vi.hoisted(() => ({
+    recordGuildPresence: vi.fn(() => Promise.resolve()),
+    recordGuildAbsence: vi.fn(() => Promise.resolve()),
+    claimByGm: vi.fn(() => Promise.resolve({ claimed: false })),
+    claimPendingAssetsForUser: vi.fn(() =>
+      Promise.resolve({ teamsClaimed: 0, dashboardsClaimed: 0 }),
+    ),
+  }));
 
 // A single ACTIVE link to a guild the user will NOT observe in the batch —
 // the classic "did they leave?" case the sweep is meant to catch.
@@ -45,17 +50,13 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 
 vi.mock("@/server/guild-auth/lifecycle", () => ({
-  recordGuildPresence: (...a: unknown[]) => recordGuildPresence(...a),
-  recordGuildAbsence: (...a: unknown[]) => recordGuildAbsence(...a),
+  recordGuildPresence,
+  recordGuildAbsence,
 }));
 
-vi.mock("@/server/guild-auth/claim", () => ({
-  claimByGm: (...a: unknown[]) => claimByGm(...a),
-}));
+vi.mock("@/server/guild-auth/claim", () => ({ claimByGm }));
 
-vi.mock("@/server/guild-auth/ownership", () => ({
-  claimPendingAssetsForUser: (...a: unknown[]) => claimPendingAssetsForUser(...a),
-}));
+vi.mock("@/server/guild-auth/ownership", () => ({ claimPendingAssetsForUser }));
 
 import { applyVerification } from "./verify";
 

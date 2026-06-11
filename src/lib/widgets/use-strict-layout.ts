@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "rts:dashboard:strict-layout";
 
@@ -16,6 +16,25 @@ const readStored = (): boolean => {
   }
 };
 
+// Same-tab subscribers — the native `storage` event only fires in OTHER tabs,
+// so a write in this tab notifies this Set directly.
+const listeners = new Set<() => void>();
+
+const subscribe = (cb: () => void): (() => void) => {
+  listeners.add(cb);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === STORAGE_KEY) cb();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(cb);
+    window.removeEventListener("storage", onStorage);
+  };
+};
+
+const getSnapshot = (): boolean => readStored();
+const getServerSnapshot = (): boolean => true;
+
 /**
  * Per-user, per-browser "strict layout" preference. When ON, drag/resize/
  * stepper changes that would cause widgets to overlap are silently dropped.
@@ -26,49 +45,32 @@ const readStored = (): boolean => {
  * user opens in the same browser. Not synced cross-device — that would
  * require a User column + tRPC; we can promote later if needed.
  *
- * Hydration safety: the server-render and the first client render BOTH
- * return `true` (the default). On mount we read localStorage and update
- * state if the user had previously toggled OFF. This means a one-frame
- * mismatch is impossible (the initial render matches between server and
- * client).
+ * Backed by `useSyncExternalStore`: `getServerSnapshot` (= true, the default)
+ * is used during SSR + hydration, then the localStorage value afterward —
+ * hydration-safe with no setState-in-effect (which the React lint rule
+ * `no-set-state-in-effects` flags as a cascading-render risk).
  */
 export function useStrictLayout(): {
   strict: boolean;
   setStrict: (next: boolean) => void;
   toggle: () => void;
 } {
-  const [strict, setStrictState] = useState<boolean>(true);
-
-  // Reconcile with localStorage on mount. Splitting initialisation from
-  // useState's lazy initializer keeps the server-rendered HTML deterministic.
-  useEffect(() => {
-    const stored = readStored();
-    if (stored !== strict) setStrictState(stored);
-    // Run once on mount — intentionally ignore `strict` in deps so a later
-    // setStrict doesn't re-trigger the localStorage read.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Cross-tab sync: if the user toggles in another tab, follow along.
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY) return;
-      setStrictState(e.newValue === null ? true : e.newValue === "true");
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  const strict = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getServerSnapshot,
+  );
 
   const setStrict = useCallback((next: boolean) => {
-    setStrictState(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next ? "true" : "false");
     } catch {
       // localStorage write can fail in private mode / quota; ignore.
     }
+    for (const l of listeners) l();
   }, []);
 
-  const toggle = useCallback(() => setStrict(!strict), [setStrict, strict]);
+  const toggle = useCallback(() => setStrict(!readStored()), [setStrict]);
 
   return { strict, setStrict, toggle };
 }

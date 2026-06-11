@@ -20,7 +20,6 @@ import {
   candidateKey,
 } from "@/server/guild-auth/observe-battlenet";
 import { normalizeRealmSlug, normalizeGuildSlug } from "@/lib/realm";
-import { env } from "@/env";
 
 const memberRoleSchema = z.enum(["MEMBER", "OFFICER", "OWNER"]);
 
