@@ -17,6 +17,9 @@ export const THEME_IDS = [
   "horde",
   "parchment",
   "void",
+  "mocha",
+  "nord",
+  "rose",
 ] as const;
 
 export type ThemeId = (typeof THEME_IDS)[number];
@@ -51,6 +54,18 @@ export const THEME_META: Record<ThemeId, { name: string; description: string }> 
   void: {
     name: "Void",
     description: "Deep purple + neon teal.",
+  },
+  mocha: {
+    name: "Mocha",
+    description: "Catppuccin Mocha — deep indigo + lavender-mauve.",
+  },
+  nord: {
+    name: "Nord",
+    description: "Arctic polar-night blue-gray + frost cyan.",
+  },
+  rose: {
+    name: "Rosé",
+    description: "Rosé Pine — muted plum + iris and rose accents.",
   },
 };
 

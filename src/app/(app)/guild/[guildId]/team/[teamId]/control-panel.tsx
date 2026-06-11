@@ -141,12 +141,36 @@ export function ControlPanel({
       refetchOnWindowFocus: false,
     },
   );
+  // Accuracy: take BOTH the numerator and denominator from the same source —
+  // `syncProgress` (which counts active members whose lastSyncedAt advanced
+  // past `since`). Mixing the mutation's `enqueued` (denominator) with
+  // syncProgress's `synced` (numerator) could disagree; using one source
+  // makes "X of Y" increment exactly as each member's data lands. Before the
+  // first poll returns we fall back to the enqueued count so the bar shows a
+  // sensible denominator immediately.
+  const refreshTotal = refreshProgress
+    ? (refreshSync.data?.total ?? refreshProgress.total)
+    : 0;
   const refreshSynced = refreshProgress
-    ? Math.min(refreshSync.data?.synced ?? 0, refreshProgress.total)
+    ? Math.min(refreshSync.data?.synced ?? 0, refreshTotal)
     : 0;
   const refreshDone =
-    refreshProgress != null && refreshSynced >= refreshProgress.total;
+    refreshProgress != null && refreshTotal > 0 && refreshSynced >= refreshTotal;
   const refreshActive = refreshProgress != null && !refreshDone;
+
+  // Auto-dismiss the progress bar 5s after it completes. Clearing
+  // refreshProgress + resetting the mutation hides the whole status box.
+  // Depend only on `refreshDone` so re-renders (e.g. the auto-refresh poll)
+  // don't keep resetting the timer.
+  useEffect(() => {
+    if (!refreshDone) return;
+    const id = window.setTimeout(() => {
+      setRefreshProgress(null);
+      refresh.reset();
+    }, 5000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshDone]);
 
   // ─── Active dashboard selection ──────────────────────────────────────────
   // Derived during render (no effect): the explicitly-picked dashboard, else
@@ -689,7 +713,7 @@ export function ControlPanel({
             refresh.isPending
               ? "Refreshing…"
               : refreshActive
-                ? `Syncing ${refreshSynced}/${refreshProgress!.total}…`
+                ? `Syncing ${refreshSynced}/${refreshTotal}…`
                 : "Refresh data"
           }
           onClick={() => refresh.mutate({ raidTeamId: teamId })}
@@ -730,18 +754,18 @@ export function ControlPanel({
               <div className="flex items-center justify-between gap-3 tabular-nums">
                 <span>
                   {refreshDone
-                    ? `Up to date — ${refreshProgress.total}/${refreshProgress.total} synced`
+                    ? `Up to date — ${refreshTotal}/${refreshTotal} synced`
                     : `Syncing characters from Battle.net + WCL…`}
                 </span>
                 <span className="text-foreground font-medium">
-                  {refreshSynced}/{refreshProgress.total}
+                  {refreshSynced}/{refreshTotal}
                 </span>
               </div>
               {/* Determinate bar; aria attrs make it screen-reader-friendly. */}
               <div
                 role="progressbar"
                 aria-valuemin={0}
-                aria-valuemax={refreshProgress.total}
+                aria-valuemax={refreshTotal}
                 aria-valuenow={refreshSynced}
                 aria-label="Team refresh progress"
                 className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
@@ -753,10 +777,8 @@ export function ControlPanel({
                   )}
                   style={{
                     width: `${
-                      refreshProgress.total > 0
-                        ? Math.round(
-                            (refreshSynced / refreshProgress.total) * 100,
-                          )
+                      refreshTotal > 0
+                        ? Math.round((refreshSynced / refreshTotal) * 100)
                         : 0
                     }%`,
                   }}

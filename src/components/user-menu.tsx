@@ -42,7 +42,7 @@ export function UserMenu({
   const items: Item[] = [
     { kind: "link", label: "My guilds", href: "/guild" },
     { kind: "divider" },
-    { kind: "link", label: "Settings", href: "/settings" },
+    { kind: "link", label: "Themes", href: "/settings" },
     { kind: "link", label: "Account", href: "/account" },
     ...(isAdmin ? ([{ kind: "link", label: "Admin", href: "/admin" }] as const) : []),
     { kind: "divider" },

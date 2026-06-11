@@ -25,9 +25,9 @@ export default async function SettingsPage() {
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
       <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Themes</h1>
         <p className="text-muted-foreground text-sm">
-          Personal preferences. Account and security live under{" "}
+          Choose a palette or build your own. Account and security live under{" "}
           <span className="text-foreground">Account</span> in the menu.
         </p>
       </header>

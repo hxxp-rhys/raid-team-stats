@@ -280,6 +280,72 @@
     --ring: oklch(0.556 0 0);
 }
 
+/* Mocha — Catppuccin Mocha. Deep indigo base, lavender-mauve accent. */
+[data-theme="mocha"] {
+    --background: oklch(0.24 0.03 285);          /* base #1e1e2e */
+    --foreground: oklch(0.87 0.04 275);          /* text #cdd6f4 */
+    --card: oklch(0.30 0.03 285);                /* surface0 #313244 */
+    --card-foreground: oklch(0.87 0.04 275);
+    --popover: oklch(0.30 0.03 285);
+    --popover-foreground: oklch(0.87 0.04 275);
+    --primary: oklch(0.78 0.13 305);             /* mauve #cba6f7 */
+    --primary-foreground: oklch(0.20 0.03 285);
+    --secondary: oklch(0.34 0.03 285);
+    --secondary-foreground: oklch(0.87 0.04 275);
+    --muted: oklch(0.34 0.03 285);
+    --muted-foreground: oklch(0.74 0.03 275);    /* subtext #a6adc8 */
+    --accent: oklch(0.80 0.10 215);              /* sky/teal */
+    --accent-foreground: oklch(0.20 0.03 285);
+    --destructive: oklch(0.74 0.16 0);           /* red #f38ba8 */
+    --border: oklch(0.55 0.04 285 / 35%);        /* overlay #45475a */
+    --input: oklch(0.55 0.04 285 / 35%);
+    --ring: oklch(0.78 0.13 305);
+}
+
+/* Nord — arctic polar-night base, frost accent. */
+[data-theme="nord"] {
+    --background: oklch(0.32 0.02 255);          /* nord0 #2e3440 */
+    --foreground: oklch(0.94 0.01 255);          /* nord6 #eceff4 */
+    --card: oklch(0.37 0.02 260);                /* nord1 #3b4252 */
+    --card-foreground: oklch(0.94 0.01 255);
+    --popover: oklch(0.37 0.02 260);
+    --popover-foreground: oklch(0.94 0.01 255);
+    --primary: oklch(0.78 0.07 215);             /* frost #88c0d0 */
+    --primary-foreground: oklch(0.26 0.02 255);
+    --secondary: oklch(0.41 0.02 260);           /* nord2 #434c5e */
+    --secondary-foreground: oklch(0.94 0.01 255);
+    --muted: oklch(0.41 0.02 260);
+    --muted-foreground: oklch(0.82 0.02 255);    /* nord4 #d8dee9 */
+    --accent: oklch(0.66 0.08 250);              /* frost #5e81ac */
+    --accent-foreground: oklch(0.94 0.01 255);
+    --destructive: oklch(0.60 0.13 20);          /* aurora red #bf616a */
+    --border: oklch(0.55 0.03 260 / 40%);        /* nord3 #4c566a */
+    --input: oklch(0.55 0.03 260 / 40%);
+    --ring: oklch(0.78 0.07 215);
+}
+
+/* Rosé — Rosé Pine. Muted plum base, iris + rose accents. */
+[data-theme="rose"] {
+    --background: oklch(0.22 0.03 295);          /* base #191724 */
+    --foreground: oklch(0.90 0.03 290);          /* text #e0def4 */
+    --card: oklch(0.26 0.03 290);                /* surface #1f1d2e */
+    --card-foreground: oklch(0.90 0.03 290);
+    --popover: oklch(0.26 0.03 290);
+    --popover-foreground: oklch(0.90 0.03 290);
+    --primary: oklch(0.77 0.10 300);             /* iris #c4a7e7 */
+    --primary-foreground: oklch(0.22 0.03 295);
+    --secondary: oklch(0.30 0.03 290);           /* overlay #26233a */
+    --secondary-foreground: oklch(0.90 0.03 290);
+    --muted: oklch(0.30 0.03 290);
+    --muted-foreground: oklch(0.68 0.03 290);    /* subtle #908caa */
+    --accent: oklch(0.82 0.07 25);               /* rose #ebbcba */
+    --accent-foreground: oklch(0.22 0.03 295);
+    --destructive: oklch(0.68 0.16 5);           /* love #eb6f92 */
+    --border: oklch(0.45 0.03 290 / 40%);        /* highlight #403d52 */
+    --input: oklch(0.45 0.03 290 / 40%);
+    --ring: oklch(0.77 0.10 300);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
