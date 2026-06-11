@@ -22,7 +22,7 @@ import {
 } from "@/lib/widgets/types";
 import { findCollider } from "@/lib/widgets/collision";
 import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
-import { THEME_IDS, THEME_META } from "@/lib/theme";
+import { isLightTheme, isValidTheme, THEME_IDS, THEME_META } from "@/lib/theme";
 import {
   useRefreshInterval,
   REFRESH_OPTIONS,
@@ -230,6 +230,27 @@ export function ControlPanel({
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [layout, dashboardId, pendingFlush, update]);
+
+  // Apply the dashboard's OWN theme to <html> while this dashboard is open —
+  // for the owner editing it AND any member viewing it, mirroring the
+  // /share view. So picking a "Share theme" repaints the dashboard
+  // immediately, not only on the shared link. The user's personal theme is
+  // restored on unmount (navigating away) and whenever the dashboard theme
+  // is cleared.
+  const dashTheme = layout?.theme;
+  useEffect(() => {
+    if (!dashTheme || !isValidTheme(dashTheme)) return;
+    const el = document.documentElement;
+    const prevTheme = el.getAttribute("data-theme");
+    const prevDark = el.classList.contains("dark");
+    el.setAttribute("data-theme", dashTheme);
+    el.classList.toggle("dark", !isLightTheme(dashTheme));
+    return () => {
+      if (prevTheme !== null) el.setAttribute("data-theme", prevTheme);
+      else el.removeAttribute("data-theme");
+      el.classList.toggle("dark", prevDark);
+    };
+  }, [dashTheme]);
 
   // Which `tabs` array are we editing? Mobile toggle picks `mobileTabs`; if
   // it doesn't exist yet, materialize an empty parallel set on first write.
