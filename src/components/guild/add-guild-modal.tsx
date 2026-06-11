@@ -7,6 +7,18 @@ import type { Route } from "next";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
+import type { RouterOutputs } from "@/lib/trpc-client";
+
+type Candidate = RouterOutputs["guild"]["discoverGuildCandidates"]["candidates"][number];
+
+// Faux-progress copy: discovery is a single round-trip on the wire, but it
+// fans out to many Blizzard calls server-side, so showing rotating phases
+// reassures the user it's still working rather than frozen.
+const SEARCH_STEPS = [
+  "Reading your Battle.net characters…",
+  "Looking up their guilds…",
+  "Checking which you've already added…",
+] as const;
 
 /**
  * "Add Guild" lightbox. Two-step, fully server-derived:
@@ -16,16 +28,36 @@ import { api } from "@/lib/trpc-client";
  *      `guild.addDiscoveredGuilds` which RE-derives from OAuth and adds only
  *      the ticked guilds (the keys are a filter, never trusted as input).
  *
- * Guilds the user already belongs to render disabled + checked ("Already
- * added"). Nothing is pre-selected otherwise — per spec, a guild the user
- * doesn't tick is not added.
+ * The view is driven by an explicit `phase` set from the mutation's
+ * onSuccess/onError callbacks (NOT by reading `isPending`), so a fast error
+ * can never leave it stuck on the loading text.
  */
 export function AddGuildModal({ onClose }: { onClose: () => void }) {
   const utils = api.useUtils();
+  const [phase, setPhase] = useState<"loading" | "error" | "ready">("loading");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [done, setDone] = useState<{ added: number } | null>(null);
+  const [stepIndex, setStepIndex] = useState(0);
 
-  const discover = api.guild.discoverGuildCandidates.useMutation();
+  const discover = api.guild.discoverGuildCandidates.useMutation({
+    onMutate: () => {
+      setPhase("loading");
+      setErrorMsg(null);
+      setStepIndex(0);
+    },
+    onSuccess: (res) => {
+      setCandidates(res.candidates);
+      setSelected(new Set());
+      setPhase("ready");
+    },
+    onError: (err) => {
+      setErrorMsg(err.message);
+      setPhase("error");
+    },
+  });
+
   const add = api.guild.addDiscoveredGuilds.useMutation({
     onSuccess: async (res) => {
       await utils.guild.myGuilds.invalidate();
@@ -33,9 +65,8 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
     },
   });
 
-  // Auto-run discovery exactly once on open. The mutation does no writes, so
-  // a Strict-Mode double-invoke in dev is at worst a wasted Battle.net read;
-  // the ref keeps it to one call anyway.
+  // Fire discovery exactly once on open. The ref guard keeps Strict Mode's
+  // dev double-invoke to a single call.
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
@@ -43,7 +74,15 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
     discover.mutate();
   }, [discover]);
 
-  const candidates = discover.data?.candidates ?? [];
+  // Rotate the faux-progress label while loading.
+  useEffect(() => {
+    if (phase !== "loading") return;
+    const id = window.setInterval(() => {
+      setStepIndex((i) => (i + 1 < SEARCH_STEPS.length ? i + 1 : i));
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [phase]);
+
   const addable = candidates.filter((c) => !c.alreadyMember);
 
   const toggle = (key: string) => {
@@ -73,31 +112,67 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
             Done
           </Button>
         </div>
-      ) : discover.isPending ? (
-        <p className="text-muted-foreground text-sm">
-          Searching your Battle.net characters…
-        </p>
-      ) : discover.error ? (
+      ) : phase === "loading" ? (
+        <div
+          className="text-muted-foreground flex items-center gap-2 text-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <span
+            className="border-muted border-t-foreground inline-block size-3 animate-spin rounded-full border-2"
+            aria-hidden
+          />
+          <span>{SEARCH_STEPS[stepIndex]}</span>
+        </div>
+      ) : phase === "error" ? (
         <div className="space-y-3 text-sm">
           <p className="text-destructive" role="alert">
-            {discover.error.message}
+            {errorMsg ?? "Something went wrong looking up your guilds."}
           </p>
           <p className="text-muted-foreground">
-            You may need to{" "}
+            Guild discovery needs a current Battle.net connection. Open your{" "}
             <Link
               href={"/account" as Route}
               className="text-primary underline-offset-4 hover:underline"
             >
-              reconnect Battle.net
+              account page
             </Link>{" "}
-            on your account page.
+            and click <strong>Link Battle.net</strong> (or{" "}
+            <strong>Refresh Battle.net</strong> if it&apos;s already linked but
+            expired), then try again.
           </p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => discover.mutate()}
+            >
+              Try again
+            </Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
         </div>
       ) : candidates.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          No guilds found for your Battle.net characters. If you just joined
-          one, it can take Blizzard a little while to show it.
-        </p>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            No guilds found for your Battle.net characters. If you just joined
+            one, it can take Blizzard a little while to show it.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => discover.mutate()}
+            >
+              Search again
+            </Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="space-y-4 text-sm">
           <ul className="divide-border divide-y">
