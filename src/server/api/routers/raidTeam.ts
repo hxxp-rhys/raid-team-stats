@@ -368,6 +368,58 @@ export const raidTeamRouter = router({
       return { ok: true, membershipId: membership.id };
     }),
 
+  /**
+   * Permanently delete a raid team. Cascades (per Prisma schema):
+   *   RaidTeamMembership rows → Cascade
+   *   DashboardConfig rows → Cascade
+   *   (RaidTeam.leaderUserId / pendingLeaderCharacterId → SetNull)
+   *
+   * Gated to LEADER on the team OR guild OWNER/OFFICER OR platform admin via
+   * the existing assertRaidTeamRole helper. Type-the-name confirm guards
+   * against wrong-entity deletes (e.g. an admin holding two team detail
+   * pages open). Reuses RAID_TEAM_SETTINGS_UPDATED with metadata.action
+   * until we get dedicated *_DELETED audit events (NEXT_STEPS.md #5).
+   */
+  delete: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        confirmName: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { guildId } = await assertRaidTeamRole(
+        ctx,
+        input.raidTeamId,
+        "LEADER",
+      );
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: { id: true, name: true },
+      });
+      if (!team) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Raid team not found.",
+        });
+      }
+      if (input.confirmName.trim() !== team.name) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation does not match the team's name.",
+        });
+      }
+      await ctx.db.raidTeam.delete({ where: { id: team.id } });
+      await audit({
+        event: "RAID_TEAM_SETTINGS_UPDATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: { action: "deleted", teamName: team.name, guildId },
+      });
+      return { ok: true };
+    }),
+
   // ────────────────────────────────────────────────────────────────────────
   // Team-level refresh + schedule controls
   // ────────────────────────────────────────────────────────────────────────

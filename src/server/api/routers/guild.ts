@@ -563,4 +563,52 @@ export const guildRouter = router({
     };
   }),
 
+  /**
+   * Permanently delete a guild. High blast radius (per Prisma schema):
+   *   GuildMembership rows → Cascade
+   *   GuildCharacterLink rows → Cascade
+   *   RaidTeam rows → Cascade (which cascades RaidTeamMembership + DashboardConfig)
+   *   Guild.claimedByUserId → SetNull (already)
+   *
+   * Gated to OWNER only (NOT OFFICER) or platform admin. Type-the-name
+   * confirm guards against wrong-entity deletes. Reuses
+   * GUILD_ROLE_CHANGED with metadata.action="deleted" until we get a
+   * dedicated GUILD_DELETED audit event (NEXT_STEPS.md #5).
+   */
+  delete: protectedProcedure
+    .input(
+      z.object({
+        guildId: z.string().cuid(),
+        confirmName: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertGuildRole(ctx, input.guildId, "OWNER");
+      const guild = await ctx.db.guild.findUnique({
+        where: { id: input.guildId },
+        select: { id: true, name: true },
+      });
+      if (!guild) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Guild not found.",
+        });
+      }
+      if (input.confirmName.trim() !== guild.name) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Confirmation does not match the guild's name.",
+        });
+      }
+      await ctx.db.guild.delete({ where: { id: guild.id } });
+      await audit({
+        event: "GUILD_ROLE_CHANGED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "guild",
+        subjectId: input.guildId,
+        metadata: { action: "deleted", guildName: guild.name },
+      });
+      return { ok: true };
+    }),
+
 });
