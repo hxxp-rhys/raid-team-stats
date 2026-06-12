@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import Redis from "ioredis";
 import { TokenBucket } from "./token-bucket";
 
+// One client for the whole suite. lazyConnect defers the socket until the
+// first command; the suite quits it exactly once in afterAll. (Per-test
+// quit() + connect() on the SAME ioredis instance is a footgun: an instance
+// reconnected after quit() comes back half-closed and the next command dies
+// with "Connection is closed".)
 const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
   lazyConnect: true,
 });
@@ -13,10 +18,7 @@ const flushBucket = async (p: string) => {
 };
 
 describe.skipIf(process.env.SKIP_REDIS_TESTS === "1")("TokenBucket (live Redis)", () => {
-  beforeEach(async () => {
-    if (!redis.status || redis.status === "end") await redis.connect();
-  });
-  afterEach(async () => {
+  afterAll(async () => {
     await redis.quit().catch(() => {});
   });
 
