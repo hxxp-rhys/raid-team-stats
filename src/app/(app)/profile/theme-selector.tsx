@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button";
 import {
   CUSTOM_ANCHORS,
   CUSTOM_THEME,
+  customPaletteToCss,
   customPaletteToVars,
   isLightHex,
+  isLightTheme,
   THEME_IDS,
   THEME_META,
   type CustomPalette,
@@ -38,11 +40,35 @@ export function ThemeSelector({
   const [selected, setSelected] = useState<Current>(current);
   const [palette, setPalette] = useState<CustomPalette>(customPalette);
 
+  // Apply the theme to the live document immediately. The cookie (set by
+  // the server action) only takes effect via the layout's inline
+  // ThemeScript, and inline scripts do NOT re-execute on router.refresh()
+  // — RSC reconciliation swaps the script node's text but the browser
+  // never re-runs it. Without this direct DOM application the new theme
+  // only appeared after a full reload.
+  const applyBuiltinToDom = (id: ThemeId) => {
+    const el = document.documentElement;
+    el.setAttribute("data-theme", id);
+    // A previously-applied custom theme injects inline CSS vars on <html>
+    // that would override the [data-theme] block — clear them.
+    el.removeAttribute("style");
+    el.classList.toggle("dark", !isLightTheme(id));
+  };
+  const applyCustomToDom = (p: CustomPalette) => {
+    const el = document.documentElement;
+    el.setAttribute("data-theme", CUSTOM_THEME);
+    el.style.cssText = customPaletteToCss(p);
+    el.classList.toggle("dark", !isLightHex(p.bg));
+  };
+
   const applyBuiltin = (id: ThemeId) => {
     setSelected(id);
     startTransition(async () => {
       const r = await setThemeAction(id);
-      if (r.ok) router.refresh();
+      if (r.ok) {
+        applyBuiltinToDom(id);
+        router.refresh();
+      }
     });
   };
 
@@ -50,7 +76,10 @@ export function ThemeSelector({
     setSelected(CUSTOM_THEME);
     startTransition(async () => {
       const r = await setCustomThemeAction(palette);
-      if (r.ok) router.refresh();
+      if (r.ok) {
+        applyCustomToDom(palette);
+        router.refresh();
+      }
     });
   };
 
@@ -74,9 +103,9 @@ export function ThemeSelector({
         <CardHeader>
           <CardTitle>Theme</CardTitle>
           <CardDescription>
-            Change the site palette. Applies across every page; saved in a
-            cookie so it follows you around. Refresh if a tab keeps a stale
-            theme.
+            Change the site palette. Applies instantly and across every page;
+            saved in a cookie so it follows you around. Other already-open
+            tabs pick it up on their next load.
           </CardDescription>
         </CardHeader>
         <CardContent>

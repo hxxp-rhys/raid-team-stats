@@ -58,7 +58,15 @@ export async function AppHeader() {
             </span>
           </span>
         </Link>
-        <UserMenu label={label} isAdmin={isAdmin} />
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/guild"
+            className="border-border bg-background hover:bg-muted inline-flex h-9 items-center rounded-lg border px-3 text-sm font-medium transition-colors"
+          >
+            My guilds
+          </Link>
+          <UserMenu label={label} isAdmin={isAdmin} />
+        </div>
       </div>
     </header>
   );

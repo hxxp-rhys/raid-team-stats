@@ -60,8 +60,9 @@ export default async function AccountPage() {
       </header>
 
       {/* Primary actions as a horizontal toolbar directly under the
-          title/subtitle (Sync guilds / Refresh Battle.net / My guilds /
-          Sign out). Discovery progress + result render just below it. */}
+          title/subtitle (Link/Refresh Battle.net / Sign out — "My guilds"
+          lives in the top bar). Discovery progress + result render just
+          below it. */}
       <div className="border-border mb-8 border-b pb-6">
         <ProfileActions battlenetLinked={battlenetLinked} />
       </div>

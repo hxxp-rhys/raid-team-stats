@@ -39,9 +39,8 @@ export function UserMenu({
     };
   }, [open]);
 
+  // "My guilds" lives in the top bar (left of this menu), not in here.
   const items: Item[] = [
-    { kind: "link", label: "My guilds", href: "/guild" },
-    { kind: "divider" },
     { kind: "link", label: "Themes", href: "/settings" },
     { kind: "link", label: "Account", href: "/account" },
     ...(isAdmin ? ([{ kind: "link", label: "Admin", href: "/admin" }] as const) : []),

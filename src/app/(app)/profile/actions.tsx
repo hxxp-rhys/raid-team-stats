@@ -101,26 +101,10 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
         {/* Guild discovery moved to the "Add Guild" lightbox on /guild,
             which lets the user pick WHICH guilds to add. Battle.net link
             (above) still auto-discovers once on first link via the
-            ?bnet=linked redirect handled below. */}
+            ?bnet=linked redirect handled below. "My guilds" itself lives in
+            the top bar now (left of the user menu), not on this page. */}
 
-        {/* 2. My guilds — disabled until Battle.net is linked. */}
-        {battlenetLinked ? (
-          <Link
-            href="/guild"
-            className="border-border bg-background hover:bg-muted inline-flex h-8 items-center justify-center rounded-lg border px-2.5 text-sm font-medium transition-colors"
-          >
-            My guilds
-          </Link>
-        ) : (
-          <span
-            aria-disabled="true"
-            className="border-border bg-background pointer-events-none inline-flex h-8 cursor-not-allowed items-center justify-center rounded-lg border px-2.5 text-sm font-medium opacity-50"
-          >
-            My guilds
-          </span>
-        )}
-
-        {/* 4. Sign out — always available. */}
+        {/* Sign out — always available. */}
         <Button variant="outline" onClick={() => signOut({ callbackUrl: "/" })}>
           Sign out
         </Button>
