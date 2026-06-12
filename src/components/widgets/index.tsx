@@ -15,6 +15,7 @@ import { KeystonesWidget } from "./keystones";
 import { MissingFixesWidget } from "./missing-fixes";
 import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
+import { ParseConsistencyWidget } from "./parse-consistency";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
 import { ProgCurveWidget } from "./prog-curve";
 import { RaidCompletionWidget } from "./raid-completion";
@@ -68,6 +69,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   data_refresh: DataRefreshWidget,
   engagement_pulse: EngagementPulseWidget,
   prog_curve: ProgCurveWidget,
+  parse_consistency: ParseConsistencyWidget,
 };
 
 /**

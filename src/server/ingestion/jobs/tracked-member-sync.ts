@@ -860,12 +860,43 @@ export async function handleTrackedMemberSync(
       encounter?: { id?: number; name?: string };
       rankPercent?: number | null;
       bestPercent?: number | null;
+      medianPercent?: number | null;
+      allStars?: { partition?: number | null } | null;
     };
     const zr = zoneResp.characterData?.character?.zoneRankings as
-      | { rankings?: ZoneRanking[] }
+      | {
+          rankings?: ZoneRanking[];
+          // Zone-level consistency aggregates — always present in the
+          // response we pay for; persisted since the parse_consistency
+          // widget (previously discarded at read time). Rounded to 2dp like
+          // percentile/weekPercentile so float jitter doesn't churn the
+          // insert-on-change history.
+          bestPerformanceAverage?: number | null;
+          medianPerformanceAverage?: number | null;
+        }
       | null
       | undefined;
+    const round2 = (v: number | null): number | null =>
+      v != null ? Math.round(v * 100) / 100 : null;
     const seasonRankings = zr?.rankings ?? [];
+    const zoneBestAvg = round2(
+      typeof zr?.bestPerformanceAverage === "number"
+        ? zr.bestPerformanceAverage
+        : null,
+    );
+    const zoneMedianAvg = round2(
+      typeof zr?.medianPerformanceAverage === "number"
+        ? zr.medianPerformanceAverage
+        : null,
+    );
+    // The REAL ranking partition lives in each entry's allStars.partition —
+    // the response's top-level `partition` is just a request echo (-1 =
+    // "current"), useless for detecting a partition flip (e.g. a mid-season
+    // raid addition resetting percentiles). Negative values are sentinels.
+    const zonePartition =
+      seasonRankings
+        .map((r) => r.allStars?.partition)
+        .find((p): p is number => typeof p === "number" && p >= 0) ?? null;
     const encounters: Array<{ id: number; name: string | null }> = [];
     for (const r of seasonRankings) {
       const id = r.encounter?.id;
@@ -892,6 +923,7 @@ export async function handleTrackedMemberSync(
           server: character.realmSlug,
           region: wclRegion,
           difficulty: MYTHIC_DIFFICULTY,
+          metric: "dps",
         },
         schema: characterEncounterRankingsResponseSchema,
         estimatedPoints: Math.max(5, encounters.length),
@@ -905,6 +937,7 @@ export async function handleTrackedMemberSync(
     for (const enc of encounters) {
       const season = seasonRankings.find((r) => r.encounter?.id === enc.id);
       const seasonPct = season?.rankPercent ?? season?.bestPercent ?? null;
+      const medianPct = round2(season?.medianPercent ?? null);
 
       const er = charEnc[`e${enc.id}`] as
         | { ranks?: Rank[] }
@@ -942,11 +975,22 @@ export async function handleTrackedMemberSync(
           seasonPct != null ? Math.round(seasonPct * 100) / 100 : null,
         weekPercentile:
           weekBest != null ? Math.round(weekBest * 100) / 100 : null,
+        medianPercentile: medianPct,
+        bestAvg: zoneBestAvg,
+        medianAvg: zoneMedianAvg,
         metric: "dps",
         reportCode: weekBestReport,
         reportStartTime:
           weekBestStart != null ? new Date(weekBestStart) : null,
-        rawPayload: { season, weekRanks: ranks.length },
+        // `ranks` (every public kill's percentile) powers the per-boss
+        // volatility stat retroactively — rankings aggregate ALL kills, so
+        // variance is available from the first fetch, no accumulation wait.
+        rawPayload: {
+          season,
+          partition: zonePartition,
+          weekRanks: ranks.length,
+          ranks,
+        },
       });
     }
   } catch (err) {

@@ -42,7 +42,7 @@ User holds **Platinum: 18 000 points/hr**. Budget is
 | `CHARACTER_ZONE_RANKINGS_QUERY` | season `zoneRankings` for one char/zone |
 | `WCL_RAID_ZONES_QUERY` | flat `worldData.zones { id name frozen }` |
 | `ZONE_ENCOUNTERS_QUERY` | boss list for a zone — **dead code today** (exported, never imported; the boss list is derived from the zoneRankings JSON instead) |
-| `buildCharacterEncounterRankingsQuery(ids)` | per-encounter `ranks[]` (has `startTime`/`report`), aliased `e<id>` so it's **one HTTP request per character** |
+| `buildCharacterEncounterRankingsQuery(ids)` | per-encounter `ranks[]` (has `startTime`/`report`), aliased `e<id>` so it's **one HTTP request per character**. Takes `$metric: CharacterRankingMetricType` (NOT the `CharacterPageRankingMetricType` zoneRankings uses — different enums, overlapping members dps/hps/tankhps). Sync passes `dps` today; role-true ingestion is a planned flag-flip |
 | `GUILD_REPORTS_QUERY` | GRS discovery: `reportData.reports(guildName, guildServerSlug, guildServerRegion, zoneID, startTime, limit)` → `{ code title startTime endTime revision zone{id} }`, newest-first, epoch-ms floats. ~2 pts |
 | `REPORT_FIGHTS_QUERY` | GRS detail: `report(code)` → `fights(killType: Encounters)` (id, encounterID, difficulty, kill, size, bossPercentage, fightPercentage, lastPhase, lastPhaseIsIntermission, startTime/endTime **report-relative ms**, friendlyPlayers, keystoneLevel) + `masterData.actors(type: "Player")`. ~8 pts |
 
@@ -64,6 +64,12 @@ if that ever matters).
    mirrors of `warcraftlogs.com/v2-api-docs/` fail. Verify schema
    questions with a targeted live introspection instead (one batched
    `__type(name:"…"){fields{name args{name}}}` POST ≈ 2 pts).
+0b. **`zoneRankings`' top-level `partition` is a request ECHO, not the
+   real partition** — when no partition arg is passed it returns the
+   sentinel `-1` ("current"). The REAL ranking partition is
+   `rankings[].allStars.partition` (live: zone 46 → `2` while top-level
+   echoed `-1`). Never persist/display the top-level value; reject
+   negatives as sentinels.
 1. **`zoneRankings` and `encounterRankings` are JSON scalars** in WCL's
    schema, not typed objects. Zod-model them as `z.unknown()` /
    `z.record()` with `.passthrough()`. Don't try to select sub-fields.

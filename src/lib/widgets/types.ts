@@ -37,6 +37,7 @@ export const WIDGET_TYPES = [
   "data_refresh",
   "engagement_pulse",
   "prog_curve",
+  "parse_consistency",
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -100,6 +101,7 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   data_refresh: { cols: 4, rows: 2 },
   engagement_pulse: { cols: 12, rows: 4 },
   prog_curve: { cols: 12, rows: 4 },
+  parse_consistency: { cols: 12, rows: 4 },
 };
 export const WIDGET_DEFAULT_SIZE: Record<
   WidgetType,
@@ -399,5 +401,10 @@ export const WIDGET_META: Record<
     title: "Progression curve",
     description:
       "Pull-by-pull boss progress with trend line + night-pace view, from the guild's public WCL logs.",
+  },
+  parse_consistency: {
+    title: "Parse consistency",
+    description:
+      "Median vs best percentile, per-kill variance, and week-over-week improvement vs the roster.",
   },
 };

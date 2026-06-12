@@ -305,12 +305,21 @@ type WclParseArgs = {
   difficulty: number;
   percentile?: number | null;
   weekPercentile?: number | null;
+  medianPercentile?: number | null;
+  bestAvg?: number | null;
+  medianAvg?: number | null;
   metric?: string | null;
   reportCode?: string | null;
   reportStartTime?: Date | null;
   rawPayload: unknown;
 };
 export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result> {
+  // Zone-level bestAvg/medianAvg are deliberately NOT hashed: they drift
+  // whenever ANY boss's percentile recalculates and are stamped onto every
+  // encounter row — hashing them would rewrite a character's full encounter
+  // set (ranks[] payload included) on every zone-number wiggle. They still
+  // refresh whenever a per-encounter value genuinely changes; readers
+  // tolerate the staleness by taking the latest row that carries them.
   const sourceHash = canonicalHash({
     z: args.zoneId,
     e: args.encounterId,
@@ -318,6 +327,7 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
     d: args.difficulty,
     p: args.percentile ?? null,
     wp: args.weekPercentile ?? null,
+    mp: args.medianPercentile ?? null,
     m: args.metric ?? null,
     r: args.reportCode ?? null,
     rt: args.reportStartTime ? args.reportStartTime.getTime() : null,
@@ -345,6 +355,9 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
       difficulty: args.difficulty,
       percentile: args.percentile ?? null,
       weekPercentile: args.weekPercentile ?? null,
+      medianPercentile: args.medianPercentile ?? null,
+      bestAvg: args.bestAvg ?? null,
+      medianAvg: args.medianAvg ?? null,
       metric: args.metric ?? null,
       reportCode: args.reportCode ?? null,
       reportStartTime: args.reportStartTime ?? null,

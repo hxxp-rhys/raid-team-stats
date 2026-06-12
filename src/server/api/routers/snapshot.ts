@@ -18,6 +18,7 @@ import {
   watchlisted,
   weekStartUtc,
 } from "@/lib/engagement-pulse";
+import { roleOf, stdevOf, theilSen } from "@/lib/parse-consistency";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import { computeGearAudit } from "@/server/ingestion/gear-audit";
 import {
@@ -536,6 +537,271 @@ export const snapshotRouter = router({
       });
       return {
         points: rows.map((r) => ({ at: r.capturedAt, itemLevel: r.itemLevel })),
+      };
+    }),
+
+  /**
+   * Parse consistency — the numbers leaders actually roster on: per-boss
+   * season MEDIAN percentile, best-vs-median gap, per-kill volatility
+   * (stdev over the ranks[] now persisted in rawPayload), and a
+   * week-over-week RELATIVE improvement trend (member weekly median of
+   * week-best kills minus the roster median, Theil–Sen slope).
+   *
+   * Reads only WclParseSnapshot (data the hourly sync already pays for).
+   * Ingestion is dps-metric + Mythic-only today — healer/tank rows are
+   * flagged via spec-name role so the UI footnotes instead of ranking
+   * them, and Heroic-only teams get an honest empty state.
+   */
+  parseConsistency: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+
+      const memberships = await ctx.db.raidTeamMembership.findMany({
+        where: { raidTeamId: input.raidTeamId, isActive: true },
+        include: {
+          character: { select: { id: true, name: true, classId: true } },
+        },
+      });
+      const characterIds = memberships.map((m) => m.character.id);
+      const MYTHIC = 5;
+      const zoneId = (await warcraftLogsClient().currentRaidZoneId()) ?? 46;
+
+      if (characterIds.length === 0) {
+        return {
+          zoneId,
+          partition: null as number | null,
+          members: [],
+          trendWeeks: [] as string[],
+        };
+      }
+
+      const now = new Date();
+      const currentWeek = weekStartUtc(now);
+      const TREND_WEEKS = 8;
+      const oldest = new Date(
+        currentWeek.getTime() - TREND_WEEKS * 7 * 24 * 60 * 60 * 1000,
+      );
+
+      const [latestRows, trendRows, specRows] = await Promise.all([
+        // Latest row per (character, encounter): grab a recent window per
+        // character and reduce in JS (mirrors latestForTeam's approach).
+        Promise.all(
+          characterIds.map((id) =>
+            ctx.db.wclParseSnapshot.findMany({
+              where: { characterId: id, zoneId, difficulty: MYTHIC },
+              orderBy: { capturedAt: "desc" },
+              take: 60,
+              select: {
+                characterId: true,
+                encounterId: true,
+                encounterName: true,
+                percentile: true,
+                medianPercentile: true,
+                bestAvg: true,
+                medianAvg: true,
+                capturedAt: true,
+                // Parsed server-side for totalKills/volatility/partition —
+                // never shipped to the client.
+                rawPayload: true,
+              },
+            }),
+          ),
+        ),
+        ctx.db.wclParseSnapshot.findMany({
+          where: {
+            characterId: { in: characterIds },
+            zoneId,
+            difficulty: MYTHIC,
+            weekPercentile: { not: null },
+            reportStartTime: { gte: oldest },
+          },
+          select: {
+            characterId: true,
+            encounterId: true,
+            weekPercentile: true,
+            reportStartTime: true,
+          },
+        }),
+        Promise.all(
+          characterIds.map((id) =>
+            ctx.db.characterSnapshot.findFirst({
+              where: { characterId: id, source: "BLIZZARD" },
+              orderBy: { capturedAt: "desc" },
+              select: { characterId: true, specName: true },
+            }),
+          ),
+        ),
+      ]);
+
+      const specByChar = new Map(
+        specRows
+          .filter((r): r is NonNullable<typeof r> => r != null)
+          .map((r) => [r.characterId, r.specName]),
+      );
+
+      // ---- snapshot tab: latest per (char, encounter) + raw extraction ----
+      type RawSeason = { totalKills?: unknown };
+      type RawRank = { rankPercent?: unknown; percentile?: unknown };
+      const readRaw = (raw: unknown) => {
+        const obj =
+          typeof raw === "object" && raw !== null
+            ? (raw as Record<string, unknown>)
+            : {};
+        const season = (obj.season ?? {}) as RawSeason;
+        const kills =
+          typeof season.totalKills === "number" ? season.totalKills : null;
+        const ranks = Array.isArray(obj.ranks)
+          ? (obj.ranks as RawRank[])
+              .map((r) =>
+                typeof r?.rankPercent === "number"
+                  ? r.rankPercent
+                  : typeof r?.percentile === "number"
+                    ? r.percentile
+                    : null,
+              )
+              .filter((v): v is number => v != null)
+          : [];
+        // Negative partition = WCL's request-echo sentinel (-1 "current"),
+        // present in early rows — never a real partition number.
+        const partition =
+          typeof obj.partition === "number" && obj.partition >= 0
+            ? obj.partition
+            : null;
+        return { kills, ranks, partition };
+      };
+
+      let partition: number | null = null;
+      const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+      const weekIndexOf = (d: Date): number =>
+        Math.floor((d.getTime() - oldest.getTime()) / WEEK_MS);
+
+      // Per (char, week, encounter) keep the BEST weekPercentile (rows are
+      // insert-on-change — the same lockout can produce several rows).
+      const weekBest = new Map<string, number>();
+      for (const r of trendRows) {
+        if (r.weekPercentile == null || r.reportStartTime == null) continue;
+        const idx = weekIndexOf(r.reportStartTime);
+        if (idx < 0 || idx >= TREND_WEEKS) continue; // closed weeks only
+        const key = `${r.characterId}|${idx}|${r.encounterId}`;
+        const prev = weekBest.get(key);
+        if (prev == null || r.weekPercentile > prev) {
+          weekBest.set(key, r.weekPercentile);
+        }
+      }
+      // char|week → list of per-encounter week-bests
+      const charWeekValues = new Map<string, number[]>();
+      for (const [key, v] of weekBest) {
+        const [charId, idx] = [
+          key.slice(0, key.indexOf("|")),
+          key.slice(key.indexOf("|") + 1, key.lastIndexOf("|")),
+        ];
+        const k = `${charId}|${idx}`;
+        charWeekValues.set(k, [...(charWeekValues.get(k) ?? []), v]);
+      }
+      // Member weekly medians (qualify: ≥2 encounters that week).
+      const memberWeekMedian = new Map<string, number>();
+      for (const [k, values] of charWeekValues) {
+        if (values.length < 2) continue;
+        const med = medianOf(values);
+        if (med != null) memberWeekMedian.set(k, med);
+      }
+      // Roster median per week — DPS members only. Ingestion is dps-metric;
+      // healer/tank medians measure the wrong job and would perturb the
+      // baseline everyone's rel_w is computed against (their own rows still
+      // render, footnoted, compared against the dps baseline).
+      const dpsChars = new Set(
+        characterIds.filter((id) => roleOf(specByChar.get(id)) === "dps"),
+      );
+      const rosterWeek = new Map<number, number[]>();
+      for (const [k, med] of memberWeekMedian) {
+        const charId = k.slice(0, k.indexOf("|"));
+        if (!dpsChars.has(charId)) continue;
+        const idx = Number(k.slice(k.indexOf("|") + 1));
+        rosterWeek.set(idx, [...(rosterWeek.get(idx) ?? []), med]);
+      }
+      const rosterWeekMedian = new Map<number, number>();
+      for (const [idx, meds] of rosterWeek) {
+        const med = medianOf(meds);
+        if (med != null && meds.length >= 2) rosterWeekMedian.set(idx, med);
+      }
+
+      const members = memberships.map((m, i) => {
+        const rows = latestRows[i] ?? [];
+        const latestByEncounter = new Map<string, (typeof rows)[number]>();
+        for (const r of rows) {
+          const k = String(r.encounterId);
+          if (!latestByEncounter.has(k)) latestByEncounter.set(k, r); // desc order
+        }
+        const encounters = [...latestByEncounter.values()]
+          .map((r) => {
+            const raw = readRaw(r.rawPayload);
+            // Partitions only ever increase; after a flip, inactive members'
+            // latest rows still carry the OLD partition — take the max so a
+            // stale row can't mask the reset.
+            if (
+              raw.partition != null &&
+              (partition == null || raw.partition > partition)
+            ) {
+              partition = raw.partition;
+            }
+            return {
+              encounterId: r.encounterId,
+              encounterName: r.encounterName,
+              best: r.percentile,
+              median: r.medianPercentile,
+              kills: raw.kills,
+              volatility: raw.ranks.length >= 4 ? stdevOf(raw.ranks) : null,
+            };
+          })
+          // The sync writes a row for EVERY zone boss incl. never-killed
+          // ones (all-null) — drop those so the boss dropdown stays clean
+          // and the "no Mythic parses" empty state can actually trigger
+          // for Heroic-only teams.
+          .filter((e) => e.best != null || e.median != null);
+        const latestWithAvg = rows.find(
+          (r) => r.bestAvg != null || r.medianAvg != null,
+        );
+
+        // Trend: rel_w over closed weeks where BOTH the member qualifies
+        // and a roster median exists; benched weeks are simply absent.
+        const trend: Array<{ weekStart: string; median: number; rel: number }> =
+          [];
+        for (let idx = 0; idx < TREND_WEEKS; idx++) {
+          const med = memberWeekMedian.get(`${m.character.id}|${idx}`);
+          const roster = rosterWeekMedian.get(idx);
+          if (med == null || roster == null) continue;
+          trend.push({
+            weekStart: new Date(
+              oldest.getTime() + idx * WEEK_MS,
+            ).toISOString(),
+            median: med,
+            rel: med - roster,
+          });
+        }
+        const relSeries = trend.slice(-6).map((t) => t.rel);
+        const slope = relSeries.length >= 3 ? theilSen(relSeries) : null;
+
+        return {
+          character: m.character,
+          specName: specByChar.get(m.character.id) ?? null,
+          role: roleOf(specByChar.get(m.character.id)),
+          bestAvg: latestWithAvg?.bestAvg ?? null,
+          medianAvg: latestWithAvg?.medianAvg ?? null,
+          encounters,
+          trend,
+          slope,
+          qualifyingWeeks: relSeries.length,
+        };
+      });
+
+      return {
+        zoneId,
+        partition,
+        members,
+        trendWeeks: Array.from({ length: TREND_WEEKS }, (_, idx) =>
+          new Date(oldest.getTime() + idx * WEEK_MS).toISOString(),
+        ),
       };
     }),
 

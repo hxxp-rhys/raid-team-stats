@@ -545,6 +545,13 @@ model WclParseSnapshot {
   // week. Powers the "current week only" parses widget.
   weekPercentile  Int?
   reportStartTime DateTime?
+  // Consistency numbers (parse_consistency widget). Per-encounter season
+  // MEDIAN percentile, plus the zone-level best/median performance averages
+  // — fetched in the same zoneRankings response we always paid for but
+  // discarded until now. Nullable: rows predating the widget lack them.
+  medianPercentile Float?
+  bestAvg          Float?
+  medianAvg        Float?
   metric        String?
   reportCode    String?
   rawPayload    Json

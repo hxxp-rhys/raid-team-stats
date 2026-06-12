@@ -145,10 +145,13 @@ export const wclZoneEncountersResponseSchema = z
 export const buildCharacterEncounterRankingsQuery = (
   encounterIds: number[],
 ): string => {
+  // NOTE the enum nuance: encounterRankings takes CharacterRankingMetricType
+  // while zoneRankings takes CharacterPageRankingMetricType — they are
+  // different GraphQL enums with overlapping members (dps/hps/tankhps).
   const fields = encounterIds
     .map(
       (id) =>
-        `e${id}: encounterRankings(encounterID: ${id}, difficulty: $difficulty, metric: dps)`,
+        `e${id}: encounterRankings(encounterID: ${id}, difficulty: $difficulty, metric: $metric)`,
     )
     .join("\n        ");
   return /* GraphQL */ `
@@ -157,6 +160,7 @@ export const buildCharacterEncounterRankingsQuery = (
       $server: String!
       $region: String!
       $difficulty: Int
+      $metric: CharacterRankingMetricType
     ) {
       characterData {
         character(name: $name, serverSlug: $server, serverRegion: $region) {
