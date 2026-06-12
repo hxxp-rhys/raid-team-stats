@@ -9,6 +9,8 @@ import { queues } from "@/server/ingestion/queues";
  * Schedule (America/New_York):
  *   - Tier A — every hour at :05
  *   - Tier B — Tuesday 06:00 ET (just after US weekly reset)
+ *   - GRS    — every hour at :20 (offset from Tier A so the WCL points
+ *              ledger isn't hit by both at once)
  *
  * Each repeatable job enqueues a "fan-out" job that, when processed,
  * gathers the work and adds per-character / per-guild jobs to the actual
@@ -28,6 +30,7 @@ export async function registerSchedules(): Promise<void> {
   // sees them without an extra queue declaration.
   const tierAPattern = "5 * * * *"; // every hour at :05
   const tierBPattern = "0 6 * * 2"; // Tuesday 06:00
+  const grsPattern = "20 * * * *"; // every hour at :20
 
   await queues.trackedMemberSync.add(
     "tier-a-fanout",
@@ -49,11 +52,25 @@ export async function registerSchedules(): Promise<void> {
       removeOnFail: 10,
     },
   );
+  await queues.guildReportSync.add(
+    "grs-fanout",
+    { kind: "grs-fanout" },
+    {
+      jobId: "grs-fanout",
+      repeat: { pattern: grsPattern, tz: TZ },
+      removeOnComplete: 10,
+      removeOnFail: 10,
+    },
+  );
 
-  logger.info({ tierA: tierAPattern, tierB: tierBPattern, tz: TZ }, "schedules registered");
+  logger.info(
+    { tierA: tierAPattern, tierB: tierBPattern, grs: grsPattern, tz: TZ },
+    "schedules registered",
+  );
 }
 
 export const FANOUT_KIND = {
   tierA: "tier-a-fanout",
   tierB: "tier-b-fanout",
+  grs: "grs-fanout",
 } as const;

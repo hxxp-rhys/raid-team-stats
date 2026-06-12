@@ -27,6 +27,11 @@ import {
   enqueueGuildRosterSyncForAllGuilds,
   type GuildRosterSyncPayload,
 } from "@/server/ingestion/jobs/guild-roster-sync";
+import {
+  handleGuildReportSync,
+  enqueueGuildReportSyncForAll,
+  type GuildReportSyncPayload,
+} from "@/server/ingestion/jobs/guild-report-sync";
 import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
@@ -101,6 +106,32 @@ const start = async () => {
     }),
   );
 
+  // GRS — fan-out job + per-guild WCL report ingestion share the queue.
+  // Concurrency 2: each job makes a handful of WCL calls already smoothed
+  // by the client's token bucket + points ledger.
+  workers.push(
+    new Worker<GuildReportSyncPayload | FanoutPayload>(
+      QUEUE_NAMES.guildReportSync,
+      async (job) => {
+        if ((job.data as FanoutPayload).kind === FANOUT_KIND.grs) {
+          const r = await enqueueGuildReportSyncForAll();
+          logger.info({ enqueued: r.enqueued }, "grs fanout queued");
+          return;
+        }
+        await handleGuildReportSync(job.data as GuildReportSyncPayload);
+      },
+      {
+        connection: redisBlocking,
+        concurrency: 2,
+      },
+    ).on("failed", (job, err) => {
+      logger.error(
+        { jobId: job?.id, attemptsMade: job?.attemptsMade, err },
+        "guild-report-sync job failed",
+      );
+    }),
+  );
+
   await registerSchedules();
 
   // Periodic queue-depth gauge update — Prometheus pulls /api/metrics from
@@ -110,6 +141,7 @@ const start = async () => {
     { name: "manual-roster-refresh", q: queues.manualRosterRefresh },
     { name: "tracked-member-sync", q: queues.trackedMemberSync },
     { name: "guild-roster-sync", q: queues.guildRosterSync },
+    { name: "guild-report-sync", q: queues.guildReportSync },
   ];
   setInterval(async () => {
     for (const { name, q } of queueObjects) {

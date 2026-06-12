@@ -540,6 +540,114 @@ export const snapshotRouter = router({
     }),
 
   /**
+   * Progression pulls — per-pull fight rows ingested by Guild Report Sync,
+   * for the prog_curve widget. Read-only over our own tables: zero WCL
+   * spend at request time. Returns the raw pulls (8 weeks) plus an
+   * encounter-name map derived from the team's parse snapshots; dedupe,
+   * throwaway filtering, night clustering, and trend math live client-side
+   * in src/lib/prog-curve.ts so axis/filter toggles don't refetch.
+   */
+  progressionPulls: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const { guildId } = await assertRaidTeamRole(
+        ctx,
+        input.raidTeamId,
+        "MEMBER",
+      );
+
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: { guildId, startTime: { gte: since } },
+        select: {
+          code: true,
+          zoneId: true,
+          startTime: true,
+          endTime: true,
+        },
+      });
+      if (reports.length === 0) {
+        return {
+          pulls: [],
+          encounterNames: {} as Record<number, string>,
+          reportCount: 0,
+          newestReportAt: null as Date | null,
+        };
+      }
+      const reportByCode = new Map(reports.map((r) => [r.code, r]));
+      const newestReportAt = reports.reduce<Date | null>(
+        (max, r) => (max == null || r.startTime > max ? r.startTime : max),
+        null,
+      );
+
+      const fights = await ctx.db.wclFight.findMany({
+        where: { reportCode: { in: reports.map((r) => r.code) } },
+        select: {
+          reportCode: true,
+          fightId: true,
+          encounterId: true,
+          difficulty: true,
+          kill: true,
+          bossPct: true,
+          fightPct: true,
+          lastPhase: true,
+          startAt: true,
+          endAt: true,
+          durationMs: true,
+        },
+      });
+
+      // Boss names ride along from parse snapshots (the fights query's
+      // verified field set doesn't include a name); unmatched encounters
+      // render as "Encounter <id>" client-side. Scoped to the encounter ids
+      // actually present so the lookup stays bounded as the append-only
+      // parse table grows across seasons.
+      const presentEncounterIds = [
+        ...new Set(fights.map((f) => f.encounterId)),
+      ];
+      const nameRows = presentEncounterIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: {
+              encounterId: { in: presentEncounterIds },
+              encounterName: { not: null },
+            },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encounterNames: Record<number, string> = {};
+      for (const n of nameRows) {
+        if (n.encounterName) encounterNames[n.encounterId] = n.encounterName;
+      }
+
+      return {
+        pulls: fights.map((f) => {
+          const r = reportByCode.get(f.reportCode)!;
+          return {
+            reportCode: f.reportCode,
+            fightId: f.fightId,
+            encounterId: f.encounterId,
+            difficulty: f.difficulty,
+            kill: f.kill,
+            bossPct: f.bossPct,
+            fightPct: f.fightPct,
+            lastPhase: f.lastPhase,
+            startAt: f.startAt.getTime(),
+            endAt: f.endAt.getTime(),
+            durationMs: f.durationMs,
+            reportDurationMs: Math.max(
+              0,
+              r.endTime.getTime() - r.startTime.getTime(),
+            ),
+          };
+        }),
+        encounterNames,
+        reportCount: reports.length,
+        newestReportAt,
+      };
+    }),
+
+  /**
    * Engagement Pulse — characters × raid-weeks activity heatmap read from
    * the VaultSnapshot weekly ledger (one row per character per raid week,
    * written by Tier A but never read longitudinally until now), plus a

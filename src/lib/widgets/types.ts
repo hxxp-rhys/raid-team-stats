@@ -36,6 +36,7 @@ export const WIDGET_TYPES = [
   "talent_builds",
   "data_refresh",
   "engagement_pulse",
+  "prog_curve",
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -98,6 +99,7 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   talent_builds: { cols: 6, rows: 4 },
   data_refresh: { cols: 4, rows: 2 },
   engagement_pulse: { cols: 12, rows: 4 },
+  prog_curve: { cols: 12, rows: 4 },
 };
 export const WIDGET_DEFAULT_SIZE: Record<
   WidgetType,
@@ -392,5 +394,10 @@ export const WIDGET_META: Record<
     title: "Engagement pulse",
     description:
       "Characters × raid-weeks activity heatmap with a multi-signal churn early-warning watchlist.",
+  },
+  prog_curve: {
+    title: "Progression curve",
+    description:
+      "Pull-by-pull boss progress with trend line + night-pace view, from the guild's public WCL logs.",
   },
 };

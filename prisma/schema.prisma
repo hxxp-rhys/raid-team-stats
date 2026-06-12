@@ -266,6 +266,7 @@ model Character {
   pendingRaidTeams   RaidTeam[]           @relation("RaidTeamPendingLeader")
   pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
   addonUpload        AddonUpload?
+  wclReportActors    WclReportActor[]
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -288,6 +289,7 @@ model Guild {
   memberships    GuildMembership[]
   characterLinks GuildCharacterLink[]
   raidTeams      RaidTeam[]
+  wclReports     WclReport[]
 
   // Identity is region+realm+guild slug ONLY. A guild is a single faction;
   // keeping `faction` in this key let a per-character faction misread mint
@@ -551,6 +553,84 @@ model WclParseSnapshot {
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
   @@index([characterId, encounterId, difficulty, capturedAt(sort: Desc)])
+}
+
+// ── Guild Report Sync (GRS) — per-pull WCL combat-log ingestion ──────────
+// One hourly BullMQ job per guild discovers the guild's public WCL reports
+// for the current raid zone and persists per-pull fight rows. All spend
+// happens in the job; widgets (prog_curve and successors) read ONLY these
+// tables at request time. Reports re-fetch while `revision` keeps changing
+// or until 48h after the report ends, then freeze forever.
+model WclReport {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  guildId   String
+  // The report's own zone id (from Report.zone) — never hard-coded so a
+  // mid-season raid addition (e.g. Sporefall, possibly a NEW zone id) keeps
+  // working without a code change.
+  zoneId    Int?
+  title     String?
+  startTime DateTime
+  endTime   DateTime
+  revision  Int
+  frozen    Boolean  @default(false)
+  fetchedAt DateTime
+  createdAt DateTime @default(now())
+
+  guild  Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  fights WclFight[]
+  actors WclReportActor[]
+
+  @@index([guildId, startTime(sort: Desc)])
+}
+
+// One raid-encounter pull. M+/trash fights are dropped at ingest
+// (killType: Encounters + keystoneLevel filter). Fight rows are replaced
+// wholesale whenever their report is re-fetched (live logs grow).
+model WclFight {
+  id          String   @id @default(cuid())
+  reportCode  String
+  fightId     Int
+  encounterId Int
+  difficulty  Int
+  kill        Boolean
+  size        Int?
+  // Boss HP % remaining at the end of the pull (0 on kills).
+  bossPct     Float?
+  // Overall fight % remaining incl. phase weighting — the default Y axis.
+  fightPct    Float?
+  lastPhase   Int?
+  lastPhaseIsIntermission Boolean?
+  // Absolute wall-clock pull window (report epoch + fight offsets).
+  startAt    DateTime
+  endAt      DateTime
+  durationMs Int
+  // Report-local actor ids present in the pull (joins to WclReportActor).
+  friendlyPlayerIds Int[] @default([])
+
+  report WclReport @relation(fields: [reportCode], references: [code], onDelete: Cascade)
+
+  @@unique([reportCode, fightId])
+  @@index([encounterId, difficulty, startAt(sort: Desc)])
+}
+
+// Report-local actor table (players only), with a best-effort join to our
+// Character rows by (name, normalized server, guild region). Unmatched
+// actors keep characterId null — shown as "unmatched", never dropped.
+model WclReportActor {
+  id          String  @id @default(cuid())
+  reportCode  String
+  actorId     Int
+  name        String
+  server      String?
+  subType     String?
+  characterId String?
+
+  report    WclReport  @relation(fields: [reportCode], references: [code], onDelete: Cascade)
+  character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+
+  @@unique([reportCode, actorId])
+  @@index([characterId])
 }
 
 // Latest payload uploaded by our own in-game addon (via the companion

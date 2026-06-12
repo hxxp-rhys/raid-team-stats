@@ -16,6 +16,7 @@ import { MissingFixesWidget } from "./missing-fixes";
 import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
+import { ProgCurveWidget } from "./prog-curve";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RecentKillsWidget } from "./recent-kills";
 import { TalentBuildsWidget } from "./talent-builds";
@@ -66,6 +67,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   talent_builds: TalentBuildsWidget,
   data_refresh: DataRefreshWidget,
   engagement_pulse: EngagementPulseWidget,
+  prog_curve: ProgCurveWidget,
 };
 
 /**

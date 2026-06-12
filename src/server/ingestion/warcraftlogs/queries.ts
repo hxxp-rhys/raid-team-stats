@@ -181,3 +181,207 @@ export const characterEncounterRankingsResponseSchema = z
       .passthrough(),
   })
   .passthrough();
+
+/**
+ * GRS discovery — the guild's recent public reports for one zone. All args
+ * and returned fields verified by live introspection 2026-06-11
+ * (phase2-verify-wcl). `startTime`/`endTime` are epoch ms floats.
+ */
+export const GUILD_REPORTS_QUERY = /* GraphQL */ `
+  query GuildReports(
+    $guildName: String!
+    $guildServerSlug: String!
+    $guildServerRegion: String!
+    $zoneID: Int
+    $startTime: Float
+    $limit: Int
+  ) {
+    reportData {
+      reports(
+        guildName: $guildName
+        guildServerSlug: $guildServerSlug
+        guildServerRegion: $guildServerRegion
+        zoneID: $zoneID
+        startTime: $startTime
+        limit: $limit
+      ) {
+        data {
+          code
+          title
+          startTime
+          endTime
+          revision
+          zone {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const guildReportsResponseSchema = z
+  .object({
+    reportData: z
+      .object({
+        reports: z
+          .object({
+            data: z
+              .array(
+                z
+                  .object({
+                    code: z.string(),
+                    title: z.string().nullable().optional(),
+                    startTime: z.number(),
+                    endTime: z.number(),
+                    revision: z.number().int(),
+                    zone: z
+                      .object({ id: z.number().int() })
+                      .passthrough()
+                      .nullable()
+                      .optional(),
+                  })
+                  .passthrough()
+                  .nullable(),
+              )
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+export type GuildReportsResponse = z.infer<typeof guildReportsResponseSchema>;
+
+/**
+ * GRS detail — one report's encounter pulls + player actor table. Every
+ * requested field verified by live introspection + live probe 2026-06-11:
+ * fight startTime/endTime are REPORT-RELATIVE ms (absolute = report
+ * startTime + offset); keystoneLevel is null on raid fights (non-null = M+,
+ * dropped at ingest); encounterID 0 = trash (excluded by killType but
+ * filtered defensively anyway).
+ */
+export const REPORT_FIGHTS_QUERY = /* GraphQL */ `
+  query ReportFights($code: String!) {
+    reportData {
+      report(code: $code) {
+        code
+        startTime
+        endTime
+        revision
+        zone {
+          id
+        }
+        fights(killType: Encounters) {
+          id
+          encounterID
+          difficulty
+          kill
+          size
+          bossPercentage
+          fightPercentage
+          lastPhase
+          lastPhaseIsIntermission
+          startTime
+          endTime
+          friendlyPlayers
+          keystoneLevel
+        }
+        masterData {
+          actors(type: "Player") {
+            id
+            name
+            server
+            subType
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const reportFightsResponseSchema = z
+  .object({
+    reportData: z
+      .object({
+        report: z
+          .object({
+            code: z.string(),
+            startTime: z.number(),
+            endTime: z.number(),
+            // Required to match the discovery schema: a divergent (defaulted)
+            // revision would never equal discovery's and the report would
+            // re-fetch every run forever. Live data always carries it.
+            revision: z.number().int(),
+            zone: z
+              .object({ id: z.number().int() })
+              .passthrough()
+              .nullable()
+              .optional(),
+            fights: z
+              .array(
+                z
+                  .object({
+                    id: z.number().int(),
+                    encounterID: z.number().int(),
+                    difficulty: z.number().int().nullable().optional(),
+                    kill: z.boolean().nullable().optional(),
+                    size: z.number().int().nullable().optional(),
+                    bossPercentage: z.number().nullable().optional(),
+                    fightPercentage: z.number().nullable().optional(),
+                    lastPhase: z.number().int().nullable().optional(),
+                    lastPhaseIsIntermission: z
+                      .boolean()
+                      .nullable()
+                      .optional(),
+                    startTime: z.number(),
+                    endTime: z.number(),
+                    friendlyPlayers: z
+                      .array(z.number().int().nullable())
+                      .nullable()
+                      .optional(),
+                    keystoneLevel: z.number().int().nullable().optional(),
+                  })
+                  .passthrough()
+                  .nullable(),
+              )
+              .nullable()
+              .optional(),
+            masterData: z
+              .object({
+                actors: z
+                  .array(
+                    z
+                      .object({
+                        id: z.number().int(),
+                        name: z.string(),
+                        server: z.string().nullable().optional(),
+                        subType: z.string().nullable().optional(),
+                      })
+                      .passthrough()
+                      .nullable(),
+                  )
+                  .nullable()
+                  .optional(),
+              })
+              .passthrough()
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+export type ReportFightsResponse = z.infer<typeof reportFightsResponseSchema>;

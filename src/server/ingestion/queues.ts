@@ -17,6 +17,7 @@ export const QUEUE_NAMES = {
   trackedMemberSync: "rts-tracked-member-sync",
   guildRosterSync: "rts-guild-roster-sync",
   manualRosterRefresh: "rts-manual-roster-refresh",
+  guildReportSync: "rts-guild-report-sync",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -43,5 +44,9 @@ export const queues = {
       ...defaultJobOptions,
       attempts: 2, // user-triggered: fail fast and surface a friendly error.
     },
+  }),
+  guildReportSync: new Queue(QUEUE_NAMES.guildReportSync, {
+    connection: redisBlocking,
+    defaultJobOptions,
   }),
 };

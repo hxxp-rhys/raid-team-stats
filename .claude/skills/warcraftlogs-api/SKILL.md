@@ -41,13 +41,29 @@ User holds **Platinum: 18 000 points/hr**. Budget is
 |---|---|
 | `CHARACTER_ZONE_RANKINGS_QUERY` | season `zoneRankings` for one char/zone |
 | `WCL_RAID_ZONES_QUERY` | flat `worldData.zones { id name frozen }` |
-| `ZONE_ENCOUNTERS_QUERY` | boss list for a zone |
+| `ZONE_ENCOUNTERS_QUERY` | boss list for a zone — **dead code today** (exported, never imported; the boss list is derived from the zoneRankings JSON instead) |
 | `buildCharacterEncounterRankingsQuery(ids)` | per-encounter `ranks[]` (has `startTime`/`report`), aliased `e<id>` so it's **one HTTP request per character** |
+| `GUILD_REPORTS_QUERY` | GRS discovery: `reportData.reports(guildName, guildServerSlug, guildServerRegion, zoneID, startTime, limit)` → `{ code title startTime endTime revision zone{id} }`, newest-first, epoch-ms floats. ~2 pts |
+| `REPORT_FIGHTS_QUERY` | GRS detail: `report(code)` → `fights(killType: Encounters)` (id, encounterID, difficulty, kill, size, bossPercentage, fightPercentage, lastPhase, lastPhaseIsIntermission, startTime/endTime **report-relative ms**, friendlyPlayers, keystoneLevel) + `masterData.actors(type: "Player")`. ~8 pts |
 
 `character()` args are `name`, `serverSlug`, `serverRegion`.
 
+### Guild Report Sync (GRS) budget shape
+
+Hourly per-guild job (`guild-report-sync.ts`, cron `20 * * * *` ET):
+discovery ~2 pts/guild/hr; each new/changed report ~8 pts ONCE
+(revision-gated re-fetch, frozen forever 48h after the report ends);
+`MAX_DETAIL_FETCHES = 15`/run caps the first-backfill burst (~122 pts).
+Discovery `limit: 25` newest-first — a full page means older reports in
+the window are permanently skipped (the verified `page` arg is the fix
+if that ever matters).
+
 ## ⚠️ Gotchas
 
+0. **The public v2 docs site is 404 (observed 2026-06-11/12)** — all
+   mirrors of `warcraftlogs.com/v2-api-docs/` fail. Verify schema
+   questions with a targeted live introspection instead (one batched
+   `__type(name:"…"){fields{name args{name}}}` POST ≈ 2 pts).
 1. **`zoneRankings` and `encounterRankings` are JSON scalars** in WCL's
    schema, not typed objects. Zod-model them as `z.unknown()` /
    `z.record()` with `.passthrough()`. Don't try to select sub-fields.
