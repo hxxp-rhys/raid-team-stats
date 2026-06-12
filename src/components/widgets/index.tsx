@@ -8,6 +8,7 @@ import { ClassCompositionWidget } from "./class-composition";
 import { ConsumableReadinessWidget } from "./consumable-readiness";
 import { DataRefreshWidget } from "./data-refresh";
 import { DelveProgressWidget } from "./delve-progress";
+import { EngagementPulseWidget } from "./engagement-pulse";
 import { IlvlDistributionWidget } from "./ilvl-distribution";
 import { IlvlRosterWidget } from "./ilvl-roster";
 import { KeystonesWidget } from "./keystones";
@@ -64,6 +65,7 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   delve_progress: DelveProgressWidget,
   talent_builds: TalentBuildsWidget,
   data_refresh: DataRefreshWidget,
+  engagement_pulse: EngagementPulseWidget,
 };
 
 /**

@@ -213,12 +213,15 @@ export async function handleTrackedMemberSync(
         region: regionToCode(character.region),
         realm: character.realmSlug,
         name: character.name,
+        // :current:previous returns two season entries (current-first —
+        // verified live); previous powers the engagement_pulse churn signal.
+        // mythic_plus_weekly_highest_level_runs + gear were requested but
+        // never read anywhere (weekly-highest comes from recent_runs) —
+        // pruned, so the response is smaller than before despite :previous.
         fields: characterProfileFields(
-          "mythic_plus_scores_by_season:current",
+          "mythic_plus_scores_by_season:current:previous",
           "mythic_plus_recent_runs",
-          "mythic_plus_weekly_highest_level_runs",
           "raid_progression",
-          "gear",
         ),
       },
       schema: raiderIOCharacterProfileSchema,
@@ -562,8 +565,29 @@ export async function handleTrackedMemberSync(
       // Prefer the Raider.IO community season score (the canonical "M+
       // score" players quote); fall back to Blizzard's internal rating
       // only when RIO is unavailable.
-      const rioSeasonScores =
-        rioProfile?.mythic_plus_scores_by_season?.[0]?.scores ?? null;
+      // With :current:previous RIO returns seasons in requested-modifier
+      // order (current first — verified live). Current trusts that order;
+      // previous is selected by slug-difference rather than index so a
+      // missing/duplicate entry degrades to null instead of mislabeling.
+      const rioSeasons = rioProfile?.mythic_plus_scores_by_season ?? [];
+      if (rioSeasons.length > 0 && rioSeasons.length !== 2) {
+        // :current:previous should always yield exactly two entries — any
+        // other count means RIO changed the contract; surface it instead of
+        // silently mislabeling seasons.
+        logger.warn(
+          {
+            character: character.name,
+            seasons: rioSeasons.map((s) => s.season),
+          },
+          "raiderio :current:previous returned unexpected season count",
+        );
+      }
+      const rioCurrentSeason = rioSeasons[0] ?? null;
+      const rioPreviousSeason =
+        rioSeasons.find((s) => s.season !== rioCurrentSeason?.season) ?? null;
+      const rioSeasonScores = rioCurrentSeason?.scores ?? null;
+      const previousSeasonRating = rioPreviousSeason?.scores?.all ?? null;
+      const previousSeasonSlug = rioPreviousSeason?.season ?? null;
       const currentRating =
         rioSeasonScores?.all ??
         mplusIndex.current_mythic_rating?.rating ??
@@ -619,6 +643,9 @@ export async function handleTrackedMemberSync(
         // Full Raider.IO season score breakdown (all / dps / healer / tank /
         // per-spec) — powers the M+ ladder role split.
         rioScore: rioSeasonScores,
+        // Previous-season overall score — the engagement_pulse churn signal.
+        previousSeasonRating,
+        previousSeasonSlug,
         weeklyHighest: effectiveWeeklyHighest || null,
         weeklyRunCount,
         // Per-dungeon best (with keystone_level) — used for each vault slot's

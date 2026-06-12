@@ -471,6 +471,12 @@ model MplusSnapshot {
   // Raider.IO current-season M+ score breakdown (the canonical community
   // number): { all, dps, healer, tank, spec_0.. } — null if RIO unavailable.
   rioScore      Json?
+  // Raider.IO PREVIOUS-season overall score + its season slug — the
+  // season-over-season churn signal for the engagement_pulse widget. Slug
+  // kept because "previous" can cross an expansion boundary (TWW S3 →
+  // Midnight S1), where lower scores are structural, not disengagement.
+  previousSeasonRating Decimal? @db.Decimal(8, 2)
+  previousSeasonSlug   String?
   runsThisWeek  Json
   rawPayload    Json
   createdAt     DateTime       @default(now())

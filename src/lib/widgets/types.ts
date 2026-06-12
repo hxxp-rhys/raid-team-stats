@@ -35,6 +35,7 @@ export const WIDGET_TYPES = [
   "delve_progress",
   "talent_builds",
   "data_refresh",
+  "engagement_pulse",
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -96,6 +97,7 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   delve_progress: { cols: 4, rows: 3 },
   talent_builds: { cols: 6, rows: 4 },
   data_refresh: { cols: 4, rows: 2 },
+  engagement_pulse: { cols: 12, rows: 4 },
 };
 export const WIDGET_DEFAULT_SIZE: Record<
   WidgetType,
@@ -385,5 +387,10 @@ export const WIDGET_META: Record<
     title: "Data refresh",
     description:
       "On-demand Tier-A refresh + recurring schedule. Raid leaders configure who can trigger it.",
+  },
+  engagement_pulse: {
+    title: "Engagement pulse",
+    description:
+      "Characters × raid-weeks activity heatmap with a multi-signal churn early-warning watchlist.",
   },
 };

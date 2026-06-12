@@ -143,6 +143,8 @@ type MplusArgs = {
   weeklyHighest?: number | null;
   weeklyRunCount?: number | null;
   rioScore?: unknown;
+  previousSeasonRating?: number | null;
+  previousSeasonSlug?: string | null;
   runsThisWeek: unknown;
   rawPayload: unknown;
 };
@@ -154,6 +156,8 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
     weekly: args.weeklyHighest ?? null,
     weeklyCount: args.weeklyRunCount ?? null,
     rio: args.rioScore ?? null,
+    prevRating: args.previousSeasonRating ?? null,
+    prevSlug: args.previousSeasonSlug ?? null,
     runs: args.runsThisWeek,
   });
   const recent = await db.mplusSnapshot.findFirst({
@@ -182,6 +186,11 @@ export async function writeMplusSnapshot(args: MplusArgs): Promise<Result> {
         args.rioScore == null
           ? undefined
           : (toJsonValue(args.rioScore) as Prisma.InputJsonValue),
+      previousSeasonRating:
+        args.previousSeasonRating != null
+          ? args.previousSeasonRating.toString()
+          : null,
+      previousSeasonSlug: args.previousSeasonSlug ?? null,
       runsThisWeek: toJsonValue(args.runsThisWeek) as Prisma.InputJsonValue,
       rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
     },

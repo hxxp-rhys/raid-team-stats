@@ -1,10 +1,23 @@
 import { z } from "zod";
 
+import { Prisma } from "@/generated/prisma/client";
 import {
   router,
   protectedProcedure,
   assertRaidTeamRole,
 } from "@/server/api/trpc";
+import {
+  absenceSignal,
+  activitySignal,
+  closedWeekStarts,
+  decayFlag,
+  loginSignal,
+  medianOf,
+  mplusSignal,
+  riskScore,
+  watchlisted,
+  weekStartUtc,
+} from "@/lib/engagement-pulse";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import { computeGearAudit } from "@/server/ingestion/gear-audit";
 import {
@@ -523,6 +536,302 @@ export const snapshotRouter = router({
       });
       return {
         points: rows.map((r) => ({ at: r.capturedAt, itemLevel: r.itemLevel })),
+      };
+    }),
+
+  /**
+   * Engagement Pulse — characters × raid-weeks activity heatmap read from
+   * the VaultSnapshot weekly ledger (one row per character per raid week,
+   * written by Tier A but never read longitudinally until now), plus a
+   * multi-signal churn watchlist (activity decay + login recency + season-
+   * over-season M+ + guild-roster absences).
+   *
+   * Semantics contract (see src/lib/engagement-pulse.ts): a missing week row
+   * is UNKNOWN, never inactive; the in-progress week is excluded from all
+   * baselines; a member is watchlisted only when ≥2 independent signals
+   * agree. This widget measures activity, not raid attendance.
+   */
+  engagementPulse: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        weeks: z.number().int().min(4).max(26).default(12),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { guildId } = await assertRaidTeamRole(
+        ctx,
+        input.raidTeamId,
+        "MEMBER",
+      );
+
+      const memberships = await ctx.db.raidTeamMembership.findMany({
+        where: { raidTeamId: input.raidTeamId, isActive: true },
+        include: {
+          character: { select: { id: true, name: true, classId: true } },
+        },
+      });
+      const characterIds = memberships.map((m) => m.character.id);
+
+      const now = new Date();
+      const currentWeek = weekStartUtc(now);
+      const closedWeeks = closedWeekStarts(now, input.weeks);
+      const oldest = closedWeeks[0] ?? currentWeek;
+
+      if (characterIds.length === 0) {
+        return {
+          currentWeekStart: currentWeek,
+          closedWeeks: [] as Date[],
+          rosterMedian: [] as Array<number | null>,
+          rosterMedianCurrent: null as number | null,
+          members: [],
+        };
+      }
+
+      // Week index relative to the oldest closed week. Both `oldest` and the
+      // DB's weekStart come from the same Tuesday-15:00-UTC anchor, so a
+      // floor-divide buckets any in-window timestamp; index === weeks count
+      // is the in-progress week.
+      const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+      const weekIndexOf = (d: Date): number =>
+        Math.floor((d.getTime() - oldest.getTime()) / WEEK_MS);
+      const cellCount = closedWeeks.length; // closed cells per member
+
+      const [vaultRows, mplusWindowRows, parseRows, links, loginRows, latestMplus] =
+        await Promise.all([
+          ctx.db.vaultSnapshot.findMany({
+            where: {
+              characterId: { in: characterIds },
+              weekStart: { gte: oldest },
+            },
+            select: { characterId: true, weekStart: true, slots: true },
+          }),
+          ctx.db.mplusSnapshot.findMany({
+            where: {
+              characterId: { in: characterIds },
+              capturedAt: { gte: oldest },
+            },
+            select: {
+              characterId: true,
+              capturedAt: true,
+              weeklyRunCount: true,
+            },
+          }),
+          ctx.db.wclParseSnapshot.findMany({
+            where: {
+              characterId: { in: characterIds },
+              weekPercentile: { not: null },
+              reportStartTime: { gte: oldest },
+            },
+            select: { characterId: true, reportStartTime: true },
+          }),
+          ctx.db.guildCharacterLink.findMany({
+            where: { characterId: { in: characterIds }, guildId },
+            select: {
+              characterId: true,
+              lastSeenAt: true,
+              consecutiveAbsences: true,
+            },
+          }),
+          // Latest last_login_timestamp per character, extracted in SQL so we
+          // don't ship each member's full ~60KB summary rawPayload to Node.
+          ctx.db.$queryRaw<
+            Array<{ characterId: string; lastLogin: string | null }>
+          >`
+            SELECT DISTINCT ON ("characterId") "characterId",
+                   "rawPayload"->>'last_login_timestamp' AS "lastLogin"
+            FROM "CharacterSnapshot"
+            WHERE "characterId" IN (${Prisma.join(characterIds)})
+              AND "source" = 'BLIZZARD'
+            ORDER BY "characterId", "capturedAt" DESC
+          `,
+          Promise.all(
+            characterIds.map((id) =>
+              ctx.db.mplusSnapshot.findFirst({
+                where: { characterId: id, source: "BLIZZARD" },
+                orderBy: { capturedAt: "desc" },
+                select: {
+                  characterId: true,
+                  currentRating: true,
+                  previousSeasonRating: true,
+                  previousSeasonSlug: true,
+                },
+              }),
+            ),
+          ),
+        ]);
+
+      // ---- index the row sets ----
+      const readUnlocked = (
+        slots: unknown,
+        key: "raid" | "mythicPlus",
+      ): number | null => {
+        if (typeof slots !== "object" || slots === null) return null;
+        const row = (slots as Record<string, unknown>)[key];
+        if (typeof row !== "object" || row === null) return null;
+        const u = (row as Record<string, unknown>).unlocked;
+        return typeof u === "number" ? u : null;
+      };
+
+      type Cell = {
+        score: number | null;
+        raidUnlocked: number | null;
+        mplusUnlocked: number | null;
+        mplusRuns: number | null;
+        raided: boolean;
+      };
+      const emptyCell = (): Cell => ({
+        score: null,
+        raidUnlocked: null,
+        mplusUnlocked: null,
+        mplusRuns: null,
+        raided: false,
+      });
+
+      // characterId → per-week-index cell (0..cellCount-1 closed, cellCount = current)
+      const cellMap = new Map<string, Cell[]>();
+      const cellsFor = (id: string): Cell[] => {
+        let c = cellMap.get(id);
+        if (!c) {
+          c = Array.from({ length: cellCount + 1 }, emptyCell);
+          cellMap.set(id, c);
+        }
+        return c;
+      };
+
+      for (const v of vaultRows) {
+        const idx = weekIndexOf(v.weekStart);
+        if (idx < 0 || idx > cellCount) continue;
+        const cell = cellsFor(v.characterId)[idx]!;
+        const raid = readUnlocked(v.slots, "raid");
+        const mplus = readUnlocked(v.slots, "mythicPlus");
+        cell.raidUnlocked = raid;
+        cell.mplusUnlocked = mplus;
+        // A row exists → the week was observed; a missing half counts as 0,
+        // but if BOTH halves fail to parse the row tells us nothing — keep
+        // the week unknown rather than minting a false zero-activity week.
+        cell.score =
+          raid == null && mplus == null ? null : (raid ?? 0) + (mplus ?? 0);
+      }
+      for (const m of mplusWindowRows) {
+        const idx = weekIndexOf(m.capturedAt);
+        if (idx < 0 || idx > cellCount || m.weeklyRunCount == null) continue;
+        const cell = cellsFor(m.characterId)[idx]!;
+        cell.mplusRuns = Math.max(cell.mplusRuns ?? 0, m.weeklyRunCount);
+      }
+      for (const p of parseRows) {
+        if (!p.reportStartTime) continue;
+        const idx = weekIndexOf(p.reportStartTime);
+        if (idx < 0 || idx > cellCount) continue;
+        cellsFor(p.characterId)[idx]!.raided = true;
+      }
+
+      const linkByChar = new Map(links.map((l) => [l.characterId, l]));
+      const loginByChar = new Map(
+        loginRows.map((r) => [r.characterId, r.lastLogin]),
+      );
+      const ratingByChar = new Map(
+        latestMplus
+          .filter((r): r is NonNullable<typeof r> => r != null)
+          .map((r) => [
+            r.characterId,
+            {
+              current: r.currentRating != null ? Number(r.currentRating) : null,
+              previous:
+                r.previousSeasonRating != null
+                  ? Number(r.previousSeasonRating)
+                  : null,
+              previousSlug: r.previousSeasonSlug,
+            },
+          ]),
+      );
+
+      // ---- per-member assembly ----
+      const members = memberships.map((m) => {
+        const id = m.character.id;
+        const cells = cellsFor(id);
+        const closed = cells.slice(0, cellCount);
+        const current = cells[cellCount]!;
+        const closedScores = closed.map((c) => c.score);
+
+        const decay = decayFlag(closedScores);
+
+        const rawLogin = loginByChar.get(id);
+        const loginMs = rawLogin != null ? Number(rawLogin) : NaN;
+        const daysSinceLogin = Number.isFinite(loginMs)
+          ? Math.max(0, Math.floor((now.getTime() - loginMs) / 86_400_000))
+          : null;
+
+        const rating = ratingByChar.get(id);
+        const link = linkByChar.get(id);
+
+        // Login-staleness guard: the stored last_login comes from the latest
+        // CharacterSnapshot row, whose dedup hash excludes it — so the value
+        // freezes for players whose gear/spec/level never change. Vault and
+        // M+ snapshots DO move when they play, so demonstrated activity this
+        // week or last clamps the login signal to 0 instead of letting a
+        // stale timestamp claim "offline".
+        const lastClosed = closed[closed.length - 1];
+        const recentlyActive =
+          (current.score ?? 0) > 0 ||
+          (current.mplusRuns ?? 0) > 0 ||
+          (lastClosed?.score ?? 0) > 0 ||
+          (lastClosed?.mplusRuns ?? 0) > 0;
+
+        const signals = {
+          activity: activitySignal(decay),
+          login: recentlyActive ? 0 : loginSignal(daysSinceLogin),
+          mplus: mplusSignal(rating?.current ?? null, rating?.previous ?? null),
+          absence: absenceSignal(link?.consecutiveAbsences ?? 0),
+        };
+
+        return {
+          character: m.character,
+          cells: closed,
+          current,
+          baseline: decay.baseline,
+          decayFlagged: decay.flagged,
+          knownWeeks: decay.knownWeeks,
+          signals,
+          risk: riskScore(signals),
+          watchlisted: watchlisted(signals),
+          daysSinceLogin,
+          currentRating: rating?.current ?? null,
+          previousSeasonRating: rating?.previous ?? null,
+          previousSeasonSlug: rating?.previousSlug ?? null,
+          consecutiveAbsences: link?.consecutiveAbsences ?? 0,
+        };
+      });
+
+      // Decay-severity-first ordering: watchlisted by risk, then flagged,
+      // then the rest alphabetically — the heatmap's row order contract.
+      members.sort((a, b) => {
+        if (a.watchlisted !== b.watchlisted) return a.watchlisted ? -1 : 1;
+        if (a.watchlisted && b.watchlisted && a.risk !== b.risk)
+          return b.risk - a.risk;
+        if (a.decayFlagged !== b.decayFlagged) return a.decayFlagged ? -1 : 1;
+        return a.character.name.localeCompare(b.character.name);
+      });
+
+      const rosterMedian = closedWeeks.map((_, i) =>
+        medianOf(
+          members
+            .map((mm) => mm.cells[i]?.score)
+            .filter((s): s is number => s != null),
+        ),
+      );
+      const rosterMedianCurrent = medianOf(
+        members
+          .map((mm) => mm.current.score)
+          .filter((s): s is number => s != null),
+      );
+
+      return {
+        currentWeekStart: currentWeek,
+        closedWeeks,
+        rosterMedian,
+        rosterMedianCurrent,
+        members,
       };
     }),
 });
