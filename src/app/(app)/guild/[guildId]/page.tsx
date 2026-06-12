@@ -2,7 +2,6 @@
 
 import { Suspense, use, useState } from "react";
 import Link from "next/link";
-import type { Route } from "next";
 
 import { api } from "@/lib/trpc-client";
 import { Button } from "@/components/ui/button";
@@ -14,6 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { GuildManageSections } from "./manage-sections";
 
 type Params = Promise<{ guildId: string }>;
 
@@ -41,8 +41,9 @@ function GuildDetailInner({ params }: { params: Params }) {
 
   const detail = api.guild.get.useQuery({ guildId });
   const utils = api.useUtils();
-  // Strictly-scoped "should we render the Settings link?" — owner + RT
-  // leaders/co-leaders + platform admin. Server-side resolver in guild.ts.
+  // Strictly-scoped "should we render the management sections?" — owner +
+  // RT leaders/co-leaders + platform admin. Server-side resolver in
+  // guild.ts; every individual action re-checks roles server-side too.
   const settingsAccess = api.guild.canManageSettings.useQuery({ guildId });
 
   const approve = api.guild.approveMember.useMutation({
@@ -110,16 +111,6 @@ function GuildDetailInner({ params }: { params: Params }) {
             You are a {myRole.toLowerCase()} ({myStatus.toLowerCase()}).
           </p>
         </div>
-        {/* Settings link — only visible to OWNER / RT-LEADER / RT-CO_LEADER /
-            platform admin (server-resolved via guild.canManageSettings). */}
-        {settingsAccess.data?.canManage && (
-          <Link
-            href={`/guild/${guildId}/settings` as Route}
-            className="border-border bg-background hover:bg-muted shrink-0 inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium transition-colors"
-          >
-            Settings
-          </Link>
-        )}
       </header>
 
       {isStaff && (
@@ -218,19 +209,22 @@ function GuildDetailInner({ params }: { params: Params }) {
           )}
           {settingsAccess.data?.canManage && guild.raidTeams.length === 0 && (
             <p className="text-muted-foreground text-xs">
-              Create a team from{" "}
-              <Link
-                href={`/guild/${guildId}/settings` as Route}
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                Settings
-              </Link>
-              .
+              Create a team in the management section below.
             </p>
           )}
         </CardContent>
       </Card>
 
+      {/* Guild management — creation, log sources, team management, and
+          guild deletion. Rendered for managers only; the old nested
+          /settings page now redirects here. */}
+      {settingsAccess.data?.canManage && (
+        <GuildManageSections
+          guildId={guildId}
+          guild={guild}
+          canDeleteGuild={myRole === "OWNER" || isAdmin === true}
+        />
+      )}
     </main>
   );
 }

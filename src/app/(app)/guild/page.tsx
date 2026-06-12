@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import type { Route } from "next";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { AddGuildModal } from "@/components/guild/add-guild-modal";
 import { api } from "@/lib/trpc-client";
 import { cn } from "@/lib/utils";
@@ -185,21 +183,6 @@ function GuildRow({
  */
 function TeamsPanel({ guildId }: { guildId: string }) {
   const detail = api.guild.get.useQuery({ guildId });
-  const utils = api.useUtils();
-  const [teamName, setTeamName] = useState("");
-
-  const create = api.raidTeam.create.useMutation({
-    onSuccess: async () => {
-      setTeamName("");
-      await utils.guild.get.invalidate({ guildId });
-    },
-  });
-
-  const onCreate = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!teamName.trim()) return;
-    create.mutate({ guildId, name: teamName.trim() });
-  };
 
   if (detail.isPending) {
     return (
@@ -258,38 +241,10 @@ function TeamsPanel({ guildId }: { guildId: string }) {
       )}
 
       {isStaff && (
-        <form
-          onSubmit={onCreate}
-          className="border-border space-y-2 rounded-md border bg-background p-3"
-        >
-          <Label htmlFor={`new-team-${guildId}`} className="text-xs">
-            Create a team
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id={`new-team-${guildId}`}
-              value={teamName}
-              onChange={(e) => setTeamName(e.target.value)}
-              placeholder="Eclipse Midnight"
-              minLength={2}
-              maxLength={60}
-              className="flex-1"
-              required
-            />
-            <Button
-              size="sm"
-              type="submit"
-              disabled={create.isPending || !teamName.trim()}
-            >
-              {create.isPending ? "Creating…" : "Create"}
-            </Button>
-          </div>
-          {create.error && (
-            <p className="text-destructive text-xs" role="alert">
-              {create.error.message}
-            </p>
-          )}
-        </form>
+        <p className="text-muted-foreground text-xs">
+          Teams are created from the guild settings page (the ⚙ next to the
+          guild).
+        </p>
       )}
     </div>
   );

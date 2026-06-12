@@ -147,12 +147,15 @@ export const guildRouter = router({
 
   /**
    * Boolean used by the guild page to decide whether to render the
-   * "Settings" link. The visibility set is STRICTLY:
+   * management sections (creation, log sources, team management). The
+   * visibility set is:
    *   - platform admin
-   *   - guild OWNER (NOT OFFICER — they keep their other UI gates via
-   *     isStaff, but the settings surface is owner-scope)
+   *   - guild OWNER or OFFICER (officers can create teams — the server's
+   *     raidTeam.create gate is assertGuildRole(OFFICER) — and hold the
+   *     team-op override in assertRaidTeamRole, so hiding the surface from
+   *     them only misdirects; it doesn't restrict anything)
    *   - LEADER or CO_LEADER of any active raid team in this guild
-   * Anyone else gets `false`. Cheap (3 small queries, short-circuited).
+   * Anyone else gets `false`. Every action re-checks roles server-side.
    */
   canManageSettings: protectedProcedure
     .input(z.object({ guildId: z.string().cuid() }))
@@ -169,7 +172,10 @@ export const guildRouter = router({
         },
         select: { role: true, status: true },
       });
-      if (gm?.status === "ACTIVE" && gm.role === "OWNER") {
+      if (
+        gm?.status === "ACTIVE" &&
+        (gm.role === "OWNER" || gm.role === "OFFICER")
+      ) {
         return { canManage: true };
       }
       const lead = await ctx.db.raidTeamMembership.findFirst({

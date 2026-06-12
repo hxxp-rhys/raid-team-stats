@@ -24,6 +24,20 @@ const nextConfig: NextConfig = {
     "raiders.hxxp.io",
   ],
 
+  // The nested guild-settings page was folded into the guild detail page.
+  // Routing-layer redirect (real 307, no JS needed) keeps old links and
+  // bookmarks working — a page-level redirect() under cacheComponents only
+  // streams a client-side redirect inside the 200 shell.
+  async redirects() {
+    return [
+      {
+        source: "/guild/:guildId/settings",
+        destination: "/guild/:guildId",
+        permanent: false,
+      },
+    ];
+  },
+
   // Optional standalone output for slim Docker images. Enable when wiring CI/CD.
   // output: "standalone",
 };

@@ -499,6 +499,83 @@ export const raidTeamRouter = router({
       };
     }),
 
+  /**
+   * Rename a raid team (LEADER, or guild OWNER/OFFICER via the role
+   * override). Regenerates the slug; team URLs use ids so nothing breaks.
+   */
+  rename: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        name: nameSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { guildId } = await assertRaidTeamRole(
+        ctx,
+        input.raidTeamId,
+        "LEADER",
+      );
+
+      const slug = normalizeRaidTeamSlug(input.name);
+      if (!slug) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Team name must contain at least one URL-safe character.",
+        });
+      }
+      const clash = await ctx.db.raidTeam.findFirst({
+        where: { guildId, slug, id: { not: input.raidTeamId } },
+        select: { id: true },
+      });
+      if (clash) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Another team in this guild already uses that name.",
+        });
+      }
+
+      const before = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: { name: true },
+      });
+      try {
+        await ctx.db.raidTeam.update({
+          where: { id: input.raidTeamId },
+          data: { name: input.name, slug },
+        });
+      } catch (err) {
+        // Check-then-update race on @@unique([guildId, slug]): a concurrent
+        // create/rename can land the slug between our clash check and this
+        // update — surface the same friendly CONFLICT instead of a 500.
+        if (
+          err instanceof Object &&
+          "code" in err &&
+          (err as { code?: string }).code === "P2002"
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Another team in this guild already uses that name.",
+          });
+        }
+        throw err;
+      }
+
+      await audit({
+        event: "RAID_TEAM_SETTINGS_UPDATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: {
+          action: "renamed",
+          from: before?.name ?? null,
+          to: input.name,
+        },
+      });
+
+      return { ok: true, name: input.name };
+    }),
+
   setVisibility: protectedProcedure
     .input(
       z.object({
