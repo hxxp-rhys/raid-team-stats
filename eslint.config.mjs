@@ -19,6 +19,14 @@ const eslintConfig = defineConfig([
     // (same root cause as the tsconfig `persistent_data` exclude).
     "persistent_data/**",
   ]),
+  {
+    // Node SEA runs its main as CommonJS — require() is structural in the
+    // companion's .cjs entry, not a style choice.
+    files: ["companion/**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
