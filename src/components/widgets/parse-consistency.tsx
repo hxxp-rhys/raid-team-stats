@@ -14,7 +14,14 @@ import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
  * slopes are what roster decisions should read, never best-ever parses.
  */
 export function ParseConsistencyWidget({ raidTeamId }: { raidTeamId: string }) {
-  const q = api.snapshot.parseConsistency.useQuery({ raidTeamId });
+  // null = let the server pick the highest difficulty with data; an explicit
+  // pick refetches that tier only. N/H/M parse populations are not
+  // equivalent, so tiers are never mixed in one view.
+  const [difficultySel, setDifficultySel] = useState<3 | 4 | 5 | null>(null);
+  const q = api.snapshot.parseConsistency.useQuery({
+    raidTeamId,
+    difficulty: difficultySel ?? undefined,
+  });
 
   const [tab, setTab] = useState<"snapshot" | "trend">("snapshot");
   const [encounterSel, setEncounterSel] = useState<number | "all">("all");
@@ -44,15 +51,42 @@ export function ParseConsistencyWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  const { members, partition } = q.data;
+  const { members, partition, difficulty, availableDifficulties } = q.data;
+  const diffName = (d: number) =>
+    ({ 5: "Mythic", 4: "Heroic", 3: "Normal" })[d] ?? `D${d}`;
+
+  // Difficulty picker is always offered when ANY tier has data — switching
+  // tiers refetches. Options = tiers with data, plus the current selection.
+  const diffOptions = [
+    ...new Set([...availableDifficulties, difficulty]),
+  ].sort((a, b) => b - a);
+  const difficultyPicker = diffOptions.length > 0 && (
+    <select
+      className="border-border bg-background rounded-md border px-1.5 py-1"
+      value={difficulty}
+      onChange={(e) => setDifficultySel(Number(e.target.value) as 3 | 4 | 5)}
+      aria-label="Raid difficulty"
+      title="Normal / Heroic / Mythic parse populations are separate — tiers are never mixed."
+    >
+      {diffOptions.map((d) => (
+        <option key={d} value={d}>
+          {diffName(d)}
+        </option>
+      ))}
+    </select>
+  );
+
   const hasAnyParses = members.some((m) => m.encounters.length > 0);
   if (!hasAnyParses) {
     return (
       <Shell tab={tab} setTab={setTab}>
+        <div className="mb-2 flex items-center gap-2 text-xs">
+          {difficultyPicker}
+        </div>
         <WidgetEmpty>
-          No Mythic parses for the current tier. Parse ingestion is
-          Mythic-only — Heroic-only teams will see nothing here until they
-          step into Mythic (or role-true/difficulty options ship).
+          {availableDifficulties.length > 0
+            ? `No ${diffName(difficulty)} parses for the current tier — try another difficulty above.`
+            : "No parses for the current tier yet. Parses appear once members' boss kills are publicly logged and the hourly sync has run (each raid tier is ingested separately once the team has kills there)."}
         </WidgetEmpty>
       </Shell>
     );
@@ -63,6 +97,7 @@ export function ParseConsistencyWidget({ raidTeamId }: { raidTeamId: string }) {
       {tab === "snapshot" ? (
         <>
           <div className="mb-2 flex items-center gap-2 text-xs">
+            {difficultyPicker}
             <select
               className="border-border bg-background rounded-md border px-1.5 py-1"
               value={encounterSel}
@@ -84,7 +119,12 @@ export function ParseConsistencyWidget({ raidTeamId }: { raidTeamId: string }) {
           <SnapshotTab members={members} encounterSel={encounterSel} />
         </>
       ) : (
-        <TrendTab members={members} />
+        <>
+          <div className="mb-2 flex items-center gap-2 text-xs">
+            {difficultyPicker}
+          </div>
+          <TrendTab members={members} />
+        </>
       )}
     </Shell>
   );

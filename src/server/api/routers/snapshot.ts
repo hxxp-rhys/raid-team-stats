@@ -377,7 +377,10 @@ export const snapshotRouter = router({
             ctx.db.wclParseSnapshot.findMany({
               where: { characterId: id },
               orderBy: { capturedAt: "desc" },
-              take: 30,
+              // Parse ingestion writes rows per DIFFICULTY (up to 3 tiers ×
+              // 9+ bosses) — 30 newest rows could crowd Mythic out entirely
+              // for a multi-tier raider, blanking the Mythic-only widgets.
+              take: 90,
               select: {
                 zoneId: true,
                 encounterId: true,
@@ -548,12 +551,23 @@ export const snapshotRouter = router({
    * week-best kills minus the roster median, Theil–Sen slope).
    *
    * Reads only WclParseSnapshot (data the hourly sync already pays for).
-   * Ingestion is dps-metric + Mythic-only today — healer/tank rows are
-   * flagged via spec-name role so the UI footnotes instead of ranking
-   * them, and Heroic-only teams get an honest empty state.
+   * Ingestion is per-DIFFICULTY (Normal/Heroic/Mythic rows, gated on the
+   * tiers the member has season kills on) but dps-metric only — healer/
+   * tank rows are flagged via spec-name role so the UI footnotes instead
+   * of ranking them.
    */
   parseConsistency: protectedProcedure
-    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        // WCL raid difficulty: 3 Normal, 4 Heroic, 5 Mythic. Omitted = the
+        // highest difficulty the team actually has parse data for (the
+        // tiers have non-equivalent parse populations — never mixed).
+        difficulty: z
+          .union([z.literal(3), z.literal(4), z.literal(5)])
+          .optional(),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
 
@@ -564,17 +578,38 @@ export const snapshotRouter = router({
         },
       });
       const characterIds = memberships.map((m) => m.character.id);
-      const MYTHIC = 5;
       const zoneId = (await warcraftLogsClient().currentRaidZoneId()) ?? 46;
 
       if (characterIds.length === 0) {
         return {
           zoneId,
+          difficulty: input.difficulty ?? 5,
+          availableDifficulties: [] as number[],
           partition: null as number | null,
           members: [],
           trendWeeks: [] as string[],
         };
       }
+
+      const availRows = await ctx.db.wclParseSnapshot.findMany({
+        where: {
+          characterId: { in: characterIds },
+          zoneId,
+          percentile: { not: null },
+          // Recency bound so this distinct scan doesn't grow all season
+          // (Prisma applies distinct in memory over the fetched rows).
+          capturedAt: {
+            gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          },
+        },
+        distinct: ["difficulty"],
+        select: { difficulty: true },
+      });
+      const availableDifficulties = availRows
+        .map((r) => r.difficulty)
+        .sort((a, b) => b - a);
+      const selectedDifficulty =
+        input.difficulty ?? availableDifficulties[0] ?? 5;
 
       const now = new Date();
       const currentWeek = weekStartUtc(now);
@@ -589,7 +624,7 @@ export const snapshotRouter = router({
         Promise.all(
           characterIds.map((id) =>
             ctx.db.wclParseSnapshot.findMany({
-              where: { characterId: id, zoneId, difficulty: MYTHIC },
+              where: { characterId: id, zoneId, difficulty: selectedDifficulty },
               orderBy: { capturedAt: "desc" },
               take: 60,
               select: {
@@ -612,7 +647,7 @@ export const snapshotRouter = router({
           where: {
             characterId: { in: characterIds },
             zoneId,
-            difficulty: MYTHIC,
+            difficulty: selectedDifficulty,
             weekPercentile: { not: null },
             reportStartTime: { gte: oldest },
           },
@@ -797,6 +832,8 @@ export const snapshotRouter = router({
 
       return {
         zoneId,
+        difficulty: selectedDifficulty,
+        availableDifficulties,
         partition,
         members,
         trendWeeks: Array.from({ length: TREND_WEEKS }, (_, idx) =>
@@ -824,7 +861,11 @@ export const snapshotRouter = router({
 
       const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
       const reports = await ctx.db.wclReport.findMany({
-        where: { guildId, startTime: { gte: since } },
+        // revision >= 0 excludes tombstones (inaccessible/roster-gated
+        // reports, revision -1): they carry real timestamps but no fights,
+        // and would otherwise inflate reportCount and skew newestReportAt
+        // (suppressing the stale-log note off a foreign pug's date).
+        where: { guildId, startTime: { gte: since }, revision: { gte: 0 } },
         select: {
           code: true,
           zoneId: true,

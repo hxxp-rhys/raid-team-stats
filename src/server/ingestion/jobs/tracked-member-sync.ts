@@ -807,7 +807,8 @@ export async function handleTrackedMemberSync(
     logSnapshotError(err, { stage: "vault", characterId: character.id });
   }
 
-  // 6. Warcraft Logs parses (Mythic, current raid tier).
+  // 6. Warcraft Logs parses (current raid tier, one pass per difficulty
+  //    the member has season kills on — Normal/Heroic/Mythic).
   //
   //    Two facts about WCL's API drive the shape here:
   //      • `zoneRankings` is a season/partition-cumulative aggregate with
@@ -825,7 +826,6 @@ export async function handleTrackedMemberSync(
   try {
     const wcl = warcraftLogsClient();
     const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
-    const MYTHIC_DIFFICULTY = 5; // WCL difficulty 5 = Mythic
 
     // Current raid lockout window: US weekly reset is Tuesday 15:00 UTC
     // (= "Tuesday 11:00" US Eastern, what the user specified). Matches the
@@ -842,21 +842,98 @@ export async function handleTrackedMemberSync(
 
     const wclRegion = regionToCode(character.region).toUpperCase();
 
-    // (a) Season-best per encounter for the heatmap.
-    const zoneResp = await wcl.query({
-      query: CHARACTER_ZONE_RANKINGS_QUERY,
-      variables: {
-        name: character.name,
-        server: character.realmSlug,
-        region: wclRegion,
-        zoneID,
-        metric: "dps",
-        difficulty: MYTHIC_DIFFICULTY,
-      },
-      schema: characterZoneRankingsResponseSchema,
-      estimatedPoints: 5,
+    // Difficulties to ingest (WCL ids: 3 Normal, 4 Heroic, 5 Mythic). The
+    // tiers have non-equivalent parse populations, so each gets its own
+    // rows. Cost control: only fetch tiers the character has actually
+    // killed bosses on this season (RIO seasonProgress, already persisted);
+    // unknown → Mythic-only (the pre-multi-difficulty behavior).
+    const latestRaidSnap = await db.raidSnapshot.findFirst({
+      where: { characterId: character.id, source: "BLIZZARD" },
+      orderBy: { capturedAt: "desc" },
+      select: { seasonProgress: true },
     });
-    type ZoneRanking = {
+    const sp =
+      typeof latestRaidSnap?.seasonProgress === "object" &&
+      latestRaidSnap.seasonProgress !== null
+        ? (latestRaidSnap.seasonProgress as Record<string, unknown>)
+        : {};
+    // The raid step persists seasonProgress with RENAMED keys
+    // ({normal, heroic, mythic} kill counts — see its mapper above), not
+    // RIO's raw *_bosses_killed names.
+    const killsOn = (k: string): number =>
+      typeof sp[k] === "number" ? (sp[k] as number) : 0;
+    // Highest tier first: a transient failure aborts the REMAINING tiers
+    // for this character until the next pass, and Mythic data matters most.
+    const difficulties: number[] = [];
+    if (killsOn("mythic") > 0) difficulties.push(5);
+    if (killsOn("heroic") > 0) difficulties.push(4);
+    if (killsOn("normal") > 0) difficulties.push(3);
+    if (difficulties.length === 0) difficulties.push(5);
+
+    for (const difficulty of difficulties) {
+      await syncWclParsesForDifficulty({
+        wcl,
+        character,
+        capturedAt,
+        zoneID,
+        difficulty,
+        wclRegion,
+        weekStartMs,
+        weekEndMs,
+      });
+    }
+  } catch (err) {
+    logSnapshotError(err, { stage: "wcl", characterId: character.id });
+  }
+
+  // Still deferred: Raider.IO (mostly duplicates Blizzard data — defer until
+  // we surface gear-snapshot percentile rankings the API uniquely provides).
+}
+
+/**
+ * One difficulty's WCL parse ingestion for one character: zoneRankings
+ * (season aggregates) + a batched encounterRankings call (per-kill ranks,
+ * current-lockout best), written as one WclParseSnapshot row per encounter.
+ * Throws on WCL/query failure — the caller's per-character try/catch logs
+ * and moves on (a mid-list failure skips the remaining difficulties for
+ * this character until the next hourly pass; acceptable).
+ */
+async function syncWclParsesForDifficulty(args: {
+  wcl: ReturnType<typeof warcraftLogsClient>;
+  character: { id: string; name: string; realmSlug: string };
+  capturedAt: Date;
+  zoneID: number;
+  difficulty: number;
+  wclRegion: string;
+  weekStartMs: number;
+  weekEndMs: number;
+}): Promise<void> {
+  const {
+    wcl,
+    character,
+    capturedAt,
+    zoneID,
+    difficulty,
+    wclRegion,
+    weekStartMs,
+    weekEndMs,
+  } = args;
+
+  // (a) Season-best per encounter for the heatmap.
+  const zoneResp = await wcl.query({
+    query: CHARACTER_ZONE_RANKINGS_QUERY,
+    variables: {
+      name: character.name,
+      server: character.realmSlug,
+      region: wclRegion,
+      zoneID,
+      metric: "dps",
+      difficulty,
+    },
+    schema: characterZoneRankingsResponseSchema,
+    estimatedPoints: 5,
+  });
+  type ZoneRanking = {
       encounter?: { id?: number; name?: string };
       rankPercent?: number | null;
       bestPercent?: number | null;
@@ -922,7 +999,7 @@ export async function handleTrackedMemberSync(
           name: character.name,
           server: character.realmSlug,
           region: wclRegion,
-          difficulty: MYTHIC_DIFFICULTY,
+          difficulty,
           metric: "dps",
         },
         schema: characterEncounterRankingsResponseSchema,
@@ -970,7 +1047,7 @@ export async function handleTrackedMemberSync(
         zoneId: zoneID,
         encounterId: enc.id,
         encounterName: enc.name ?? null,
-        difficulty: MYTHIC_DIFFICULTY,
+        difficulty,
         percentile:
           seasonPct != null ? Math.round(seasonPct * 100) / 100 : null,
         weekPercentile:
@@ -993,12 +1070,6 @@ export async function handleTrackedMemberSync(
         },
       });
     }
-  } catch (err) {
-    logSnapshotError(err, { stage: "wcl", characterId: character.id });
-  }
-
-  // Still deferred: Raider.IO (mostly duplicates Blizzard data — defer until
-  // we surface gear-snapshot percentile rankings the API uniquely provides).
 }
 
 const regionToCode = (r: Region): string => r.toLowerCase();
