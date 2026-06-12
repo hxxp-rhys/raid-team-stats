@@ -6,7 +6,9 @@ import { normalizeRealmSlug } from "@/lib/realm";
 import { queues, QUEUE_NAMES } from "@/server/ingestion/queues";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import {
+  GUILD_ID_LOOKUP_QUERY,
   GUILD_REPORTS_QUERY,
+  guildLookupResponseSchema,
   guildReportsResponseSchema,
   REPORT_FIGHTS_QUERY,
   reportFightsResponseSchema,
@@ -79,6 +81,63 @@ export async function enqueueGuildReportSyncForAll(): Promise<{
   return { enqueued: guilds.length };
 }
 
+/**
+ * Enqueue a GRS run for one guild right now — used after a team's WCL log
+ * source changes so the new source's reports arrive without waiting for
+ * the hourly cron (the caller clears stale data BEFORE enqueueing).
+ */
+export async function enqueueImmediateGuildReportSync(
+  guildId: string,
+): Promise<void> {
+  await queues.guildReportSync.add(
+    QUEUE_NAMES.guildReportSync,
+    { guildId } satisfies GuildReportSyncPayload,
+    { jobId: `grs-immediate_${guildId}_${Date.now()}` },
+  );
+}
+
+/**
+ * Resolve the guild's DEFAULT WCL source: its own WCL guild id, looked up
+ * once from the Blizzard identity and cached on the Guild row. Null when
+ * the guild has no WCL presence (re-attempted each run; ~2 pts).
+ */
+async function resolveGuildWclId(guild: {
+  id: string;
+  name: string;
+  region: Region;
+  realmSlug: string;
+  wclGuildId: number | null;
+}): Promise<number | null> {
+  if (guild.wclGuildId != null) return guild.wclGuildId;
+  try {
+    const res = await warcraftLogsClient().query({
+      query: GUILD_ID_LOOKUP_QUERY,
+      variables: {
+        name: guild.name,
+        serverSlug: guild.realmSlug,
+        serverRegion: guild.region.toLowerCase(),
+      },
+      schema: guildLookupResponseSchema,
+      estimatedPoints: 2,
+    });
+    const id = res.guildData?.guild?.id ?? null;
+    if (id != null) {
+      await db.guild.update({
+        where: { id: guild.id },
+        data: { wclGuildId: id },
+      });
+      logger.info(
+        { guild: guild.name, wclGuildId: id },
+        "grs: resolved guild's default WCL source",
+      );
+    }
+    return id;
+  } catch (err) {
+    logger.warn({ err, guild: guild.name }, "grs: WCL guild id resolution failed");
+    return null;
+  }
+}
+
 export async function handleGuildReportSync(
   payload: GuildReportSyncPayload,
 ): Promise<void> {
@@ -89,6 +148,11 @@ export async function handleGuildReportSync(
       name: true,
       region: true,
       realmSlug: true,
+      wclGuildId: true,
+      raidTeams: {
+        where: { memberships: { some: { isActive: true } } },
+        select: { wclGuildId: true },
+      },
     },
   });
   if (!guild) {
@@ -101,96 +165,152 @@ export async function handleGuildReportSync(
   // resolution fails we discover without a zone filter (window-limited).
   const zoneId = await wcl.currentRaidZoneId();
 
-  const [latest, storedCount] = await Promise.all([
-    // revision >= 0 keeps tombstones out: a roster-gated pug report carries
-    // its REAL (often recent) startTime and would otherwise advance the
-    // watermark past late-uploaded guild reports.
-    db.wclReport.findFirst({
-      where: { guildId: guild.id, revision: { gte: 0 } },
-      orderBy: { startTime: "desc" },
-      select: { startTime: true },
-    }),
-    // Tombstoned (inaccessible) reports don't count toward outgrowing
-    // full-window discovery — they carry revision -1.
-    db.wclReport.count({
-      where: { guildId: guild.id, revision: { gte: 0 } },
-    }),
-  ]);
-  const startTime =
-    latest && storedCount >= WATERMARK_MIN_REPORTS
-      ? latest.startTime.getTime() - WATERMARK_OVERLAP_MS
-      : Date.now() - BACKFILL_MS;
-
-  const discovery = await wcl.query({
-    query: GUILD_REPORTS_QUERY,
-    variables: {
-      guildName: guild.name,
-      guildServerSlug: guild.realmSlug,
-      guildServerRegion: guild.region.toLowerCase(),
-      zoneID: zoneId ?? undefined,
-      startTime,
-      limit: 25,
-    },
-    schema: guildReportsResponseSchema,
-    estimatedPoints: 2,
-  });
-
-  const found = (discovery.reportData?.reports?.data ?? []).filter(
-    (r): r is NonNullable<typeof r> => r != null,
-  );
-  if (found.length === 25) {
-    // Limit hit. WCL returns newest-first, so anything older than the 25th
-    // report is PERMANENTLY missed once the watermark advances past it —
-    // this mostly bites the first 60d backfill of a long-logging guild.
-    // Loud, not silent; the verified `page` arg is the v2 fix if it matters.
-    logger.warn(
-      { guild: guild.name, startTime },
-      "grs: discovery page full (25) — older reports in this window are permanently skipped",
+  // One discovery pass per distinct log SOURCE: each team's effective
+  // source is its override or the guild's resolved default. Teams that log
+  // under their own WCL guild (e.g. a second raid team) get their own
+  // listing; identical sources are deduped so the common single-source
+  // guild still costs one discovery.
+  const defaultSource = await resolveGuildWclId(guild);
+  const sources = [
+    ...new Set(
+      guild.raidTeams
+        .map((t) => t.wclGuildId ?? defaultSource)
+        .filter((s): s is number => s != null),
+    ),
+  ];
+  if (sources.length === 0) {
+    logger.info(
+      { guild: guild.name },
+      "grs: no WCL source resolvable — guild discovery skipped (member sweep still runs)",
     );
   }
-  if (found.length === 0) return;
-
-  const known = await db.wclReport.findMany({
-    where: { code: { in: found.map((r) => r.code) } },
-    select: { code: true, revision: true, frozen: true, endTime: true },
-  });
-  const knownByCode = new Map(known.map((k) => [k.code, k]));
 
   const now = Date.now();
   let fetched = 0;
+  let totalDiscovered = 0;
   // A live raid-night log is typically BOTH guild-discovered and referenced
   // by member ranks — don't pay for it twice in one run.
   const fetchedThisRun = new Set<string>();
-  // Oldest first so a capped run keeps a contiguous ingested prefix.
-  for (const r of [...found].sort((a, b) => a.startTime - b.startTime)) {
-    const existing = knownByCode.get(r.code);
-    if (existing?.frozen) continue;
-    if (existing && existing.revision === r.revision) {
-      // Unchanged. Freeze once it's old enough that WCL won't mutate it.
-      if (now - existing.endTime.getTime() > FREEZE_AFTER_MS) {
-        await db.wclReport.update({
-          where: { code: r.code },
-          data: { frozen: true },
-        });
-      }
-      continue;
-    }
-    if (fetched >= MAX_DETAIL_FETCHES) {
-      logger.info(
-        { guild: guild.name },
-        "grs: detail-fetch cap reached — remainder next run",
-      );
-      break;
-    }
-    fetched++;
-    fetchedThisRun.add(r.code);
-    try {
-      await fetchAndPersistReport(r.code, guild.id, guild.realmSlug, guild.region);
-    } catch (err) {
+
+  for (const source of sources) {
+    const [latest, storedCount] = await Promise.all([
+      // revision >= 0 keeps tombstones out: a roster-gated pug report
+      // carries its REAL (often recent) startTime and would otherwise
+      // advance the watermark past late-uploaded guild reports. Watermark
+      // and count are PER SOURCE — sources backfill independently.
+      db.wclReport.findFirst({
+        where: { guildId: guild.id, wclGuildId: source, revision: { gte: 0 } },
+        orderBy: { startTime: "desc" },
+        select: { startTime: true },
+      }),
+      db.wclReport.count({
+        where: { guildId: guild.id, wclGuildId: source, revision: { gte: 0 } },
+      }),
+    ]);
+    const startTime =
+      latest && storedCount >= WATERMARK_MIN_REPORTS
+        ? latest.startTime.getTime() - WATERMARK_OVERLAP_MS
+        : Date.now() - BACKFILL_MS;
+
+    const discovery = await wcl.query({
+      query: GUILD_REPORTS_QUERY,
+      variables: {
+        guildID: source,
+        zoneID: zoneId ?? undefined,
+        startTime,
+        limit: 25,
+      },
+      schema: guildReportsResponseSchema,
+      estimatedPoints: 2,
+    });
+
+    const found = (discovery.reportData?.reports?.data ?? []).filter(
+      (r): r is NonNullable<typeof r> => r != null,
+    );
+    totalDiscovered += found.length;
+    if (found.length === 25) {
+      // Limit hit. WCL returns newest-first, so anything older than the
+      // 25th report is PERMANENTLY missed once the watermark advances past
+      // it. Loud, not silent; the verified `page` arg is the v2 fix.
       logger.warn(
-        { err, code: r.code, guild: guild.name },
-        "grs: report fetch/persist failed",
+        { guild: guild.name, source, startTime },
+        "grs: discovery page full (25) — older reports in this window are permanently skipped",
       );
+    }
+    if (found.length === 0) continue;
+
+    const known = await db.wclReport.findMany({
+      where: { code: { in: found.map((r) => r.code) } },
+      select: {
+        code: true,
+        revision: true,
+        frozen: true,
+        endTime: true,
+        wclGuildId: true,
+      },
+    });
+    const knownByCode = new Map(known.map((k) => [k.code, k]));
+
+    // Oldest first so a capped run keeps a contiguous ingested prefix.
+    for (const r of [...found].sort((a, b) => a.startTime - b.startTime)) {
+      const existing = knownByCode.get(r.code);
+      // Tombstones (revision < 0) do NOT honor the frozen skip here: a
+      // report appearing in THIS source's own listing is by definition the
+      // source's accessible report — e.g. the member sweep roster-gated a
+      // future override-source's logs while the team was still tiny. The
+      // -1 revision never matches a real one, so it falls through to a
+      // full refetch, which un-tombstones it (persist sets frozen back to
+      // false). Without this, a switched-to source has permanent holes.
+      if (existing?.frozen && existing.revision >= 0) {
+        // Frozen rows still need source attribution backfilled — rows from
+        // before source tracking (or first found by the member sweep) are
+        // otherwise stuck looking "swept" and get participation-gated in
+        // every team view despite being the guild's own listed reports.
+        if (existing.wclGuildId == null) {
+          await db.wclReport.update({
+            where: { code: r.code },
+            data: { wclGuildId: source },
+          });
+        }
+        continue;
+      }
+      if (existing && existing.revision === r.revision) {
+        // Unchanged. Backfill the source attribution on rows that predate
+        // source tracking (or arrived via the member sweep), and freeze
+        // once it's old enough that WCL won't mutate it.
+        const patch: { frozen?: boolean; wclGuildId?: number } = {};
+        if (existing.wclGuildId == null) patch.wclGuildId = source;
+        if (now - existing.endTime.getTime() > FREEZE_AFTER_MS) {
+          patch.frozen = true;
+        }
+        if (Object.keys(patch).length > 0) {
+          await db.wclReport.update({ where: { code: r.code }, data: patch });
+        }
+        continue;
+      }
+      if (fetched >= MAX_DETAIL_FETCHES) {
+        logger.info(
+          { guild: guild.name, source },
+          "grs: detail-fetch cap reached — remainder next run",
+        );
+        break;
+      }
+      fetched++;
+      fetchedThisRun.add(r.code);
+      try {
+        await fetchAndPersistReport(
+          r.code,
+          guild.id,
+          guild.realmSlug,
+          guild.region,
+          { sourceWclGuildId: source },
+        );
+      } catch (err) {
+        logger.warn(
+          { err, code: r.code, guild: guild.name, source },
+          "grs: report fetch/persist failed",
+        );
+      }
     }
   }
   // Second source: reports referenced by the members' OWN parse kills.
@@ -205,13 +325,18 @@ export async function handleGuildReportSync(
       const memberCodes = await collectMemberReportCodes(guild.id);
       const knownRows = await db.wclReport.findMany({
         where: { code: { in: [...memberCodes] } },
-        select: { code: true, frozen: true, endTime: true },
+        select: { code: true, frozen: true, endTime: true, wclGuildId: true },
       });
       const knownByCode2 = new Map(knownRows.map((r) => [r.code, r]));
       let extraFetched = 0;
       for (const code of memberCodes) {
         if (fetchedThisRun.has(code)) continue;
         const existing = knownByCode2.get(code);
+        // SOURCED rows belong to discovery, full stop: its revision
+        // tracking refetches them, and the sweep's roster gate (which
+        // counts OUR characters, not the source guild's) would otherwise
+        // re-tombstone a legitimately sourced report and oscillate.
+        if (existing?.wclGuildId != null) continue;
         if (existing?.frozen) continue;
         if (existing) {
           // Swept reports have no revision signal (they're not in the
@@ -290,7 +415,12 @@ export async function handleGuildReportSync(
 
   if (fetched > 0) {
     logger.info(
-      { guild: guild.name, discovered: found.length, fetched },
+      {
+        guild: guild.name,
+        sources: sources.length,
+        discovered: totalDiscovered,
+        fetched,
+      },
       "grs: run complete",
     );
   }
@@ -356,6 +486,13 @@ async function fetchAndPersistReport(
      * the team's own uploads).
      */
     minRosterMatches?: number;
+    /**
+     * The WCL guild id this report was discovered under (the log source).
+     * Omitted on the member sweep — those rows keep wclGuildId null and
+     * are attributed to teams by roster participation at read time. Never
+     * overwrites an existing source with null.
+     */
+    sourceWclGuildId?: number;
   },
 ): Promise<void> {
   const wcl = warcraftLogsClient();
@@ -445,6 +582,7 @@ async function fetchAndPersistReport(
           code,
           guildId,
           zoneId: report.zone?.id ?? null,
+          wclGuildId: opts?.sourceWclGuildId ?? null,
           title: null,
           startTime: new Date(report.startTime),
           endTime: new Date(report.endTime),
@@ -466,6 +604,7 @@ async function fetchAndPersistReport(
         code: report.code,
         guildId,
         zoneId: report.zone?.id ?? null,
+        wclGuildId: opts?.sourceWclGuildId ?? null,
         title: null,
         startTime: new Date(report.startTime),
         endTime: new Date(report.endTime),
@@ -478,6 +617,16 @@ async function fetchAndPersistReport(
         endTime: new Date(report.endTime),
         revision: report.revision,
         fetchedAt,
+        // A successful full persist always yields a LIVE row — this is what
+        // un-tombstones a previously inaccessible/roster-gated report when
+        // sourced discovery later proves it belongs to the team's source
+        // (the freeze rules re-apply on later runs as usual).
+        frozen: false,
+        // Source only ever set/upgraded, never cleared: a member-sweep
+        // refetch (no source) must not erase discovery's attribution.
+        ...(opts?.sourceWclGuildId != null
+          ? { wclGuildId: opts.sourceWclGuildId }
+          : {}),
       },
     }),
     // Live logs grow and pulls can be re-cut — replace wholesale.

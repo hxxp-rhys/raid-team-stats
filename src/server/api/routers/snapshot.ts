@@ -859,18 +859,60 @@ export const snapshotRouter = router({
         "MEMBER",
       );
 
+      // The team's effective log source: its override, else the guild's
+      // resolved WCL guild. Every widget on a team dashboard reads exactly
+      // this source — plus member-swept reports (wclGuildId null), which
+      // are shared guild-wide and gated below to fights where >=2 of THIS
+      // team's roster actually participated.
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: { characterId: true },
+          },
+        },
+      });
+      const effectiveSource =
+        team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const teamCharacterIds = team?.memberships.map((m) => m.characterId) ?? [];
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) {
+        sourceClauses.push({ wclGuildId: effectiveSource });
+      }
+
       const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
       const reports = await ctx.db.wclReport.findMany({
         // revision >= 0 excludes tombstones (inaccessible/roster-gated
         // reports, revision -1): they carry real timestamps but no fights,
         // and would otherwise inflate reportCount and skew newestReportAt
         // (suppressing the stale-log note off a foreign pug's date).
-        where: { guildId, startTime: { gte: since }, revision: { gte: 0 } },
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
         select: {
           code: true,
           zoneId: true,
           startTime: true,
           endTime: true,
+          wclGuildId: true,
         },
       });
       if (reports.length === 0) {
@@ -879,15 +921,12 @@ export const snapshotRouter = router({
           encounterNames: {} as Record<number, string>,
           reportCount: 0,
           newestReportAt: null as Date | null,
+          source,
         };
       }
       const reportByCode = new Map(reports.map((r) => [r.code, r]));
-      const newestReportAt = reports.reduce<Date | null>(
-        (max, r) => (max == null || r.startTime > max ? r.startTime : max),
-        null,
-      );
 
-      const fights = await ctx.db.wclFight.findMany({
+      const allFights = await ctx.db.wclFight.findMany({
         where: { reportCode: { in: reports.map((r) => r.code) } },
         select: {
           reportCode: true,
@@ -901,8 +940,59 @@ export const snapshotRouter = router({
           startAt: true,
           endAt: true,
           durationMs: true,
+          friendlyPlayerIds: true,
         },
       });
+
+      // Participation gate for member-swept reports: a swept report is in
+      // the guild-wide pool, so a fight only counts for THIS team when >=2
+      // of its roster were in the pull (mirrors the persist-time roster
+      // gate; keeps team A's pugs/raids out of team B's progression view).
+      const sweptCodes = reports
+        .filter((r) => r.wclGuildId == null)
+        .map((r) => r.code);
+      const teamActorsByReport = new Map<string, Set<number>>();
+      if (sweptCodes.length > 0 && teamCharacterIds.length > 0) {
+        const actorRows = await ctx.db.wclReportActor.findMany({
+          where: {
+            reportCode: { in: sweptCodes },
+            characterId: { in: teamCharacterIds },
+          },
+          select: { reportCode: true, actorId: true },
+        });
+        for (const a of actorRows) {
+          const s = teamActorsByReport.get(a.reportCode) ?? new Set<number>();
+          s.add(a.actorId);
+          teamActorsByReport.set(a.reportCode, s);
+        }
+      }
+      const fights = allFights.filter((f) => {
+        const rep = reportByCode.get(f.reportCode);
+        if (rep?.wclGuildId != null) return true; // the team's own source
+        const teamActors = teamActorsByReport.get(f.reportCode);
+        if (!teamActors) return false;
+        let matches = 0;
+        for (const id of f.friendlyPlayerIds) {
+          if (teamActors.has(id)) {
+            matches++;
+            if (matches >= 2) return true;
+          }
+        }
+        return false;
+      });
+
+      // Report stats AFTER the gate, so another team's personal logs can't
+      // inflate the count or suppress the stale-log note: sourced reports
+      // always count (they ARE the team's logs, fights or not); swept
+      // reports only count when a fight survived the participation gate.
+      const usedCodes = new Set(fights.map((f) => f.reportCode));
+      const teamReports = reports.filter(
+        (r) => r.wclGuildId != null || usedCodes.has(r.code),
+      );
+      const newestReportAt = teamReports.reduce<Date | null>(
+        (max, r) => (max == null || r.startTime > max ? r.startTime : max),
+        null,
+      );
 
       // Boss names ride along from parse snapshots (the fights query's
       // verified field set doesn't include a name); unmatched encounters
@@ -949,8 +1039,9 @@ export const snapshotRouter = router({
           };
         }),
         encounterNames,
-        reportCount: reports.length,
+        reportCount: teamReports.length,
         newestReportAt,
+        source,
       };
     }),
 

@@ -43,7 +43,9 @@ User holds **Platinum: 18 000 points/hr**. Budget is
 | `WCL_RAID_ZONES_QUERY` | flat `worldData.zones { id name frozen }` |
 | `ZONE_ENCOUNTERS_QUERY` | boss list for a zone — **dead code today** (exported, never imported; the boss list is derived from the zoneRankings JSON instead) |
 | `buildCharacterEncounterRankingsQuery(ids)` | per-encounter `ranks[]` (has `startTime`/`report`), aliased `e<id>` so it's **one HTTP request per character**. Takes `$metric: CharacterRankingMetricType` (NOT the `CharacterPageRankingMetricType` zoneRankings uses — different enums, overlapping members dps/hps/tankhps). Sync passes `dps` today; role-true ingestion is a planned flag-flip |
-| `GUILD_REPORTS_QUERY` | GRS discovery: `reportData.reports(guildName, guildServerSlug, guildServerRegion, zoneID, startTime, limit)` → `{ code title startTime endTime revision zone{id} }`, newest-first, epoch-ms floats. ~2 pts |
+| `GUILD_REPORTS_QUERY` | GRS discovery: `reportData.reports(guildID, zoneID, startTime, limit)` → `{ code title startTime endTime revision zone{id} }`, newest-first, epoch-ms floats. ~2 pts. Keyed by numeric WCL guild id — one pass per distinct team log SOURCE (guild default or per-team override). `guildTagID`/`userID` are verified args for future source kinds |
+| `GUILD_ID_LOOKUP_QUERY` | `guildData.guild(name, serverSlug, serverRegion){ id name }` — one-time resolution of a guild's default WCL source (cached on `Guild.wclGuildId`). ~2 pts |
+| `GUILD_BY_ID_QUERY` | `guildData.guild(id){ id name server{name slug} }` — validates a user-entered per-team source and echoes its identity for confirmation. ~2 pts |
 | `REPORT_FIGHTS_QUERY` | GRS detail: `report(code)` → `fights(killType: Encounters)` (id, encounterID, difficulty, kill, size, bossPercentage, fightPercentage, lastPhase, lastPhaseIsIntermission, startTime/endTime **report-relative ms**, friendlyPlayers, keystoneLevel) + `masterData.actors(type: "Player")`. ~8 pts |
 
 `character()` args are `name`, `serverSlug`, `serverRegion`.

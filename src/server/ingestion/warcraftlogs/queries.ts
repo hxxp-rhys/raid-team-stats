@@ -187,24 +187,23 @@ export const characterEncounterRankingsResponseSchema = z
   .passthrough();
 
 /**
- * GRS discovery — the guild's recent public reports for one zone. All args
- * and returned fields verified by live introspection 2026-06-11
- * (phase2-verify-wcl). `startTime`/`endTime` are epoch ms floats.
+ * GRS discovery — one log SOURCE's recent public reports for one zone,
+ * keyed by WCL guild id (`guildID` is a verified introspected arg of
+ * reportData.reports, alongside guildTagID/userID for future source
+ * kinds). All sources are numeric ids after resolution — the guild
+ * default resolves once via GUILD_ID_LOOKUP_QUERY and per-team overrides
+ * are entered as ids/URLs. `startTime`/`endTime` are epoch ms floats.
  */
 export const GUILD_REPORTS_QUERY = /* GraphQL */ `
   query GuildReports(
-    $guildName: String!
-    $guildServerSlug: String!
-    $guildServerRegion: String!
+    $guildID: Int!
     $zoneID: Int
     $startTime: Float
     $limit: Int
   ) {
     reportData {
       reports(
-        guildName: $guildName
-        guildServerSlug: $guildServerSlug
-        guildServerRegion: $guildServerRegion
+        guildID: $guildID
         zoneID: $zoneID
         startTime: $startTime
         limit: $limit
@@ -223,6 +222,73 @@ export const GUILD_REPORTS_QUERY = /* GraphQL */ `
     }
   }
 `;
+
+/**
+ * Resolve a guild's WCL guild id from its Blizzard identity — the lazy
+ * one-time resolution of the DEFAULT log source for a guild's teams.
+ */
+export const GUILD_ID_LOOKUP_QUERY = /* GraphQL */ `
+  query GuildIdLookup(
+    $name: String!
+    $serverSlug: String!
+    $serverRegion: String!
+  ) {
+    guildData {
+      guild(name: $name, serverSlug: $serverSlug, serverRegion: $serverRegion) {
+        id
+        name
+      }
+    }
+  }
+`;
+
+/**
+ * Probe a WCL guild id — validates a user-entered per-team source and
+ * echoes the resolved name/server back for confirmation before saving.
+ */
+export const GUILD_BY_ID_QUERY = /* GraphQL */ `
+  query GuildById($id: Int!) {
+    guildData {
+      guild(id: $id) {
+        id
+        name
+        server {
+          name
+          slug
+        }
+      }
+    }
+  }
+`;
+
+export const guildLookupResponseSchema = z
+  .object({
+    guildData: z
+      .object({
+        guild: z
+          .object({
+            id: z.number().int(),
+            name: z.string().optional(),
+            server: z
+              .object({
+                name: z.string().nullable().optional(),
+                slug: z.string().nullable().optional(),
+              })
+              .passthrough()
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+export type GuildLookupResponse = z.infer<typeof guildLookupResponseSchema>;
 
 export const guildReportsResponseSchema = z
   .object({

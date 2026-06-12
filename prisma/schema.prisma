@@ -146,6 +146,8 @@ enum AuditEvent {
   RAID_TEAM_MEMBER_REMOVED
   RAID_TEAM_LEADERSHIP_TRANSFERRED
   RAID_TEAM_SETTINGS_UPDATED
+  RAID_TEAM_WCL_SOURCE_CHANGED
+  RAID_TEAM_WCL_SOURCE_DATA_CLEARED
   ADMIN_USER_PROMOTED
   ADMIN_USER_DEMOTED
   DASHBOARD_EXPORTED
@@ -279,6 +281,11 @@ model Guild {
   guildSlug       String
   name            String
   faction         Faction
+  // Resolved Warcraft Logs guild id for THIS guild (lazy-cached by GRS via
+  // guildData.guild(name, serverSlug, serverRegion){ id }). The default log
+  // source for raid teams without an explicit override. Null = not yet
+  // resolved or the guild has no WCL presence.
+  wclGuildId      Int?
   claimStatus     GuildClaimStatus @default(UNCLAIMED)
   claimedByUserId String?
   claimedAt       DateTime?
@@ -360,6 +367,12 @@ model RaidTeam {
   // null = no auto-refresh (Tier A still runs hourly globally for tracked
   // members; this is a per-team additional opt-in trigger).
   refreshSchedule Json?
+  // Per-team Warcraft Logs source override. Null = inherit the guild's
+  // resolved WCL guild (Guild.wclGuildId). Set when a team logs under a
+  // different WCL guild (e.g. a team-specific WCL guild entity). The name
+  // is captured at save time from the validation probe, for display.
+  wclGuildId   Int?
+  wclGuildName String?
   lastRefreshAt   DateTime?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
@@ -576,6 +589,11 @@ model WclReport {
   // mid-season raid addition (e.g. Sporefall, possibly a NEW zone id) keeps
   // working without a code change.
   zoneId    Int?
+  // The WCL guild id this report was DISCOVERED under (the team/guild log
+  // source). Null = member-parse-swept (found via a member's rank report
+  // codes, not a guild listing) — those are shared guild-wide and gated to
+  // teams by roster participation at read time.
+  wclGuildId Int?
   title     String?
   startTime DateTime
   endTime   DateTime

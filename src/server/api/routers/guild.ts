@@ -124,6 +124,8 @@ export const guildRouter = router({
               slug: true,
               visibility: true,
               leaderUserId: true,
+              wclGuildId: true,
+              wclGuildName: true,
               _count: {
                 select: { memberships: { where: { isActive: true } } },
               },

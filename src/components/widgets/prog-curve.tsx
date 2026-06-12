@@ -107,13 +107,31 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
       </Shell>
     );
   }
+  // Which log source feeds this dashboard — visible in EVERY state
+  // (especially the empty ones: a wrong/just-changed source is exactly when
+  // you need to see what the widget is reading). Changeable in guild
+  // settings.
+  const src = q.data.source;
+  const sourceNote = (
+    <p
+      className="text-muted-foreground mb-1 text-[10px]"
+      title="This team's Warcraft Logs source. Team dashboards read exactly one source (plus members' personal logs where 2+ of the roster played). Change it in guild settings."
+    >
+      logs: {src.name}
+      {src.wclGuildId != null ? ` (#${src.wclGuildId})` : ""}
+      {src.isOverride ? " · team override" : " · guild default"}
+    </p>
+  );
+
   if (q.data.reportCount === 0) {
     return (
       <Shell tab={tab} setTab={setTab}>
+        {sourceNote}
         <WidgetEmpty>
-          No public Warcraft Logs reports found for this guild yet. Guild
-          Report Sync checks hourly — once someone uploads a public log, pulls
-          appear here automatically.
+          No public Warcraft Logs reports found for this team&apos;s log
+          source yet. Sync checks hourly — if the source just changed, the
+          new logs are on their way; otherwise pulls appear once someone
+          uploads a public log there.
         </WidgetEmpty>
       </Shell>
     );
@@ -121,6 +139,7 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
   if (deduped.length === 0) {
     return (
       <Shell tab={tab} setTab={setTab}>
+        {sourceNote}
         <WidgetEmpty>
           Reports found, but no raid-encounter pulls in the last 8 weeks.
         </WidgetEmpty>
@@ -214,6 +233,7 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <Shell tab={tab} setTab={setTab}>
       {pickers}
+      {sourceNote}
       {staleNote}
       {tab === "curve" ? (
         <CurveTab pulls={shownPulls} axis={axis} />
