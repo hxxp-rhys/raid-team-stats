@@ -646,6 +646,17 @@ export function ControlPanel({
             Dashboard Control Panel · {t.memberships.length} active member
             {t.memberships.length === 1 ? "" : "s"}
           </p>
+          <nav className="mt-2 flex items-center gap-1 text-sm">
+            <span className="border-primary bg-muted inline-flex h-8 items-center rounded-md border px-3 font-medium">
+              Dashboard
+            </span>
+            <Link
+              href={`/guild/${guildId}/team/${teamId}/calendar` as Route}
+              className="border-border bg-background hover:bg-muted inline-flex h-8 items-center rounded-md border px-3 font-medium"
+            >
+              Calendar
+            </Link>
+          </nav>
         </div>
         <div className="flex flex-col items-end gap-1.5 text-sm">
           <div className="flex flex-wrap items-center justify-end gap-2">

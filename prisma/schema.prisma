@@ -52,6 +52,7 @@ model User {
   raidTeamAdditions   RaidTeamMembership[] @relation("RaidTeamMemberAddedBy")
   dashboardsOwned     DashboardConfig[]    @relation("DashboardOwner")
   addonUploads        AddonUpload[]
+  eventSignups        EventSignup[]
 }
 
 model Account {
@@ -155,6 +156,11 @@ enum AuditEvent {
   SYNC_FAILED
   RATE_LIMIT_EXCEEDED
   AUTHZ_DENIED
+  CALENDAR_EVENT_CREATED
+  CALENDAR_EVENT_UPDATED
+  CALENDAR_EVENT_CANCELLED
+  CALENDAR_SIGNUP_CHANGED
+  CALENDAR_ROSTER_LOCKED
 }
 
 model AuditLog {
@@ -269,6 +275,7 @@ model Character {
   pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
   addonUpload        AddonUpload?
   wclReportActors    WclReportActor[]
+  eventSignups       EventSignup[]
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -374,6 +381,12 @@ model RaidTeam {
   wclGuildId   Int?
   wclGuildName String?
   lastRefreshAt   DateTime?
+  // Calendar: team home timezone (IANA, e.g. "Europe/London"). Series/events
+  // store wall-clock + this tz so a 19:00 raid stays 19:00 local across DST.
+  timezone     String?            @default("UTC")
+  // Optional saved comp target for the readiness meter, e.g.
+  //   { "tanks": 2, "healers": 5, "melee": 7, "ranged": 6 }
+  compTemplate Json?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
@@ -382,6 +395,8 @@ model RaidTeam {
   pendingLeader Character?           @relation("RaidTeamPendingLeader", fields: [pendingLeaderCharacterId], references: [id], onDelete: SetNull)
   memberships   RaidTeamMembership[]
   dashboards    DashboardConfig[]
+  raidEventSeries RaidEventSeries[]
+  raidEvents      RaidEvent[]
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
@@ -737,4 +752,177 @@ model DashboardConfig {
   @@index([raidTeamId])
   @@index([ownerUserId])
   @@index([pendingOwnerCharacterId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Raid Calendar & Attendance (design: docs/design/raid-calendar-attendance.md)
+// Website = single source of truth. Every mutation writes the authoritative row
+// AND a SyncOutbox row in ONE transaction; a worker fans changes out to the
+// website (poll/SSE), Discord, and the companion. Clients send INTENTS, the
+// server resolves and versions; LWW by server receipt (SyncOutbox.id order).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AttendanceState {
+  CONFIRM
+  TENTATIVE
+  LATE
+  ABSENT
+  // NO_RESPONSE is intentionally NOT a value — it is the absence of a row,
+  // derived against the active roster, never persisted per non-responder.
+}
+
+enum SignupSource {
+  WEBSITE
+  DISCORD
+  ADDON
+  LEADER // a leader set someone else's status on their behalf
+}
+
+enum RaidEventStatus {
+  PLANNED
+  LOCKED // roster locked / final selection made
+  CANCELLED
+}
+
+enum RosterSelection {
+  STARTER
+  BENCH
+  CUT
+}
+
+enum OutboxStatus {
+  PENDING
+  DISPATCHED
+}
+
+/// A recurring raid schedule (e.g. Tue/Wed 19:00). Stores LOCAL wall-clock +
+/// IANA timezone, never a fixed offset, so a 19:00 raid stays 19:00 local
+/// across DST. A daily materializer turns this into concrete RaidEvent rows for
+/// a rolling window.
+model RaidEventSeries {
+  id              String    @id @default(cuid())
+  raidTeamId      String
+  title           String
+  difficulty      String // "Mythic" | "Heroic" | "Normal" | "LFR"
+  byday           String[] // RFC5545 BYDAY, e.g. ["TU","WE"]
+  startLocal      String // wall-clock "19:00" in `timezone`
+  durationMin     Int
+  timezone        String // IANA, e.g. "Europe/London"
+  raidSize        Int?
+  notes           String?
+  startsOn        DateTime?
+  endsOn          DateTime? // null = open-ended; materializer caps to window
+  createdByUserId String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  raidTeam RaidTeam    @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  events   RaidEvent[]
+
+  @@index([raidTeamId, isActive])
+}
+
+/// A concrete raid occurrence — owns a stable id that signups, a Discord
+/// message id, an outbox stream and a version hang off.
+model RaidEvent {
+  id           String          @id @default(cuid())
+  raidTeamId   String
+  seriesId     String? // null = one-off
+  title        String
+  difficulty   String
+  raidSize     Int? // Mythic-Flex 15–25 (optional)
+  startsAt     DateTime        @db.Timestamptz(6) // resolved UTC instant (sort/display/conflict)
+  durationMin  Int
+  timezone     String // resolved-from tz (so DST changes can re-derive)
+  localTime    String // "19:00" wall-clock the occurrence was derived from
+  occurrenceDate String // "2026-06-16" local date — STABLE re-derive/materialize key
+  notes        String?
+  status       RaidEventStatus @default(PLANNED)
+  rosterLockedAt DateTime?
+  createdByUserId String?
+
+  // Per-surface delivery linkage (Discord edit-in-place; filled in Phase 2)
+  discordGuildId    String?
+  discordChannelId  String?
+  discordMessageId  String?
+  discordRepostLock String?
+
+  version   Int      @default(0) // monotonic per-event; bumped on any change
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  raidTeam RaidTeam         @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  series   RaidEventSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  signups  EventSignup[]
+
+  @@unique([seriesId, occurrenceDate]) // stable materialization key (NOT startsAt)
+  @@index([raidTeamId, startsAt])
+  @@index([startsAt])
+}
+
+/// One signup per (event, character). characterId is REQUIRED (default the
+/// caller's primary membership char) — no NULL hole, so dedup/idempotency hold.
+model EventSignup {
+  id              String           @id @default(cuid())
+  raidEventId     String
+  userId          String // resolved actor (always known)
+  characterId     String // REQUIRED
+  state           AttendanceState
+  etaMinutes      Int? // LATE
+  reason          String? // ABSENT/TENTATIVE optional reason
+  comment         String?
+  selection       RosterSelection? // leader final-pick (bench/lock)
+  source          SignupSource
+  updatedByUserId String? // self, or leader id if source=LEADER
+  version         Int              @default(0) // per-signup monotonic — THE CAS counter
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  event     RaidEvent @relation(fields: [raidEventId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([raidEventId, characterId])
+  @@index([raidEventId, state])
+  @@index([userId])
+}
+
+/// Append-only event log written in the SAME transaction as every mutation.
+/// id is the ordering AND the poll/SSE event id.
+model SyncOutbox {
+  id             BigInt       @id @default(autoincrement())
+  raidTeamId     String
+  raidEventId    String?
+  kind           String // "event.created"|"event.updated"|"event.cancelled"|"signup.changed"
+  payload        Json // full new authoritative state slice
+  version        Int // the event/signup version this carries
+  idempotencyKey String
+  status         OutboxStatus @default(PENDING)
+  createdAt      DateTime     @default(now())
+
+  @@index([status, id]) // relay drain
+  @@index([raidTeamId, id]) // per-team replay by cursor (poll + SSE)
+}
+
+/// Idempotency ledger — INSERT ... ON CONFLICT DO NOTHING; 0 rows ⇒ already
+/// applied ⇒ no new outbox row.
+model ProcessedIntent {
+  idempotencyKey String   @id // sha256(userId:eventId:clientActionId)
+  raidEventId    String?
+  userId         String?
+  version        Int?
+  processedAt    DateTime @default(now())
+}
+
+/// Per-consumer delivery cursor — ONLY for bounded consumers (discord,
+/// companion:<userId>). Browsers carry their cursor client-side (?since=).
+model DeliveryCursor {
+  id           String   @id @default(cuid())
+  consumer     String // "discord" | "companion:<userId>"
+  raidTeamId   String
+  lastOutboxId BigInt   @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([consumer, raidTeamId])
 }
