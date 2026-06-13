@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition, type CSSProperties } from "react";
 
 import {
@@ -35,7 +34,6 @@ export function ThemeSelector({
   current: Current;
   customPalette: CustomPalette;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [selected, setSelected] = useState<Current>(current);
   const [palette, setPalette] = useState<CustomPalette>(customPalette);
@@ -63,23 +61,23 @@ export function ThemeSelector({
 
   const applyBuiltin = (id: ThemeId) => {
     setSelected(id);
+    // Optimistic: paint the new theme synchronously in the click handler —
+    // the cookie write is for FUTURE loads and must never gate the visible
+    // change. Re-asserted after the action so the server round-trip (and
+    // its revalidation) can't end on a different state.
+    applyBuiltinToDom(id);
     startTransition(async () => {
       const r = await setThemeAction(id);
-      if (r.ok) {
-        applyBuiltinToDom(id);
-        router.refresh();
-      }
+      if (r.ok) applyBuiltinToDom(id);
     });
   };
 
   const applyCustom = () => {
     setSelected(CUSTOM_THEME);
+    applyCustomToDom(palette);
     startTransition(async () => {
       const r = await setCustomThemeAction(palette);
-      if (r.ok) {
-        applyCustomToDom(palette);
-        router.refresh();
-      }
+      if (r.ok) applyCustomToDom(palette);
     });
   };
 
