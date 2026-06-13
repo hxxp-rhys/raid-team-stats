@@ -7,6 +7,7 @@ import {
   assertRaidTeamRole,
 } from "@/server/api/trpc";
 import type { ExtendedPrismaClient } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { audit } from "@/server/security/audit";
 import { inferRole } from "@/lib/wow";
 import {
@@ -18,8 +19,23 @@ import {
 import {
   endInstant,
   isValidTimeZone,
+  localDateInTz,
   zonedWallClockToUtc,
 } from "@/lib/calendar/time";
+import {
+  enumerateOccurrences,
+  isValidByday,
+  type SeriesSpec,
+} from "@/lib/calendar/occurrence";
+import { reconcileSeries, type ReconcilePlan } from "@/lib/calendar/series";
+import {
+  MAX_LEAD_MINUTES,
+  parseReminderConfig,
+} from "@/lib/calendar/reminder-policy";
+import {
+  materializeSeries,
+  MATERIALIZE_HORIZON_DAYS,
+} from "@/server/calendar/materialize";
 import {
   appendOutbox,
   intentKey,
@@ -35,14 +51,15 @@ const HHMM = /^\d{1,2}:\d{2}$/;
 async function teamTz(
   db: ExtendedPrismaClient,
   raidTeamId: string,
-): Promise<{ timezone: string; compTemplate: unknown }> {
+): Promise<{ timezone: string; compTemplate: unknown; reminderConfig: unknown }> {
   const t = await db.raidTeam.findUnique({
     where: { id: raidTeamId },
-    select: { timezone: true, compTemplate: true },
+    select: { timezone: true, compTemplate: true, reminderConfig: true },
   });
   return {
     timezone: t?.timezone && isValidTimeZone(t.timezone) ? t.timezone : "UTC",
     compTemplate: t?.compTemplate ?? null,
+    reminderConfig: t?.reminderConfig ?? null,
   };
 }
 
@@ -108,13 +125,168 @@ function eventSummary(e: {
   };
 }
 
+const bydaySchema = z
+  .array(z.string())
+  .min(1)
+  .max(7)
+  .refine((arr) => arr.every(isValidByday), "invalid BYDAY token");
+
+const reminderConfigSchema = z.object({
+  enabled: z.boolean(),
+  // Capped at MAX_LEAD_MINUTES so every accepted value is within the reminder
+  // sweep's lookahead — a config the sweep could never deliver is unstorable.
+  leadMinutes: z.array(z.number().int().min(5).max(MAX_LEAD_MINUTES)).max(6),
+  nudgeMinutes: z.number().int().min(5).max(MAX_LEAD_MINUTES).nullable(),
+});
+
+/** Series fields the per-occurrence rows inherit (everything but the schedule). */
+type SeriesFields = {
+  id: string;
+  raidTeamId: string;
+  title: string;
+  difficulty: string;
+  raidSize: number | null;
+  durationMin: number;
+  notes: string | null;
+  createdByUserId: string | null;
+};
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "P2002"
+  );
+}
+
+/**
+ * Apply a reconcile plan (from `reconcileSeries`) to the database: create new
+ * occurrences, re-time/refresh kept ones, soft-cancel de-scheduled ones with
+ * signups, and hard-delete empty de-scheduled placeholders — each in its own
+ * transaction with an outbox row so browsers/consumers see every change.
+ */
+async function applySeriesPlan(
+  db: ExtendedPrismaClient,
+  series: SeriesFields,
+  plan: ReconcilePlan,
+): Promise<{ created: number; updated: number; cancelled: number; deleted: number }> {
+  let created = 0;
+  let updated = 0;
+  let cancelled = 0;
+  let deleted = 0;
+
+  for (const o of plan.toCreate) {
+    try {
+      await db.$transaction(async (tx) => {
+        const e = await tx.raidEvent.create({
+          data: {
+            raidTeamId: series.raidTeamId,
+            seriesId: series.id,
+            title: series.title,
+            difficulty: series.difficulty,
+            raidSize: series.raidSize,
+            startsAt: o.startsAt,
+            durationMin: series.durationMin,
+            timezone: o.timezone,
+            localTime: o.localTime,
+            occurrenceDate: o.occurrenceDate,
+            notes: series.notes,
+            createdByUserId: series.createdByUserId,
+          },
+          select: { id: true, version: true },
+        });
+        await appendOutbox(tx, {
+          raidTeamId: series.raidTeamId,
+          raidEventId: e.id,
+          kind: "event.created",
+          payload: { eventId: e.id, seriesId: series.id },
+          version: e.version,
+          idempotencyKey: serverActionKey(),
+        });
+      });
+      created++;
+    } catch (err) {
+      if (isUniqueViolation(err)) continue; // raced a sweep — fine
+      logger.warn({ err, seriesId: series.id }, "applySeriesPlan: create failed");
+    }
+  }
+
+  for (const u of plan.toUpdate) {
+    await db.$transaction(async (tx) => {
+      const e = await tx.raidEvent.update({
+        where: { id: u.id },
+        data: {
+          title: series.title,
+          difficulty: series.difficulty,
+          raidSize: series.raidSize,
+          notes: series.notes,
+          durationMin: series.durationMin,
+          timezone: u.occurrence.timezone,
+          localTime: u.occurrence.localTime,
+          startsAt: u.occurrence.startsAt,
+          version: { increment: 1 },
+        },
+        select: { version: true },
+      });
+      await appendOutbox(tx, {
+        raidTeamId: series.raidTeamId,
+        raidEventId: u.id,
+        kind: "event.updated",
+        payload: { eventId: u.id, seriesId: series.id },
+        version: e.version,
+        idempotencyKey: serverActionKey(),
+      });
+    });
+    updated++;
+  }
+
+  for (const id of plan.toCancel) {
+    await db.$transaction(async (tx) => {
+      const e = await tx.raidEvent.update({
+        where: { id },
+        data: { status: "CANCELLED", version: { increment: 1 } },
+        select: { version: true },
+      });
+      await appendOutbox(tx, {
+        raidTeamId: series.raidTeamId,
+        raidEventId: id,
+        kind: "event.cancelled",
+        payload: { eventId: id, seriesId: series.id },
+        version: e.version,
+        idempotencyKey: serverActionKey(),
+      });
+    });
+    cancelled++;
+  }
+
+  for (const id of plan.toDelete) {
+    await db.$transaction(async (tx) => {
+      await appendOutbox(tx, {
+        raidTeamId: series.raidTeamId,
+        raidEventId: id,
+        kind: "event.cancelled",
+        payload: { eventId: id, seriesId: series.id, deleted: true },
+        version: 0,
+        idempotencyKey: serverActionKey(),
+      });
+      await tx.raidEvent.delete({ where: { id } });
+    });
+    deleted++;
+  }
+
+  return { created, updated, cancelled, deleted };
+}
+
 export const calendarRouter = router({
   /** Team calendar settings + the caller's role (for gating the UI). */
   meta: protectedProcedure
     .input(z.object({ raidTeamId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
       await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
-      const { timezone, compTemplate } = await teamTz(ctx.db, input.raidTeamId);
+      const { timezone, compTemplate, reminderConfig } = await teamTz(
+        ctx.db,
+        input.raidTeamId,
+      );
       // Resolve the caller's max role on the team (for showing leader controls).
       let role: "MEMBER" | "CO_LEADER" | "LEADER" = "MEMBER";
       try {
@@ -128,7 +300,12 @@ export const calendarRouter = router({
           role = "MEMBER";
         }
       }
-      return { timezone, comp: parseComp(compTemplate), role };
+      return {
+        timezone,
+        comp: parseComp(compTemplate),
+        reminders: parseReminderConfig(reminderConfig),
+        role,
+      };
     }),
 
   /** Events overlapping [from, to] with the viewer's own state + readiness counts. */
@@ -322,9 +499,33 @@ export const calendarRouter = router({
       };
     }),
 
+  /** Active recurring series for a team (for the schedules manager). MEMBER. */
+  listSeries: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      const series = await ctx.db.raidEventSeries.findMany({
+        where: { raidTeamId: input.raidTeamId, isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          title: true,
+          difficulty: true,
+          raidSize: true,
+          byday: true,
+          startLocal: true,
+          durationMin: true,
+          timezone: true,
+          notes: true,
+          endsOn: true,
+        },
+      });
+      return { series };
+    }),
+
   // ─── Mutations ─────────────────────────────────────────────────────────
 
-  /** Create a one-off event (recurrence lands in Phase 1). CO_LEADER+. */
+  /** Create a one-off event. CO_LEADER+. (Recurring → createSeries.) */
   createEvent: protectedProcedure
     .input(
       z.object({
@@ -380,6 +581,281 @@ export const calendarRouter = router({
       return { id: event.id };
     }),
 
+  /**
+   * Create a recurring weekly series and immediately materialize the horizon.
+   * CO_LEADER+. `byday` = RFC5545 tokens (["TU","TH"]); times are wall-clock in
+   * the team timezone, so they stay put across DST.
+   */
+  createSeries: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        title: z.string().trim().min(1).max(120),
+        byday: bydaySchema,
+        startTime: z.string().regex(HHMM),
+        durationMin: z.number().int().min(15).max(720),
+        difficulty: difficultySchema,
+        raidSize: z.number().int().min(1).max(40).optional(),
+        notes: z.string().max(4000).optional(),
+        startDate: z.string().regex(ISO_DATE),
+        endDate: z.string().regex(ISO_DATE).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+      const { timezone } = await teamTz(ctx.db, input.raidTeamId);
+      if (input.endDate && input.endDate < input.startDate) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Series end date is before its start date.",
+        });
+      }
+      const startsOn = zonedWallClockToUtc(input.startDate, input.startTime, timezone);
+      const endsOn = input.endDate
+        ? zonedWallClockToUtc(input.endDate, input.startTime, timezone)
+        : null;
+
+      const series = await ctx.db.raidEventSeries.create({
+        data: {
+          raidTeamId: input.raidTeamId,
+          title: input.title,
+          difficulty: input.difficulty,
+          byday: input.byday.map((b) => b.toUpperCase()),
+          startLocal: input.startTime,
+          durationMin: input.durationMin,
+          timezone,
+          raidSize: input.raidSize ?? null,
+          notes: input.notes ?? null,
+          startsOn,
+          endsOn,
+          createdByUserId: ctx.session.user.id,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      const { created } = await materializeSeries(ctx.db, series.id);
+
+      await audit({
+        event: "CALENDAR_EVENT_CREATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidEventSeries",
+        subjectId: series.id,
+        metadata: {
+          raidTeamId: input.raidTeamId,
+          recurring: true,
+          byday: input.byday,
+          created,
+        },
+      });
+      return { seriesId: series.id, created };
+    }),
+
+  /**
+   * Edit a series and propagate to its FUTURE occurrences (past ones are never
+   * touched). Pinned/locked/cancelled occurrences are left alone; de-scheduled
+   * occurrences with signups are cancelled (history kept), empty ones deleted.
+   * CO_LEADER+.
+   */
+  updateSeries: protectedProcedure
+    .input(
+      z.object({
+        seriesId: z.string().cuid(),
+        title: z.string().trim().min(1).max(120).optional(),
+        byday: bydaySchema.optional(),
+        startTime: z.string().regex(HHMM).optional(),
+        durationMin: z.number().int().min(15).max(720).optional(),
+        difficulty: difficultySchema.optional(),
+        raidSize: z.number().int().min(1).max(40).nullable().optional(),
+        notes: z.string().max(4000).nullable().optional(),
+        endDate: z.string().regex(ISO_DATE).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing0 = await ctx.db.raidEventSeries.findUnique({
+        where: { id: input.seriesId },
+        select: {
+          raidTeamId: true,
+          startLocal: true,
+          timezone: true,
+          startsOn: true,
+          endsOn: true,
+        },
+      });
+      if (!existing0) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, existing0.raidTeamId, "CO_LEADER");
+
+      const tz = existing0.timezone;
+      const effectiveTime = input.startTime ?? existing0.startLocal;
+
+      const data: Record<string, unknown> = {};
+      if (input.title !== undefined) data.title = input.title;
+      if (input.difficulty !== undefined) data.difficulty = input.difficulty;
+      if (input.raidSize !== undefined) data.raidSize = input.raidSize;
+      if (input.notes !== undefined) data.notes = input.notes;
+      if (input.durationMin !== undefined) data.durationMin = input.durationMin;
+      if (input.byday !== undefined) data.byday = input.byday.map((b) => b.toUpperCase());
+      if (input.startTime !== undefined) data.startLocal = input.startTime;
+
+      // startsOn/endsOn are stored as the start *instant* of the first/last
+      // occurrence, so they're time-sensitive: a startTime change must re-derive
+      // both (at their same local dates) or enumerateOccurrences would wrongly
+      // drop the boundary occurrences. endDate also re-derives endsOn.
+      const startDateStr = existing0.startsOn
+        ? localDateInTz(existing0.startsOn, tz)
+        : null;
+      if (input.startTime !== undefined && startDateStr) {
+        data.startsOn = zonedWallClockToUtc(startDateStr, effectiveTime, tz);
+      }
+      if (input.endDate !== undefined || input.startTime !== undefined) {
+        const endDateStr =
+          input.endDate !== undefined
+            ? input.endDate
+            : existing0.endsOn
+              ? localDateInTz(existing0.endsOn, tz)
+              : null;
+        if (endDateStr) {
+          const endsOn = zonedWallClockToUtc(endDateStr, effectiveTime, tz);
+          // Guard (mirrors createSeries): an end before the start would make
+          // enumerateOccurrences return [] and silently wipe every occurrence.
+          const startBound = (data.startsOn as Date | undefined) ?? existing0.startsOn;
+          if (startBound && endsOn.getTime() < startBound.getTime()) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Series end date is before its start date.",
+            });
+          }
+          data.endsOn = endsOn;
+        } else if (input.endDate !== undefined) {
+          data.endsOn = null; // explicitly cleared → open-ended
+        }
+      }
+
+      const series = await ctx.db.raidEventSeries.update({
+        where: { id: input.seriesId },
+        data,
+        select: {
+          id: true,
+          raidTeamId: true,
+          title: true,
+          difficulty: true,
+          raidSize: true,
+          durationMin: true,
+          notes: true,
+          createdByUserId: true,
+          byday: true,
+          startLocal: true,
+          timezone: true,
+          startsOn: true,
+          endsOn: true,
+          isActive: true,
+        },
+      });
+
+      const now = new Date();
+      const horizonEnd = new Date(now.getTime() + MATERIALIZE_HORIZON_DAYS * 86_400_000);
+      const spec: SeriesSpec = {
+        byday: series.byday,
+        startLocal: series.startLocal,
+        timezone: series.timezone,
+        startsOn: series.startsOn,
+        endsOn: series.endsOn,
+      };
+      const desired = series.isActive ? enumerateOccurrences(spec, now, horizonEnd) : [];
+
+      const futureEvents = await ctx.db.raidEvent.findMany({
+        where: { seriesId: series.id, startsAt: { gte: now } },
+        select: {
+          id: true,
+          occurrenceDate: true,
+          seriesOverride: true,
+          status: true,
+          _count: { select: { signups: true } },
+        },
+      });
+      const plan = reconcileSeries(
+        desired,
+        futureEvents.map((e) => ({
+          id: e.id,
+          occurrenceDate: e.occurrenceDate,
+          seriesOverride: e.seriesOverride,
+          status: e.status,
+          signupCount: e._count.signups,
+        })),
+      );
+      const res = await applySeriesPlan(ctx.db, series, plan);
+
+      await audit({
+        event: "CALENDAR_EVENT_UPDATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidEventSeries",
+        subjectId: series.id,
+        metadata: { recurring: true, ...res },
+      });
+      return { ok: true, ...res };
+    }),
+
+  /**
+   * Stop a recurring series: deactivate it and clear its FUTURE occurrences
+   * (cancel ones with signups, delete empty placeholders; pinned/locked/
+   * already-cancelled left as-is). Past occurrences are preserved. LEADER+.
+   */
+  endSeries: protectedProcedure
+    .input(z.object({ seriesId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const series = await ctx.db.raidEventSeries.findUnique({
+        where: { id: input.seriesId },
+        select: {
+          id: true,
+          raidTeamId: true,
+          title: true,
+          difficulty: true,
+          raidSize: true,
+          durationMin: true,
+          notes: true,
+          createdByUserId: true,
+        },
+      });
+      if (!series) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, series.raidTeamId, "LEADER");
+
+      await ctx.db.raidEventSeries.update({
+        where: { id: input.seriesId },
+        data: { isActive: false },
+      });
+
+      const now = new Date();
+      const futureEvents = await ctx.db.raidEvent.findMany({
+        where: { seriesId: series.id, startsAt: { gte: now } },
+        select: {
+          id: true,
+          occurrenceDate: true,
+          seriesOverride: true,
+          status: true,
+          _count: { select: { signups: true } },
+        },
+      });
+      const plan = reconcileSeries(
+        [],
+        futureEvents.map((e) => ({
+          id: e.id,
+          occurrenceDate: e.occurrenceDate,
+          seriesOverride: e.seriesOverride,
+          status: e.status,
+          signupCount: e._count.signups,
+        })),
+      );
+      const res = await applySeriesPlan(ctx.db, series, plan);
+
+      await audit({
+        event: "CALENDAR_EVENT_CANCELLED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidEventSeries",
+        subjectId: series.id,
+        metadata: { ended: true, ...res },
+      });
+      return { ok: true, ...res };
+    }),
+
   /** Edit an event's fields. CO_LEADER+. */
   updateEvent: protectedProcedure
     .input(
@@ -399,6 +875,7 @@ export const calendarRouter = router({
         where: { id: input.eventId },
         select: {
           raidTeamId: true,
+          seriesId: true,
           timezone: true,
           occurrenceDate: true,
           localTime: true,
@@ -408,7 +885,26 @@ export const calendarRouter = router({
       if (!event) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, event.raidTeamId, "CO_LEADER");
 
+      // A recurring occurrence's DATE is fixed: moving it would vacate its
+      // (seriesId, occurrenceDate) slot, which the next materialize sweep would
+      // refill with a duplicate placeholder (and moving onto a sibling's date
+      // would hit the unique key). The time/title/etc. are still editable.
+      if (
+        event.seriesId &&
+        input.date !== undefined &&
+        input.date !== event.occurrenceDate
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "A recurring occurrence can't move to a different date — cancel it and add a one-off raid instead.",
+        });
+      }
+
       const data: Record<string, unknown> = {};
+      // Editing a single occurrence of a series PINS it: the materializer and
+      // future series-level edits must never overwrite this customized night.
+      if (event.seriesId) data.seriesOverride = true;
       if (input.title !== undefined) data.title = input.title;
       if (input.difficulty !== undefined) data.difficulty = input.difficulty;
       if (input.raidSize !== undefined) data.raidSize = input.raidSize;
@@ -456,7 +952,7 @@ export const calendarRouter = router({
     .mutation(async ({ ctx, input }) => {
       const event = await ctx.db.raidEvent.findUnique({
         where: { id: input.eventId },
-        select: { raidTeamId: true },
+        select: { raidTeamId: true, seriesId: true },
       });
       if (!event) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, event.raidTeamId, "LEADER");
@@ -464,7 +960,13 @@ export const calendarRouter = router({
       await ctx.db.$transaction(async (tx) => {
         const e = await tx.raidEvent.update({
           where: { id: input.eventId },
-          data: { status: "CANCELLED", version: { increment: 1 } },
+          data: {
+            status: "CANCELLED",
+            // Pin a cancelled series occurrence so the materializer never
+            // resurrects it and a series edit never re-times it.
+            ...(event.seriesId ? { seriesOverride: true } : {}),
+            version: { increment: 1 },
+          },
           select: { version: true },
         });
         await appendOutbox(tx, {
@@ -493,10 +995,20 @@ export const calendarRouter = router({
     .mutation(async ({ ctx, input }) => {
       const event = await ctx.db.raidEvent.findUnique({
         where: { id: input.eventId },
-        select: { raidTeamId: true },
+        select: { raidTeamId: true, seriesId: true },
       });
       if (!event) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, event.raidTeamId, "LEADER");
+      // A recurring occurrence can't be hard-deleted from here: the materializer
+      // would just recreate its (seriesId, occurrenceDate) slot. Cancel it
+      // instead (which pins it), or end the whole series.
+      if (event.seriesId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This is a recurring occurrence — cancel it instead of deleting, or edit the series.",
+        });
+      }
       // Outbox row first so a poller learns of the removal, then delete
       // (cascade removes signups). Both in one TX.
       await ctx.db.$transaction(async (tx) => {
@@ -790,7 +1302,7 @@ export const calendarRouter = router({
       return { ok: true };
     }),
 
-  /** Team calendar settings: home timezone + comp template. LEADER+. */
+  /** Team calendar settings: home timezone + comp template + reminders. LEADER+. */
   setSettings: protectedProcedure
     .input(
       z.object({
@@ -803,6 +1315,7 @@ export const calendarRouter = router({
             dps: z.number().int().min(0).max(40),
           })
           .optional(),
+        reminders: reminderConfigSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -815,7 +1328,20 @@ export const calendarRouter = router({
         data.timezone = input.timezone;
       }
       if (input.comp !== undefined) data.compTemplate = input.comp;
+      if (input.reminders !== undefined) {
+        // Normalize through the same parser the sweep uses (dedupe/sort leads).
+        data.reminderConfig = parseReminderConfig(input.reminders);
+      }
       await ctx.db.raidTeam.update({ where: { id: input.raidTeamId }, data });
+      // Audit the privileged config change (incl. who gets emailed + when),
+      // matching the audit convention of the other team-settings mutations.
+      await audit({
+        event: "RAID_TEAM_SETTINGS_UPDATED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: { changed: Object.keys(data) },
+      });
       return { ok: true };
     }),
 

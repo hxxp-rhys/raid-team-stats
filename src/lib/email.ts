@@ -147,3 +147,49 @@ export const sendPasswordResetEmail = async (
       `This link is valid for 1 hour. If you didn't request this, ignore the email.\n`,
   });
 };
+
+/**
+ * Raid auto-reminder. Two audiences: people who are GOING get a "raid soon"
+ * nudge; non-responders get a "please sign up" prompt. The exactly-once
+ * guarantee lives in the SentReminder ledger upstream — this only renders and
+ * sends. Times are formatted in the team's own timezone.
+ */
+export const sendRaidReminderEmail = async (args: {
+  to: string;
+  teamName: string;
+  title: string;
+  startsAt: Date;
+  timezone: string;
+  audience: "going" | "no-response";
+  eventUrl: string;
+}): Promise<void> => {
+  let whenLocal: string;
+  try {
+    whenLocal = new Intl.DateTimeFormat("en-GB", {
+      timeZone: args.timezone,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(args.startsAt);
+  } catch {
+    whenLocal = args.startsAt.toISOString();
+  }
+  const isNudge = args.audience === "no-response";
+  const subject = isNudge
+    ? `Please sign up: ${args.title} — ${args.teamName}`
+    : `Reminder: ${args.title} — ${whenLocal}`;
+  const lead = isNudge
+    ? `You haven't responded to an upcoming raid yet — let your team know if you can make it.`
+    : `This is a reminder for your upcoming raid.`;
+  await sendMail({
+    to: args.to,
+    subject,
+    text:
+      `${lead}\n\n` +
+      `${args.title} — ${args.teamName}\n` +
+      `When: ${whenLocal} (${args.timezone})\n\n` +
+      `Set your attendance here:\n${args.eventUrl}\n`,
+  });
+};

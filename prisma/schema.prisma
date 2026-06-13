@@ -387,6 +387,12 @@ model RaidTeam {
   // Optional saved comp target for the readiness meter, e.g.
   //   { "tanks": 2, "healers": 5, "melee": 7, "ranged": 6 }
   compTemplate Json?
+  // Calendar auto-reminders. JSON shape:
+  //   { "enabled": true, "leadMinutes": [1440, 60], "nudgeMinutes": 720 }
+  // leadMinutes = minutes-before-start to remind people who are GOING;
+  // nudgeMinutes = minutes-before to nudge members who haven't responded
+  // (null = no nudge). null column = defaults applied in code.
+  reminderConfig Json?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
@@ -840,6 +846,10 @@ model RaidEvent {
   notes        String?
   status       RaidEventStatus @default(PLANNED)
   rosterLockedAt DateTime?
+  // When true this occurrence was edited (or cancelled) for itself alone — the
+  // materializer and series-level edits MUST NOT overwrite or resurrect it.
+  // One-off events (seriesId = null) are unaffected by this flag.
+  seriesOverride Boolean        @default(false)
   createdByUserId String?
 
   // Per-surface delivery linkage (Discord edit-in-place; filled in Phase 2)
@@ -855,6 +865,7 @@ model RaidEvent {
   raidTeam RaidTeam         @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
   series   RaidEventSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   signups  EventSignup[]
+  reminders SentReminder[]
 
   @@unique([seriesId, occurrenceDate]) // stable materialization key (NOT startsAt)
   @@index([raidTeamId, startsAt])
@@ -925,4 +936,22 @@ model DeliveryCursor {
   updatedAt    DateTime @updatedAt
 
   @@unique([consumer, raidTeamId])
+}
+
+/// Exactly-once ledger for auto-reminder emails. The reminder sweep CLAIMS a
+/// row here (unique (event, kind, user)) BEFORE sending — so a reminder fires
+/// at most once per recipient even across worker restarts or replicas, with
+/// the DB constraint (not a lock) as the authority. `kind` is "lead:<minutes>"
+/// (sent to people who are going) or "nudge" (one no-response prompt/event).
+model SentReminder {
+  id          String   @id @default(cuid())
+  raidEventId String
+  kind        String
+  userId      String
+  sentAt      DateTime @default(now())
+
+  raidEvent RaidEvent @relation(fields: [raidEventId], references: [id], onDelete: Cascade)
+
+  @@unique([raidEventId, kind, userId])
+  @@index([raidEventId])
 }

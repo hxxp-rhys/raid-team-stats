@@ -10,6 +10,24 @@ import { Label } from "@/components/ui/label";
 
 type Difficulty = "Mythic" | "Heroic" | "Normal" | "LFR";
 
+const WEEKDAYS: { token: string; label: string }[] = [
+  { token: "MO", label: "Mon" },
+  { token: "TU", label: "Tue" },
+  { token: "WE", label: "Wed" },
+  { token: "TH", label: "Thu" },
+  { token: "FR", label: "Fri" },
+  { token: "SA", label: "Sat" },
+  { token: "SU", label: "Sun" },
+];
+
+/** BYDAY token for a "YYYY-MM-DD" string (used to preselect the repeat day). */
+function bydayOf(dateStr: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dow = new Date(Date.UTC(y!, m! - 1, d!)).getUTCDay(); // Sun=0
+  return ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][dow] ?? null;
+}
+
 type Initial = {
   title: string;
   date: string;
@@ -108,6 +126,7 @@ function Loader({
         raidTeamId={raidTeamId}
         timezone={timezone}
         editEventId={editEventId}
+        isSeriesMember={!!e.seriesId}
         initial={initial}
         onClose={onClose}
         onSaved={onSaved}
@@ -121,6 +140,7 @@ function Loader({
       raidTeamId={raidTeamId}
       timezone={timezone}
       editEventId={null}
+      isSeriesMember={false}
       initial={EMPTY}
       onClose={onClose}
       onSaved={onSaved}
@@ -133,6 +153,7 @@ function Fields({
   raidTeamId,
   timezone,
   editEventId,
+  isSeriesMember,
   initial,
   onClose,
   onSaved,
@@ -140,6 +161,7 @@ function Fields({
   raidTeamId: string;
   timezone: string;
   editEventId: string | null;
+  isSeriesMember: boolean;
   initial: Initial;
   onClose: () => void;
   onSaved: () => void;
@@ -151,10 +173,37 @@ function Fields({
   const [durationMin, setDurationMin] = useState(initial.durationMin);
   const [difficulty, setDifficulty] = useState<Difficulty>(initial.difficulty);
   const [notes, setNotes] = useState(initial.notes);
+  // Recurrence (create-only). Editing a single occurrence never recurs.
+  const [repeat, setRepeat] = useState(false);
+  const [byday, setByday] = useState<string[]>([]);
+  const [endDate, setEndDate] = useState("");
+
+  const toggleDay = (token: string) =>
+    setByday((cur) =>
+      cur.includes(token) ? cur.filter((t) => t !== token) : [...cur, token],
+    );
+  // First time the user turns on Repeat, preselect the chosen date's weekday.
+  const enableRepeat = (on: boolean) => {
+    setRepeat(on);
+    if (on && byday.length === 0) {
+      const d = bydayOf(date);
+      if (d) setByday([d]);
+    }
+  };
 
   const create = api.calendar.createEvent.useMutation({
     onSuccess: async () => {
       await utils.calendar.eventsInRange.invalidate({ raidTeamId });
+      onSaved();
+      onClose();
+    },
+  });
+  const createSeries = api.calendar.createSeries.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.calendar.eventsInRange.invalidate({ raidTeamId }),
+        utils.calendar.listSeries.invalidate({ raidTeamId }),
+      ]);
       onSaved();
       onClose();
     },
@@ -168,8 +217,16 @@ function Fields({
     },
   });
 
-  const pending = create.isPending || update.isPending;
-  const err = create.error ?? update.error;
+  const pending = create.isPending || update.isPending || createSeries.isPending;
+  const err = create.error ?? update.error ?? createSeries.error;
+  const recurring = !editEventId && repeat;
+  // For a recurring series, the "Until" date (if set) must be on/after the
+  // start date — otherwise the server rejects it after a round-trip.
+  const endBeforeStart = recurring && !!endDate && endDate < date;
+  const canSubmit =
+    !!title.trim() &&
+    !!date &&
+    (!recurring || (byday.length > 0 && !endBeforeStart));
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,6 +240,19 @@ function Fields({
         durationMin,
         difficulty,
         notes: notes.trim() || null,
+      });
+    } else if (recurring) {
+      if (byday.length === 0) return;
+      createSeries.mutate({
+        raidTeamId,
+        title: title.trim(),
+        byday,
+        startTime,
+        durationMin,
+        difficulty,
+        notes: notes.trim() || undefined,
+        startDate: date,
+        endDate: endDate || null,
       });
     } else {
       create.mutate({
@@ -212,8 +282,20 @@ function Fields({
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor="ev-date">Date</Label>
-          <Input id="ev-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+          <Label htmlFor="ev-date">{recurring ? "Start date" : "Date"}</Label>
+          <Input
+            id="ev-date"
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            disabled={isSeriesMember}
+            required
+          />
+          {isSeriesMember && (
+            <p className="text-muted-foreground text-xs">
+              Recurring occurrence — the date is fixed. Cancel it to reschedule.
+            </p>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="ev-time">Start ({timezone})</Label>
@@ -247,6 +329,74 @@ function Fields({
           </select>
         </div>
       </div>
+      {!editEventId && (
+        <div className="border-border space-y-2 rounded-md border p-3">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={repeat}
+              onChange={(e) => enableRepeat(e.target.checked)}
+              className="accent-primary h-4 w-4"
+            />
+            Repeat weekly
+          </label>
+          {repeat && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-1">
+                {WEEKDAYS.map((d) => {
+                  const on = byday.includes(d.token);
+                  return (
+                    <button
+                      key={d.token}
+                      type="button"
+                      onClick={() => toggleDay(d.token)}
+                      aria-pressed={on}
+                      className={
+                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors " +
+                        (on
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-muted")
+                      }
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="ev-until" className="text-xs">
+                  Until (optional)
+                </Label>
+                <Input
+                  id="ev-until"
+                  type="date"
+                  value={endDate}
+                  min={date || undefined}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="h-8 w-auto"
+                />
+                {endDate && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground text-xs underline"
+                    onClick={() => setEndDate("")}
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+              {byday.length === 0 && (
+                <p className="text-amber-500 text-xs">Pick at least one weekday.</p>
+              )}
+              {endBeforeStart && (
+                <p className="text-amber-500 text-xs">
+                  “Until” must be on or after the start date.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="ev-notes">Notes (optional)</Label>
         <textarea
@@ -264,8 +414,14 @@ function Fields({
         <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending || !title.trim() || !date}>
-          {pending ? "Saving…" : editEventId ? "Save changes" : "Schedule raid"}
+        <Button type="submit" disabled={pending || !canSubmit}>
+          {pending
+            ? "Saving…"
+            : editEventId
+              ? "Save changes"
+              : recurring
+                ? "Create schedule"
+                : "Schedule raid"}
         </Button>
       </div>
     </form>

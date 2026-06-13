@@ -33,6 +33,10 @@ import {
   type GuildReportSyncPayload,
 } from "@/server/ingestion/jobs/guild-report-sync";
 import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-sweeper";
+import {
+  runCalendarMaterializeSweep,
+  runCalendarReminderSweep,
+} from "@/server/ingestion/jobs/calendar-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
 const workers: Worker[] = [];
@@ -172,6 +176,26 @@ const start = async () => {
         }
       })
       .catch((err) => logger.warn({ err }, "team schedule sweep failed"));
+  }, 5 * 60_000);
+
+  // Calendar recurrence: roll active series forward into concrete events. Runs
+  // at startup (fills any series created while the worker was down) and every
+  // 30 minutes thereafter. Idempotent via the (seriesId, occurrenceDate) key.
+  void runCalendarMaterializeSweep().catch((err) =>
+    logger.warn({ err }, "calendar materialize sweep failed (startup)"),
+  );
+  setInterval(() => {
+    void runCalendarMaterializeSweep().catch((err) =>
+      logger.warn({ err }, "calendar materialize sweep failed"),
+    );
+  }, 30 * 60_000);
+
+  // Calendar reminders: send the lead-time + no-response reminders that just
+  // came due. Every 5 minutes — exactly-once via the SentReminder ledger.
+  setInterval(() => {
+    void runCalendarReminderSweep().catch((err) =>
+      logger.warn({ err }, "calendar reminder sweep failed"),
+    );
   }, 5 * 60_000);
 
   // QueueEvents emits completed/failed across the cluster — count + measure.

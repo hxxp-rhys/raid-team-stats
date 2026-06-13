@@ -11,6 +11,7 @@ import { useCalendarSync } from "./use-calendar-sync";
 import { EventDetailModal } from "./event-detail-modal";
 import { EventFormModal } from "./event-form-modal";
 import { SettingsModal } from "./settings-modal";
+import { SeriesManagerModal } from "./series-manager-modal";
 import { STATE_META, StatusControl } from "./parts";
 import type { AttendanceState } from "@/lib/calendar/roster";
 
@@ -24,18 +25,22 @@ const DIFF_COLOR: Record<string, string> = {
 export function CalendarPanel({
   guildId,
   teamId,
+  initialEventId = null,
 }: {
   guildId: string;
   teamId: string;
+  initialEventId?: string | null;
 }) {
   useCalendarSync(teamId);
   const team = api.raidTeam.get.useQuery({ raidTeamId: teamId });
   const meta = api.calendar.meta.useQuery({ raidTeamId: teamId });
   const [view, setView] = useState<"agenda" | "month">("agenda");
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // Deep link from a reminder email: ?event=<id> opens that event on mount.
+  const [detailId, setDetailId] = useState<string | null>(initialEventId);
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [seriesOpen, setSeriesOpen] = useState(false);
 
   const canManage = meta.data?.role === "CO_LEADER" || meta.data?.role === "LEADER";
   const canLead = meta.data?.role === "LEADER";
@@ -102,6 +107,11 @@ export function CalendarPanel({
               times in {meta.data.timezone}
             </span>
           )}
+          {canManage && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setSeriesOpen(true)}>
+              ↻ Recurring
+            </Button>
+          )}
           {canLead && (
             <Button type="button" size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>
               Settings
@@ -140,7 +150,22 @@ export function CalendarPanel({
         raidTeamId={teamId}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        current={meta.data ? { timezone: meta.data.timezone, comp: meta.data.comp } : null}
+        current={
+          meta.data
+            ? {
+                timezone: meta.data.timezone,
+                comp: meta.data.comp,
+                reminders: meta.data.reminders,
+              }
+            : null
+        }
+      />
+      <SeriesManagerModal
+        raidTeamId={teamId}
+        timezone={meta.data?.timezone ?? "UTC"}
+        canLead={canLead}
+        open={seriesOpen}
+        onClose={() => setSeriesOpen(false)}
       />
     </main>
   );
@@ -185,6 +210,9 @@ function AgendaView({
             <button type="button" className="text-left" onClick={() => onOpen(e.id)}>
               <p className={cn("font-medium", e.status === "CANCELLED" && "line-through")}>
                 {e.title}
+                {e.seriesId && (
+                  <span className="text-muted-foreground" title="Recurring"> ↻</span>
+                )}
                 {e.status === "LOCKED" && <span className="text-amber-500"> 🔒</span>}
                 {e.status === "CANCELLED" && <span className="text-destructive text-xs"> · cancelled</span>}
               </p>

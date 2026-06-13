@@ -94,6 +94,14 @@ function Body({
             {event.difficulty}
             {event.raidSize ? ` · ${event.raidSize}` : ""}
           </span>
+          {event.seriesId && (
+            <span
+              className="border-border text-muted-foreground rounded border px-1.5 py-0.5 text-xs"
+              title="Part of a recurring schedule"
+            >
+              ↻ Recurring
+            </span>
+          )}
           {cancelled && (
             <span className="text-destructive text-xs font-medium">CANCELLED</span>
           )}
@@ -134,10 +142,15 @@ function Body({
 
       {/* Leader controls */}
       {canLead && !cancelled && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={() => onEdit(eventId)}>
             Edit
           </Button>
+          {event.seriesId && (
+            <span className="text-muted-foreground text-xs">
+              edits this occurrence only — use ↻ Recurring to change the series
+            </span>
+          )}
           <Button
             type="button"
             size="sm"
