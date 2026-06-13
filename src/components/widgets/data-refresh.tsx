@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/trpc-client";
@@ -75,6 +76,8 @@ function formatCountdown(ms: number): string {
 export function DataRefreshWidget({ raidTeamId }: { raidTeamId: string }) {
   const settings = api.raidTeam.refreshSettings.useQuery({ raidTeamId });
   const utils = api.useUtils();
+  const { status: sessionStatus } = useSession();
+  const isAuthed = sessionStatus === "authenticated";
 
   // Baseline + total for the in-flight refresh. Set only on a successful
   // trigger that actually enqueued work; cleared on no-op/rate-limit.
@@ -160,15 +163,20 @@ export function DataRefreshWidget({ raidTeamId }: { raidTeamId: string }) {
           </div>
         )}
 
-        <div className="pt-1">
-          <Button
-            size="sm"
-            disabled={trigger.isPending}
-            onClick={() => trigger.mutate({ raidTeamId })}
-          >
-            {trigger.isPending ? "Queueing…" : "Refresh now"}
-          </Button>
-        </div>
+        {/* Anonymous public-share viewers can SEE the schedule but never
+            trigger (the mutation is session-gated server-side anyway —
+            hiding the button just spares them a guaranteed error). */}
+        {isAuthed && (
+          <div className="pt-1">
+            <Button
+              size="sm"
+              disabled={trigger.isPending}
+              onClick={() => trigger.mutate({ raidTeamId })}
+            >
+              {trigger.isPending ? "Queueing…" : "Refresh now"}
+            </Button>
+          </div>
+        )}
 
         {trigger.data?.ok && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">

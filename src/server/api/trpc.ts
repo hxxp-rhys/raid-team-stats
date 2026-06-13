@@ -15,6 +15,14 @@ export type TrpcContext = {
   ip: string | null;
   userAgent: string | null;
   origin: string | null;
+  /**
+   * Signed dashboard share token forwarded by the /share/[token] page via
+   * the x-share-token request header. Grants READ-ONLY access to the
+   * token's raid team — and only when that dashboard is flagged
+   * shareIsPublic — via assertTeamReadAccess. Never consulted by
+   * mutations or assertRaidTeamRole.
+   */
+  shareToken: string | null;
 };
 
 /**
@@ -37,6 +45,7 @@ export const createContext = async (): Promise<TrpcContext> => {
       null,
     userAgent: h.get("user-agent"),
     origin: h.get("origin"),
+    shareToken: h.get("x-share-token"),
   };
 };
 
@@ -281,4 +290,54 @@ export async function assertRaidTeamRole(
     throw new TRPCError({ code: "FORBIDDEN" });
   }
   return { guildId: team.guildId };
+}
+
+/**
+ * READ access to a raid team's data — and nothing more. Two grants:
+ *   1. A signed-in caller with MEMBER access (assertRaidTeamRole).
+ *   2. An anonymous caller carrying a valid share token (x-share-token
+ *      header) whose dashboard (a) belongs to THIS team and (b) is flagged
+ *      shareIsPublic by its owners.
+ * Used ONLY by read-only widget/data queries. Mutations must keep calling
+ * assertRaidTeamRole — the token path here can never write, refresh, or
+ * see any team other than the one its dashboard belongs to, and flipping
+ * shareIsPublic off re-locks every outstanding link at the next request.
+ */
+export async function assertTeamReadAccess(
+  ctx: TrpcContext,
+  raidTeamId: string,
+): Promise<{ guildId: string }> {
+  if (ctx.session?.user?.id) {
+    try {
+      return await assertRaidTeamRole(ctx, raidTeamId, "MEMBER");
+    } catch (err) {
+      // A signed-in user who is NOT a member can still view a PUBLIC
+      // share like anyone else — fall through to the token grant. Without
+      // this, being logged in would paradoxically grant LESS than
+      // incognito on a public dashboard.
+      if (!ctx.shareToken) throw err;
+    }
+  }
+
+  if (ctx.shareToken) {
+    const { verifyShareToken } = await import(
+      "@/server/security/share-token"
+    );
+    const verified = verifyShareToken(ctx.shareToken);
+    if (verified && verified.raidTeamId === raidTeamId) {
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: verified.dashboardId },
+        select: { raidTeamId: true, shareIsPublic: true },
+      });
+      if (dashboard?.raidTeamId === raidTeamId && dashboard.shareIsPublic) {
+        const team = await ctx.db.raidTeam.findUnique({
+          where: { id: raidTeamId },
+          select: { guildId: true },
+        });
+        if (team) return { guildId: team.guildId };
+      }
+    }
+  }
+
+  throw new TRPCError({ code: "UNAUTHORIZED" });
 }

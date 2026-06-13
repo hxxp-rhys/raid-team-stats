@@ -3,8 +3,8 @@ import { z } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import {
   router,
-  protectedProcedure,
-  assertRaidTeamRole,
+  publicProcedure,
+  assertTeamReadAccess,
 } from "@/server/api/trpc";
 import {
   absenceSignal,
@@ -279,11 +279,11 @@ export const snapshotRouter = router({
    * Most-recent snapshot of each kind for every active member of the given
    * raid team. Returns at most one row per (characterId, source) pair.
    */
-  latestForTeam: protectedProcedure
+  latestForTeam: publicProcedure
     .input(z.object({ raidTeamId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
       // Any team member or guild OWNER/OFFICER may read.
-      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      await assertTeamReadAccess(ctx, input.raidTeamId);
 
       const memberships = await ctx.db.raidTeamMembership.findMany({
         where: { raidTeamId: input.raidTeamId, isActive: true },
@@ -500,7 +500,7 @@ export const snapshotRouter = router({
    * character-timeline widget. Caller must be a member (or guild staff) of
    * a raid team the character is on.
    */
-  characterTimeline: protectedProcedure
+  characterTimeline: publicProcedure
     .input(
       z.object({
         characterId: z.string().cuid(),
@@ -508,24 +508,59 @@ export const snapshotRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      // Authorize via team membership: any team the character is on grants
-      // access. assertRaidTeamRole on every team is overkill — we just check
-      // there's *some* shared team the caller can read.
-      const sharedMembership = await ctx.db.raidTeamMembership.findFirst({
-        where: {
-          characterId: input.characterId,
-          isActive: true,
-          raidTeam: {
-            OR: [
-              { memberships: { some: { character: { userId: ctx.session.user.id }, isActive: true } } },
-              { guild: { memberships: { some: { userId: ctx.session.user.id, status: "ACTIVE", role: { in: ["OWNER", "OFFICER"] } } } } },
-            ],
+      const empty = {
+        points: [] as Array<{ at: Date; itemLevel: number | null }>,
+      };
+      const userId = ctx.session?.user?.id;
+      let memberAccess = false;
+      if (userId) {
+        // Authorize via team membership: any team the character is on grants
+        // access — we just check there's *some* shared team the caller can
+        // read.
+        const sharedMembership = await ctx.db.raidTeamMembership.findFirst({
+          where: {
+            characterId: input.characterId,
+            isActive: true,
+            raidTeam: {
+              OR: [
+                { memberships: { some: { character: { userId }, isActive: true } } },
+                { guild: { memberships: { some: { userId, status: "ACTIVE", role: { in: ["OWNER", "OFFICER"] } } } } },
+              ],
+            },
           },
-        },
-        select: { id: true },
-      });
-      if (!sharedMembership) {
-        return { points: [] as Array<{ at: Date; itemLevel: number | null }> };
+          select: { id: true },
+        });
+        memberAccess = sharedMembership != null;
+        // A signed-in NON-member can still hold a public share link — fall
+        // through to the token grant (matching assertTeamReadAccess: being
+        // logged in must never grant LESS than incognito).
+        if (!memberAccess && !ctx.shareToken) return empty;
+      }
+      if (!memberAccess) {
+        // Anonymous public-share viewer: the share token's team must be one
+        // the character is actively on, and the dashboard must be public —
+        // both enforced by assertTeamReadAccess on the token's team.
+        const { verifyShareToken } = await import(
+          "@/server/security/share-token"
+        );
+        const verified = ctx.shareToken
+          ? verifyShareToken(ctx.shareToken)
+          : null;
+        if (!verified) return empty;
+        const onTokenTeam = await ctx.db.raidTeamMembership.findFirst({
+          where: {
+            characterId: input.characterId,
+            isActive: true,
+            raidTeamId: verified.raidTeamId,
+          },
+          select: { id: true },
+        });
+        if (!onTokenTeam) return empty;
+        try {
+          await assertTeamReadAccess(ctx, verified.raidTeamId);
+        } catch {
+          return empty;
+        }
       }
 
       const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
@@ -556,7 +591,7 @@ export const snapshotRouter = router({
    * tank rows are flagged via spec-name role so the UI footnotes instead
    * of ranking them.
    */
-  parseConsistency: protectedProcedure
+  parseConsistency: publicProcedure
     .input(
       z.object({
         raidTeamId: z.string().cuid(),
@@ -569,7 +604,7 @@ export const snapshotRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      await assertTeamReadAccess(ctx, input.raidTeamId);
 
       const memberships = await ctx.db.raidTeamMembership.findMany({
         where: { raidTeamId: input.raidTeamId, isActive: true },
@@ -850,14 +885,10 @@ export const snapshotRouter = router({
    * throwaway filtering, night clustering, and trend math live client-side
    * in src/lib/prog-curve.ts so axis/filter toggles don't refetch.
    */
-  progressionPulls: protectedProcedure
+  progressionPulls: publicProcedure
     .input(z.object({ raidTeamId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
-      const { guildId } = await assertRaidTeamRole(
-        ctx,
-        input.raidTeamId,
-        "MEMBER",
-      );
+      const { guildId } = await assertTeamReadAccess(ctx, input.raidTeamId);
 
       // The team's effective log source: its override, else the guild's
       // resolved WCL guild. Every widget on a team dashboard reads exactly
@@ -1057,7 +1088,7 @@ export const snapshotRouter = router({
    * baselines; a member is watchlisted only when ≥2 independent signals
    * agree. This widget measures activity, not raid attendance.
    */
-  engagementPulse: protectedProcedure
+  engagementPulse: publicProcedure
     .input(
       z.object({
         raidTeamId: z.string().cuid(),
@@ -1065,11 +1096,7 @@ export const snapshotRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { guildId } = await assertRaidTeamRole(
-        ctx,
-        input.raidTeamId,
-        "MEMBER",
-      );
+      const { guildId } = await assertTeamReadAccess(ctx, input.raidTeamId);
 
       const memberships = await ctx.db.raidTeamMembership.findMany({
         where: { raidTeamId: input.raidTeamId, isActive: true },

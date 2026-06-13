@@ -9,25 +9,32 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { api } from "@/lib/trpc-client";
+import { setShareTokenHeader } from "@/lib/share-token-header";
 import {
   DESKTOP_GRID_COLS,
   ROW_HEIGHT_PX,
   parseLayout,
   resolveDefaultTabId,
 } from "@/lib/widgets/types";
+import {
+  sortForMobileStack,
+  useIsMobile,
+} from "@/lib/widgets/use-is-mobile";
 import { isLightTheme, isValidTheme } from "@/lib/theme";
 import { WidgetCell } from "@/app/(app)/guild/[guildId]/team/[teamId]/widget-cell";
 
 type Params = Promise<{ token: string }>;
 
 /**
- * Public-by-URL dashboard view. Auth.js still gates the page — anonymous
- * visitors are bounced to /signin. After sign-in, the server-side
- * resolver verifies the token's signature AND that the caller is an
- * active guild member. Non-members get a generic "not found" message.
+ * Share-link dashboard view. The server-side resolver verifies the token's
+ * signature; access is then EITHER a signed-in guild member OR — when the
+ * dashboard's owners flipped "publicly viewable" on — anyone holding the
+ * link (read-only; the token rides every data request as x-share-token).
  *
- * Renders with the SAME grid + WidgetCell (read-only) the control panel
+ * Desktop renders the SAME grid + WidgetCell (read-only) the control panel
  * uses, so the shared layout is pixel-identical to what the editor saved.
+ * Phone-sized viewports render the dashboard's mobile layout (or a derived
+ * single-column stack when none was authored).
  */
 export default function ShareViewPage({ params }: { params: Params }) {
   return (
@@ -45,9 +52,19 @@ export default function ShareViewPage({ params }: { params: Params }) {
 
 function Inner({ params }: { params: Params }) {
   const { token } = use(params);
+  // Park the token for the tRPC client BEFORE any query fires, so an
+  // anonymous public-share viewer's data requests carry x-share-token.
+  // A module-var write during render is idempotent; cleared on unmount.
+  setShareTokenHeader(token);
+  useEffect(() => {
+    setShareTokenHeader(token);
+    return () => setShareTokenHeader(null);
+  }, [token]);
+
   const q = api.dashboard.getByShareToken.useQuery({ token });
   // Hooks must run on every render path — keep above early returns.
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const isMobile = useIsMobile();
 
   // Dashboard-exclusive theme: if the owner set one, apply it to <html> for
   // the duration of this shared view, then restore the visitor's own theme
@@ -92,10 +109,17 @@ function Inner({ params }: { params: Params }) {
 
   const { dashboard, expiresAt } = q.data;
   const layout = parseLayout(dashboard.layout);
-  const totalWidgets = layout.tabs.reduce((s, t) => s + t.widgets.length, 0);
+  // Phone-sized viewports get the dashboard's mobile layout when one was
+  // authored; otherwise the desktop tabs render as a derived single-column
+  // stack. Desktop keeps the authored grid.
+  const tabsArr =
+    isMobile && layout.mobileTabs && layout.mobileTabs.length > 0
+      ? layout.mobileTabs
+      : layout.tabs;
+  const totalWidgets = tabsArr.reduce((s, t) => s + t.widgets.length, 0);
   const selectedTabId = activeTabId ?? resolveDefaultTabId(layout);
   const activeTab =
-    layout.tabs.find((t) => t.id === selectedTabId) ?? layout.tabs[0];
+    tabsArr.find((t) => t.id === selectedTabId) ?? tabsArr[0];
   const expires = new Date(expiresAt);
 
   return (
@@ -115,10 +139,10 @@ function Inner({ params }: { params: Params }) {
         </p>
       </header>
 
-      {layout.tabs.length > 1 && (
+      {tabsArr.length > 1 && (
         <div className="border-b border-border" role="tablist">
           <div className="flex flex-wrap gap-1">
-            {layout.tabs.map((t) => {
+            {tabsArr.map((t) => {
               const isActive = t.id === activeTab?.id;
               return (
                 <button
@@ -147,6 +171,19 @@ function Inner({ params }: { params: Params }) {
             <CardTitle>This dashboard is empty</CardTitle>
           </CardHeader>
         </Card>
+      ) : isMobile ? (
+        <div className="space-y-2">
+          {sortForMobileStack(activeTab?.widgets ?? []).map((w) => (
+            <WidgetCell
+              key={w.id}
+              widget={w}
+              raidTeamId={dashboard.raidTeamId}
+              editing={false}
+              isMobile
+              stacked
+            />
+          ))}
+        </div>
       ) : (
         <div
           className="grid gap-2"

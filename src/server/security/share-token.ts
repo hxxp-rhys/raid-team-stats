@@ -14,15 +14,19 @@ import { env } from "@/env";
  * All bytes are base64url (no padding). Signature comparison is
  * timing-safe. Tokens are stateless — there's no database row — so
  * revoking a single share link means rotating AUTH_SECRET (which would
- * invalidate every existing token and signed session). For per-link
- * revocation we'd add a tokens table; for v1, stateless is the right
- * trade-off because share links are short-lived and the visibility
- * permission is enforced at resolve time (guild membership check).
+ * invalidate every existing token and signed session). Per-dashboard
+ * revocation exists via DashboardConfig.shareIsPublic (and link expiry).
  *
- * Crucially: a valid token alone does NOT grant access. The resolver
- * still asserts the caller is an active guild member of the dashboard's
- * raid team's guild. Tokens are a *capability hint* for the URL, not a
- * bypass of authorization.
+ * TWO-MODE AUTHORIZATION (checked fresh on every request, never cached):
+ *  - Dashboard PRIVATE (shareIsPublic=false, the default): a valid token
+ *    is only a routing capability — the caller must still be a signed-in
+ *    active member of the dashboard's team.
+ *  - Dashboard PUBLIC (shareIsPublic=true): a valid token IS a bearer
+ *    READ capability for that dashboard's team — assertTeamReadAccess
+ *    accepts it (x-share-token header) for the read-only widget queries,
+ *    pinned to exactly the token's raidTeamId. It never authorizes any
+ *    mutation. Flipping shareIsPublic off re-locks every outstanding
+ *    link at the next request.
  */
 
 const VERSION = "v1";

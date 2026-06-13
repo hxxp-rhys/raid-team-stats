@@ -22,6 +22,10 @@ import {
 } from "@/lib/widgets/types";
 import { findCollider } from "@/lib/widgets/collision";
 import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
+import {
+  sortForMobileStack,
+  useIsMobile,
+} from "@/lib/widgets/use-is-mobile";
 import { isLightTheme, isValidTheme, THEME_IDS, THEME_META } from "@/lib/theme";
 import {
   useRefreshInterval,
@@ -203,6 +207,11 @@ export function ControlPanel({
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [activeTabId, setActiveTabId] = useState<string>("overview");
   const [mobile, setMobile] = useState(false);
+  // Real phones always get the mobile layout — the header toggle is a
+  // desktop PREVIEW of it. All layout reads/writes branch on mobileMode so
+  // a phone user editing affects the mobile layout, never the desktop one.
+  const isSmallScreen = useIsMobile();
+  const mobileMode = mobile || isSmallScreen;
   // `Date.now()` is impure in render — capture once at mount so the
   // "Last refresh" relative label stays pure (react-hooks/purity).
   const [nowMs] = useState(() => Date.now());
@@ -256,10 +265,10 @@ export function ControlPanel({
   // it doesn't exist yet, materialize an empty parallel set on first write.
   const currentTabs: DashboardTab[] = useMemo(() => {
     if (!layout) return [];
-    if (mobile && layout.mobileTabs && layout.mobileTabs.length > 0) {
+    if (mobileMode && layout.mobileTabs && layout.mobileTabs.length > 0) {
       return layout.mobileTabs;
     }
-    if (mobile) {
+    if (mobileMode) {
       // No mobile layout yet — derive read-only preview from desktop tabs
       // with widgets full-mobile-width.
       return layout.tabs.map((t) => ({
@@ -271,7 +280,7 @@ export function ControlPanel({
       }));
     }
     return layout.tabs;
-  }, [layout, mobile]);
+  }, [layout, mobileMode]);
   const activeTab = currentTabs.find((t) => t.id === activeTabId);
 
   // Returning the input `l` from the mutator signals "no change" — skip the
@@ -299,7 +308,7 @@ export function ControlPanel({
   const updateCurrentTab = useCallback(
     (fn: (t: DashboardTab) => DashboardTab) => {
       writeLayout((l) => {
-        if (mobile) {
+        if (mobileMode) {
           // Ensure mobileTabs is materialised before mutation; copy desktop
           // layout as a starting point so the user has something to edit.
           const base =
@@ -333,7 +342,7 @@ export function ControlPanel({
         return { ...l, tabs: nextTabs };
       });
     },
-    [writeLayout, mobile, activeTabId],
+    [writeLayout, mobileMode, activeTabId],
   );
 
   // ─── Tab actions ─────────────────────────────────────────────────────────
@@ -347,7 +356,7 @@ export function ControlPanel({
       widgets: [],
     };
     writeLayout((l) => {
-      if (mobile) {
+      if (mobileMode) {
         const base = l.mobileTabs ?? l.tabs;
         return { ...l, mobileTabs: [...base, blank] };
       }
@@ -358,9 +367,9 @@ export function ControlPanel({
 
   const renameTab = (id: string, name: string) =>
     writeLayout((l) => {
-      const arr = mobile ? (l.mobileTabs ?? l.tabs) : l.tabs;
+      const arr = mobileMode ? (l.mobileTabs ?? l.tabs) : l.tabs;
       const updated = arr.map((t) => (t.id === id ? { ...t, name } : t));
-      return mobile ? { ...l, mobileTabs: updated } : { ...l, tabs: updated };
+      return mobileMode ? { ...l, mobileTabs: updated } : { ...l, tabs: updated };
     });
 
   const setDefaultTab = (id: string) =>
@@ -368,7 +377,7 @@ export function ControlPanel({
 
   const duplicateTab = (id: string) =>
     writeLayout((l) => {
-      const arr = mobile ? (l.mobileTabs ?? l.tabs) : l.tabs;
+      const arr = mobileMode ? (l.mobileTabs ?? l.tabs) : l.tabs;
       const src = arr.find((t) => t.id === id);
       if (!src) return l;
       const copy: DashboardTab = {
@@ -379,12 +388,12 @@ export function ControlPanel({
       const idx = arr.findIndex((t) => t.id === id);
       const next = [...arr.slice(0, idx + 1), copy, ...arr.slice(idx + 1)];
       setActiveTabId(copy.id);
-      return mobile ? { ...l, mobileTabs: next } : { ...l, tabs: next };
+      return mobileMode ? { ...l, mobileTabs: next } : { ...l, tabs: next };
     });
 
   const closeTab = (id: string) => {
     if (!layout) return;
-    const arr = mobile ? (layout.mobileTabs ?? layout.tabs) : layout.tabs;
+    const arr = mobileMode ? (layout.mobileTabs ?? layout.tabs) : layout.tabs;
     if (arr.length === 1) {
       window.alert("A dashboard needs at least one tab.");
       return;
@@ -402,7 +411,7 @@ export function ControlPanel({
       return;
     }
     writeLayout((l) => {
-      const sourceArr = mobile ? (l.mobileTabs ?? l.tabs) : l.tabs;
+      const sourceArr = mobileMode ? (l.mobileTabs ?? l.tabs) : l.tabs;
       const next = sourceArr.filter((t) => t.id !== id);
       if (activeTabId === id) {
         const fallback = next[0]?.id;
@@ -410,7 +419,7 @@ export function ControlPanel({
       }
       // Clear defaultTabId pointer if it referenced the removed tab.
       const nextDefault = l.defaultTabId === id ? next[0]?.id : l.defaultTabId;
-      return mobile
+      return mobileMode
         ? { ...l, mobileTabs: next, defaultTabId: nextDefault }
         : { ...l, tabs: next, defaultTabId: nextDefault };
     });
@@ -423,7 +432,7 @@ export function ControlPanel({
     const inst: WidgetInstance = {
       id: newId(),
       type,
-      cols: mobile ? MOBILE_GRID_COLS : recommended.cols,
+      cols: mobileMode ? MOBILE_GRID_COLS : recommended.cols,
       rows: recommended.rows,
     };
     updateCurrentTab((t) => ({ ...t, widgets: [...t.widgets, inst] }));
@@ -434,6 +443,28 @@ export function ControlPanel({
       ...t,
       widgets: t.widgets.filter((w) => w.id !== widgetId),
     }));
+  };
+
+  // Mobile stack reorder: swap with the neighbor in stack order, then
+  // persist the order by writing sequential y values (x pinned to 0). Only
+  // reachable in mobileMode, so this always lands in mobileTabs.
+  const reorderWidget = (widgetId: string, dir: -1 | 1) => {
+    updateCurrentTab((t) => {
+      const ordered = sortForMobileStack(t.widgets);
+      const idx = ordered.findIndex((w) => w.id === widgetId);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= ordered.length) return t;
+      [ordered[idx], ordered[j]] = [ordered[j]!, ordered[idx]!];
+      const yById = new Map(ordered.map((w, i) => [w.id, i]));
+      return {
+        ...t,
+        widgets: t.widgets.map((w) => ({
+          ...w,
+          y: yById.get(w.id)!,
+          x: 0,
+        })),
+      };
+    });
   };
 
   // ─── Strict-layout (collision prevention) ────────────────────────────────
@@ -451,7 +482,11 @@ export function ControlPanel({
 
   const resizeWidget = (widgetId: string, cols: number, rows: number) => {
     updateCurrentTab((t) => {
-      if (strictLayout) {
+      // The strict 2D-collision model is meaningless in the mobile stack —
+      // reorder normalizes everyone to x:0 / sequential y, which the AABB
+      // check reads as guaranteed overlap and would silently block every
+      // H-stepper resize. Stack rendering ignores 2D placement entirely.
+      if (strictLayout && !mobileMode) {
         const target = t.widgets.find((w) => w.id === widgetId);
         // Only widgets with an explicit position can collide. An unplaced
         // widget being resized still flows via auto-place, so skip the
@@ -592,7 +627,7 @@ export function ControlPanel({
     );
   }
 
-  const gridCols = mobile ? MOBILE_GRID_COLS : DESKTOP_GRID_COLS;
+  const gridCols = mobileMode ? MOBILE_GRID_COLS : DESKTOP_GRID_COLS;
 
   return (
     <main className="mx-auto max-w-[1400px] px-4 py-8">
@@ -638,19 +673,25 @@ export function ControlPanel({
             )}
             <label
               className={cn(
-                "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
-                mobile && "border-primary text-primary",
+                "border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-sm",
+                mobileMode && "border-primary text-primary",
+                isSmallScreen ? "cursor-default opacity-70" : "cursor-pointer",
               )}
-              title="Toggle mobile-layout editing"
+              title={
+                isSmallScreen
+                  ? "Phone-sized screen detected — the mobile layout is always shown here."
+                  : "Preview and edit the phone layout — a separate single-column layout phones get automatically. Independent of the desktop layout."
+              }
             >
               <input
                 type="checkbox"
-                checked={mobile}
+                checked={mobileMode}
+                disabled={isSmallScreen}
                 onChange={(e) => setMobile(e.target.checked)}
                 className="sr-only"
               />
               <span aria-hidden>📱</span>
-              <span>Mobile view</span>
+              <span>Mobile View</span>
             </label>
             {/* Auto-refresh period — drives the shared snapshot poll. Visible
                 to viewers too (watching a live dashboard during raid). */}
@@ -867,6 +908,33 @@ export function ControlPanel({
             No widgets on this tab.
             {editing && " Click “＋ Add widget” above to start."}
           </p>
+        ) : mobileMode ? (
+          /* Modern mobile layout: a single-column stack of full-width
+             widgets (what phones get automatically). On a desktop preview
+             it renders inside a phone-width frame; editing offers ↑/↓
+             reorder + height + remove instead of free 2D placement. */
+          <div
+            className={cn(
+              "space-y-2",
+              !isSmallScreen &&
+                "border-border bg-muted/20 mx-auto w-full max-w-[430px] rounded-2xl border p-2",
+            )}
+          >
+            {sortForMobileStack(activeTab.widgets).map((w, i, arr) => (
+              <WidgetCell
+                key={w.id}
+                widget={w}
+                raidTeamId={teamId}
+                editing={editing}
+                isMobile
+                stacked
+                onRemove={removeWidget}
+                onResize={resizeWidget}
+                onReorder={reorderWidget}
+                reorderDisabled={{ up: i === 0, down: i === arr.length - 1 }}
+              />
+            ))}
+          </div>
         ) : (
           <div
             className="grid gap-2"
@@ -882,7 +950,7 @@ export function ControlPanel({
                 widget={w}
                 raidTeamId={teamId}
                 editing={editing}
-                isMobile={mobile}
+                isMobile={false}
                 onRemove={removeWidget}
                 onResize={resizeWidget}
                 onMove={moveWidget}

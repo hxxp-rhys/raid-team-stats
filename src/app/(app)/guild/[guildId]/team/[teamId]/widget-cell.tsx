@@ -32,17 +32,28 @@ export function WidgetCell({
   raidTeamId,
   editing,
   isMobile,
+  stacked = false,
   onRemove,
   onResize,
   onMove,
+  onReorder,
+  reorderDisabled,
 }: {
   widget: WidgetInstance;
   raidTeamId: string;
   editing: boolean;
   isMobile: boolean;
+  /**
+   * Mobile-stack mode: render as a full-width block in a vertical flow
+   * (modern phone layout) instead of a free 2D grid cell. Editing swaps
+   * the move/resize affordances for ↑/↓ reorder + height steppers.
+   */
+  stacked?: boolean;
   onRemove?: (id: string) => void;
   onResize?: (id: string, cols: number, rows: number) => void;
   onMove?: (id: string, x: number, y: number) => void;
+  onReorder?: (id: string, dir: -1 | 1) => void;
+  reorderDisabled?: { up: boolean; down: boolean };
 }) {
   const gridCols = isMobile ? MOBILE_GRID_COLS : DESKTOP_GRID_COLS;
   const requestedCols = widget.cols ?? DEFAULT_WIDGET_COLS;
@@ -199,17 +210,20 @@ export function WidgetCell({
   const renderedY = moveDrag?.y ?? widget.y;
   const placed = typeof renderedX === "number" && typeof renderedY === "number";
 
-  const style: React.CSSProperties = placed
-    ? {
-        gridColumn: `${renderedX! + 1} / span ${renderedCols}`,
-        gridRow: `${renderedY! + 1} / span ${renderedRows}`,
-        minHeight: `${ROW_HEIGHT_PX * renderedRows}px`,
-      }
-    : {
-        gridColumn: `span ${renderedCols} / span ${renderedCols}`,
-        gridRow: `span ${renderedRows} / span ${renderedRows}`,
-        minHeight: `${ROW_HEIGHT_PX * renderedRows}px`,
-      };
+  const style: React.CSSProperties = stacked
+    ? // Stack flow: width comes from the container; rows only set height.
+      { minHeight: `${ROW_HEIGHT_PX * renderedRows}px` }
+    : placed
+      ? {
+          gridColumn: `${renderedX! + 1} / span ${renderedCols}`,
+          gridRow: `${renderedY! + 1} / span ${renderedRows}`,
+          minHeight: `${ROW_HEIGHT_PX * renderedRows}px`,
+        }
+      : {
+          gridColumn: `span ${renderedCols} / span ${renderedCols}`,
+          gridRow: `span ${renderedRows} / span ${renderedRows}`,
+          minHeight: `${ROW_HEIGHT_PX * renderedRows}px`,
+        };
 
   return (
     <div
@@ -224,7 +238,49 @@ export function WidgetCell({
       {/* Edit toolbar — an in-flow strip ABOVE the widget so the widget's
           own title can never sit under it (works at any width; the strip
           wraps and the content simply starts below it). */}
-      {editing && (
+      {editing && stacked && (
+        <div className="border-border bg-muted/60 flex flex-wrap items-center gap-1 border-b px-1.5 py-1 text-[10px]">
+          <button
+            type="button"
+            aria-label="Move widget up"
+            title="Move up in the stack"
+            disabled={reorderDisabled?.up}
+            onClick={() => onReorder?.(widget.id, -1)}
+            className="hover:text-primary disabled:opacity-30 inline-flex size-6 items-center justify-center rounded border border-border text-sm"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="Move widget down"
+            title="Move down in the stack"
+            disabled={reorderDisabled?.down}
+            onClick={() => onReorder?.(widget.id, 1)}
+            className="hover:text-primary disabled:opacity-30 inline-flex size-6 items-center justify-center rounded border border-border text-sm"
+          >
+            ↓
+          </button>
+          <span className="text-muted-foreground">·</span>
+          <Stepper
+            label="H"
+            value={rows}
+            min={1}
+            max={MAX_WIDGET_ROWS}
+            onChange={(v) => onResize?.(widget.id, cols, v)}
+          />
+          <button
+            type="button"
+            onClick={() => onRemove?.(widget.id)}
+            title="Remove widget"
+            aria-label="Remove widget"
+            className="text-foreground/60 hover:text-destructive ml-auto inline-flex size-5 items-center justify-center rounded-full border border-border"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {editing && !stacked && (
         <div className="border-border bg-muted/60 flex flex-wrap items-center gap-1 border-b px-1.5 py-1 text-[10px]">
           <button
             type="button"
@@ -277,7 +333,7 @@ export function WidgetCell({
         <WidgetRender instance={widget} raidTeamId={raidTeamId} />
       </div>
 
-      {editing && (
+      {editing && !stacked && (
         <>
           <div
             role="slider"

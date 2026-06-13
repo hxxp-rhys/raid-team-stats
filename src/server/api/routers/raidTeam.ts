@@ -4,8 +4,10 @@ import { TRPCError } from "@trpc/server";
 import {
   router,
   protectedProcedure,
+  publicProcedure,
   assertGuildRole,
   assertRaidTeamRole,
+  assertTeamReadAccess,
   isPlatformAdmin,
 } from "@/server/api/trpc";
 import { normalizeRaidTeamSlug } from "@/lib/realm";
@@ -789,10 +791,13 @@ export const raidTeamRouter = router({
    * Read the refresh settings + last-refresh timestamp. Visible to any active
    * team member so the data_refresh widget can render its state.
    */
-  refreshSettings: protectedProcedure
+  // publicProcedure + read-access: the data_refresh widget renders on the
+  // public share view too — anonymous viewers can SEE the schedule, while
+  // the trigger mutations below stay session-gated.
+  refreshSettings: publicProcedure
     .input(z.object({ raidTeamId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
-      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+      await assertTeamReadAccess(ctx, input.raidTeamId);
       const team = await ctx.db.raidTeam.findUnique({
         where: { id: input.raidTeamId },
         select: {

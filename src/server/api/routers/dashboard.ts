@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import {
   router,
   protectedProcedure,
+  publicProcedure,
   assertRaidTeamRole,
 } from "@/server/api/trpc";
 import { normalizeRaidTeamSlug } from "@/lib/realm";
@@ -206,11 +207,14 @@ export const dashboardRouter = router({
     }),
 
   /**
-   * Resolves a share token to dashboard data. The caller still has to be an
-   * active guild member of the dashboard's raid team's guild — share tokens
-   * are a URL-routing capability, NOT a permission bypass.
+   * Resolves a share token to dashboard data. Default: the caller still has
+   * to be a signed-in member of the dashboard's team — share tokens are a
+   * URL-routing capability, NOT a permission bypass. EXCEPTION: when the
+   * dashboard's owners flipped `shareIsPublic` on, a valid link serves the
+   * dashboard read-only to anonymous visitors too (and turning the flag off
+   * re-locks every outstanding link at the next request).
    */
-  getByShareToken: protectedProcedure
+  getByShareToken: publicProcedure
     .input(z.object({ token: z.string().min(1).max(2048) }))
     .query(async ({ ctx, input }) => {
       const verified = verifyShareToken(input.token);
@@ -220,17 +224,89 @@ export const dashboardRouter = router({
           message: "Share link is invalid or has expired.",
         });
       }
-      // assertRaidTeamRole returns NOT_FOUND for non-members — desired here
-      // to avoid leaking the existence of the dashboard.
-      await assertRaidTeamRole(ctx, verified.raidTeamId, "MEMBER");
 
+      // Narrow select — this row can go to anonymous viewers, so it carries
+      // only what the share page renders (no owner ids / internal metadata).
       const dashboard = await ctx.db.dashboardConfig.findUnique({
         where: { id: verified.dashboardId },
+        select: {
+          id: true,
+          name: true,
+          layout: true,
+          raidTeamId: true,
+          shareIsPublic: true,
+        },
       });
       if (!dashboard || dashboard.raidTeamId !== verified.raidTeamId) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
-      return { dashboard, expiresAt: verified.expiresAt };
+
+      if (!dashboard.shareIsPublic) {
+        if (!ctx.session?.user?.id) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message:
+              "This dashboard requires sign-in. Ask the owner to enable public viewing, or sign in with a guild account.",
+          });
+        }
+        // assertRaidTeamRole returns NOT_FOUND for non-members — desired
+        // here to avoid leaking the existence of the dashboard.
+        await assertRaidTeamRole(ctx, verified.raidTeamId, "MEMBER");
+      }
+
+      return {
+        dashboard,
+        expiresAt: verified.expiresAt,
+        isPublic: dashboard.shareIsPublic,
+      };
+    }),
+
+  /**
+   * Owner toggle: make the dashboard's share links viewable WITHOUT
+   * sign-in (read-only). CO_LEADER+ — same threshold as issuing links.
+   */
+  setSharePublic: protectedProcedure
+    .input(
+      z.object({
+        dashboardId: z.string().cuid(),
+        isPublic: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: input.dashboardId },
+        select: { raidTeamId: true },
+      });
+      if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, dashboard.raidTeamId, "CO_LEADER");
+
+      await ctx.db.dashboardConfig.update({
+        where: { id: input.dashboardId },
+        data: { shareIsPublic: input.isPublic },
+      });
+
+      await audit({
+        event: "DASHBOARD_EXPORTED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "dashboard",
+        subjectId: input.dashboardId,
+        metadata: { kind: "share_public_toggled", isPublic: input.isPublic },
+      });
+
+      return { ok: true, isPublic: input.isPublic };
+    }),
+
+  /** Share settings for the modal (CO_LEADER+, same as issuing links). */
+  shareSettings: protectedProcedure
+    .input(z.object({ dashboardId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const dashboard = await ctx.db.dashboardConfig.findUnique({
+        where: { id: input.dashboardId },
+        select: { raidTeamId: true, shareIsPublic: true },
+      });
+      if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, dashboard.raidTeamId, "CO_LEADER");
+      return { shareIsPublic: dashboard.shareIsPublic };
     }),
 
   /**

@@ -720,6 +720,11 @@ model DashboardConfig {
   name        String
   slug        String
   visibility  RaidTeamVisibility @default(TEAM)
+  // When true, a valid share link serves this dashboard READ-ONLY to
+  // anonymous visitors (no sign-in / guild membership required). Off by
+  // default: share links route, they don't grant access. Flipping it off
+  // re-locks every outstanding link instantly (checked at resolve time).
+  shareIsPublic Boolean          @default(false)
   layout      Json
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
