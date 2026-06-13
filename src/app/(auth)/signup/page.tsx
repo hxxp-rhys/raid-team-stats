@@ -75,7 +75,7 @@ export default function SignUpPage() {
         </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 pb-5">
           <div className="space-y-2">
             <Label htmlFor="displayName">Display name</Label>
             <Input

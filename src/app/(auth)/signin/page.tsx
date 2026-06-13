@@ -132,7 +132,9 @@ export default function SignInPage() {
         </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate>
-        <CardContent className="space-y-4">
+        {/* pb-5: CardContent has no vertical padding of its own, so without
+            it the password input sits flush against the footer buttons. */}
+        <CardContent className="space-y-4 pb-5">
           {!needsMfa ? (
             <>
               <div className="space-y-2">

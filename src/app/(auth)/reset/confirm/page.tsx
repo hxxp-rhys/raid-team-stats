@@ -81,7 +81,7 @@ function ResetConfirmInner() {
         <CardDescription>At least 12 characters.</CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 pb-5">
           <div className="space-y-2">
             <Label htmlFor="password">New password</Label>
             <Input
