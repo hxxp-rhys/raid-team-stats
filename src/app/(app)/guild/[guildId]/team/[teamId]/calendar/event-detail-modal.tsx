@@ -39,7 +39,7 @@ export function EventDetailModal({
   return (
     <Modal open={open} onClose={onClose} title="Raid event">
       {open && eventId && (
-        <Body eventId={eventId} canLead={canLead} onEdit={onEdit} onClose={onClose} />
+        <Body eventId={eventId} canLead={canLead} onEdit={onEdit} />
       )}
     </Modal>
   );
@@ -49,12 +49,10 @@ function Body({
   eventId,
   canLead,
   onEdit,
-  onClose,
 }: {
   eventId: string;
   canLead: boolean;
   onEdit: (id: string) => void;
-  onClose: () => void;
 }) {
   const utils = api.useUtils();
   const q = api.calendar.eventDetail.useQuery({ eventId });
@@ -201,12 +199,6 @@ function Body({
             onChanged={refetch}
           />
         )}
-      </div>
-
-      <div className="flex justify-end">
-        <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-          Close
-        </Button>
       </div>
     </div>
   );

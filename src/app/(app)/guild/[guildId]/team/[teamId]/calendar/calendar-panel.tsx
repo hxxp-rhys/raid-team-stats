@@ -171,6 +171,105 @@ export function CalendarPanel({
   );
 }
 
+type AgendaEvent = {
+  id: string;
+  title: string;
+  difficulty: string;
+  raidSize: number | null;
+  startsAt: Date | string;
+  status: string;
+  seriesId: string | null;
+  present: number;
+  responded: number;
+  myState: string | null;
+  myEta: number | null;
+};
+
+function AgendaRow({
+  e,
+  onOpen,
+}: {
+  e: AgendaEvent;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <li
+      className={cn(
+        "border-border bg-card rounded-lg border border-l-4 p-3",
+        DIFF_COLOR[e.difficulty] ?? "border-l-border",
+        e.status === "CANCELLED" && "opacity-60",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <button type="button" className="text-left" onClick={() => onOpen(e.id)}>
+          <p className={cn("font-medium", e.status === "CANCELLED" && "line-through")}>
+            {e.title}
+            {e.seriesId && (
+              <span className="text-muted-foreground" title="Recurring"> ↻</span>
+            )}
+            {e.status === "LOCKED" && <span className="text-amber-500"> 🔒</span>}
+            {e.status === "CANCELLED" && <span className="text-destructive text-xs"> · cancelled</span>}
+          </p>
+          <p className="text-muted-foreground text-xs">
+            {new Date(e.startsAt).toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}
+            {" · "}
+            {e.difficulty}
+            {e.raidSize ? ` · ${e.raidSize}` : ""}
+          </p>
+        </button>
+        <span className="text-muted-foreground text-xs tabular-nums">
+          {e.present} in · {e.responded} responded
+        </span>
+      </div>
+      {e.status !== "CANCELLED" && (
+        <div className="mt-2">
+          <StatusControl
+            eventId={e.id}
+            current={(e.myState as AttendanceState) ?? null}
+            currentEta={e.myEta}
+            size="sm"
+          />
+        </div>
+      )}
+    </li>
+  );
+}
+
+function AgendaSection({
+  title,
+  hint,
+  events,
+  onOpen,
+}: {
+  title: string;
+  hint?: string;
+  events: AgendaEvent[];
+  onOpen: (id: string) => void;
+}) {
+  if (events.length === 0) return null;
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline gap-2">
+        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+        <span className="text-muted-foreground text-xs">
+          {hint ?? `${events.length} raid${events.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {events.map((e) => (
+          <AgendaRow key={e.id} e={e} onOpen={onOpen} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function AgendaView({
   teamId,
   onOpen,
@@ -184,6 +283,14 @@ function AgendaView({
     return d;
   }, []);
   const to = useMemo(() => new Date(from.getTime() + 35 * 86400000), [from]);
+  // Start of next calendar week (Sun-Sat, matching the month grid): events
+  // before this split into "This week", the rest into "Upcoming".
+  const nextWeekStart = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + (7 - d.getDay()));
+    return d;
+  }, []);
   const q = api.calendar.eventsInRange.useQuery({ raidTeamId: teamId, from, to });
 
   if (q.isPending) return <p className="text-muted-foreground text-sm">Loading…</p>;
@@ -195,57 +302,17 @@ function AgendaView({
       </p>
     );
   }
+
+  const events = q.data.events as AgendaEvent[];
+  const split = nextWeekStart.getTime();
+  const thisWeek = events.filter((e) => new Date(e.startsAt).getTime() < split);
+  const upcoming = events.filter((e) => new Date(e.startsAt).getTime() >= split);
+
   return (
-    <ul className="space-y-2">
-      {q.data.events.map((e) => (
-        <li
-          key={e.id}
-          className={cn(
-            "border-border bg-card rounded-lg border border-l-4 p-3",
-            DIFF_COLOR[e.difficulty] ?? "border-l-border",
-            e.status === "CANCELLED" && "opacity-60",
-          )}
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <button type="button" className="text-left" onClick={() => onOpen(e.id)}>
-              <p className={cn("font-medium", e.status === "CANCELLED" && "line-through")}>
-                {e.title}
-                {e.seriesId && (
-                  <span className="text-muted-foreground" title="Recurring"> ↻</span>
-                )}
-                {e.status === "LOCKED" && <span className="text-amber-500"> 🔒</span>}
-                {e.status === "CANCELLED" && <span className="text-destructive text-xs"> · cancelled</span>}
-              </p>
-              <p className="text-muted-foreground text-xs">
-                {new Date(e.startsAt).toLocaleString(undefined, {
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-                {" · "}
-                {e.difficulty}
-                {e.raidSize ? ` · ${e.raidSize}` : ""}
-              </p>
-            </button>
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {e.present} in · {e.responded} responded
-            </span>
-          </div>
-          {e.status !== "CANCELLED" && (
-            <div className="mt-2">
-              <StatusControl
-                eventId={e.id}
-                current={(e.myState as AttendanceState) ?? null}
-                currentEta={e.myEta}
-                size="sm"
-              />
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-5">
+      <AgendaSection title="This week" events={thisWeek} onOpen={onOpen} />
+      <AgendaSection title="Upcoming" events={upcoming} onOpen={onOpen} />
+    </div>
   );
 }
 
@@ -261,19 +328,24 @@ function MonthView({
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
-  // 6-week grid starting on the Sunday on/before the 1st. Cells are built with
+  // Week grid starting on the Sunday on/before the 1st. Cells are built with
   // CALENDAR arithmetic (new Date(y, m, d+i)), never fixed-24h ms addition —
   // a DST fall-back day is 25h, so ms math would collapse two days onto one
   // local date and shift every later cell's weekday by a column.
+  //
+  // The grid renders ONLY the weeks this month actually spans (4, 5, or 6) —
+  // not a fixed 6 — so a month that ends mid-grid doesn't trail an entire row
+  // of next-month days (which, dimmed, read as the calendar "fading out").
   const cells = useMemo(() => {
-    const first = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1);
-    const gridStart = new Date(
-      first.getFullYear(),
-      first.getMonth(),
-      1 - first.getDay(),
-    );
+    const y = monthStart.getFullYear();
+    const m = monthStart.getMonth();
+    const first = new Date(y, m, 1);
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const weeks = Math.ceil((first.getDay() + daysInMonth) / 7);
+    const cellCount = weeks * 7;
+    const gridStart = new Date(y, m, 1 - first.getDay());
     return Array.from(
-      { length: 42 },
+      { length: cellCount },
       (_, i) =>
         new Date(
           gridStart.getFullYear(),
@@ -283,10 +355,11 @@ function MonthView({
     );
   }, [monthStart]);
   const gridStart = cells[0]!;
+  const last = cells[cells.length - 1]!;
   const gridEnd = new Date(
-    cells[41]!.getFullYear(),
-    cells[41]!.getMonth(),
-    cells[41]!.getDate() + 1,
+    last.getFullYear(),
+    last.getMonth(),
+    last.getDate() + 1,
   );
 
   const q = api.calendar.eventsInRange.useQuery({

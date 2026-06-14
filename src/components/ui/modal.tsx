@@ -16,6 +16,7 @@ export function Modal({
   description,
   children,
   className,
+  hideDefaultFooter = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -23,6 +24,9 @@ export function Modal({
   description?: string;
   children: ReactNode;
   className?: string;
+  /** Hide the built-in footer "Close" — for modals that supply their own
+   *  dismiss action (e.g. a form's Cancel/Save) so there's only one. */
+  hideDefaultFooter?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -67,15 +71,17 @@ export function Modal({
           </header>
         )}
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
-        <footer className="border-border bg-muted/30 flex justify-end gap-2 border-t px-5 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="border-border bg-background hover:bg-muted text-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors"
-          >
-            Close
-          </button>
-        </footer>
+        {!hideDefaultFooter && (
+          <footer className="border-border bg-muted/30 flex justify-end gap-2 border-t px-5 py-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="border-border bg-background hover:bg-muted text-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors"
+            >
+              Close
+            </button>
+          </footer>
+        )}
       </div>
     </div>
   );

@@ -67,6 +67,7 @@ export function EventFormModal({
       onClose={onClose}
       title={editEventId ? "Edit raid" : "Schedule a raid"}
       description={`Times are in the team timezone (${timezone}).`}
+      hideDefaultFooter
     >
       {open && (
         <Loader

@@ -70,7 +70,7 @@ export function SeriesManagerModal({
       title="Recurring schedules"
       description={`Weekly raid schedules (times in ${timezone}).`}
     >
-      {open && <Body raidTeamId={raidTeamId} canLead={canLead} onClose={onClose} />}
+      {open && <Body raidTeamId={raidTeamId} canLead={canLead} />}
     </Modal>
   );
 }
@@ -78,11 +78,9 @@ export function SeriesManagerModal({
 function Body({
   raidTeamId,
   canLead,
-  onClose,
 }: {
   raidTeamId: string;
   canLead: boolean;
-  onClose: () => void;
 }) {
   const list = api.calendar.listSeries.useQuery({ raidTeamId });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -104,11 +102,6 @@ function Body({
           No recurring schedules yet. Use “＋ Schedule raid” and turn on{" "}
           <span className="font-medium">Repeat weekly</span> to create one.
         </p>
-        <div className="flex justify-end">
-          <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </div>
       </div>
     );
   }
@@ -128,11 +121,6 @@ function Body({
           />
         ))}
       </ul>
-      <div className="flex justify-end">
-        <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
     </div>
   );
 }

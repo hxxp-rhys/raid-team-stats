@@ -62,6 +62,7 @@ export function SettingsModal({
       onClose={onClose}
       title="Calendar settings"
       description="Timezone, comp-readiness target, and auto-reminders."
+      hideDefaultFooter
     >
       {open && (
         <Body raidTeamId={raidTeamId} onClose={onClose} current={current} />
