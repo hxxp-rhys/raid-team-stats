@@ -312,8 +312,8 @@ function AgendaView({
     return d;
   }, []);
   const to = useMemo(() => new Date(from.getTime() + 35 * 86400000), [from]);
-  // Split on the next weekly reset (Tue 11:00 ET): raids before it belong to
-  // the current lockout ("This week"); raids at/after it are "Upcoming".
+  // Next weekly reset (Tue 11:00 ET). Lockout weeks are delimited by it; the
+  // agenda shows just the soonest raid week + the one after — never a wall.
   const resetMs = useMemo(() => nextWeeklyReset(new Date()).getTime(), []);
   const q = api.calendar.eventsInRange.useQuery({ raidTeamId: teamId, from, to });
 
@@ -327,9 +327,20 @@ function AgendaView({
     );
   }
 
+  // events come back sorted ascending by start. Bucket each into its lockout
+  // week (0 = before the next reset, +1 per reset), anchor on the SOONEST
+  // raid's week, and show only that week ("This week") + the next ("Upcoming").
+  // Everything beyond those two weeks is intentionally dropped — no 10-raid wall.
   const events = q.data.events as AgendaEvent[];
-  const thisWeek = events.filter((e) => new Date(e.startsAt).getTime() < resetMs);
-  const upcoming = events.filter((e) => new Date(e.startsAt).getTime() >= resetMs);
+  const WEEK_MS = 7 * 86400000;
+  const weekOf = (t: number) => (t < resetMs ? 0 : Math.floor((t - resetMs) / WEEK_MS) + 1);
+  const anchor = weekOf(new Date(events[0]!.startsAt).getTime());
+  const thisWeek = events.filter(
+    (e) => weekOf(new Date(e.startsAt).getTime()) === anchor,
+  );
+  const upcoming = events.filter(
+    (e) => weekOf(new Date(e.startsAt).getTime()) === anchor + 1,
+  );
 
   return (
     <div className="space-y-5">
