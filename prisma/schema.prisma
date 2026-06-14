@@ -403,6 +403,7 @@ model RaidTeam {
   dashboards    DashboardConfig[]
   raidEventSeries RaidEventSeries[]
   raidEvents      RaidEvent[]
+  discordIntegration DiscordIntegration?
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
@@ -954,4 +955,38 @@ model SentReminder {
 
   @@unique([raidEventId, kind, userId])
   @@index([raidEventId])
+}
+
+/// Per-team Discord binding: which guild + channel the bot posts raid embeds
+/// into, plus reminder config. One row per team. The Discord-user ↔ site-user
+/// binding is NOT here — that reuses the existing Account(provider="discord")
+/// row (@@unique([provider, providerAccountId])).
+model DiscordIntegration {
+  id                   String   @id @default(cuid())
+  raidTeamId           String   @unique
+  guildId              String // Discord guild snowflake
+  channelId            String // channel where event embeds post
+  reminderLeadsMinutes Int[]    @default([1440, 240]) // 24h + 4h non-responder nudges
+  reminderMode         String   @default("CHANNEL") // "CHANNEL" | "DM"
+  installedByUserId    String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  raidTeam RaidTeam @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+}
+
+/// Short-lived, single-use code that binds a Discord snowflake to a site user.
+/// The website issues a code; `/statsmith link code:<CODE>` validates (unexpired
+/// + unconsumed), atomically burns it (consumedAt), and writes the Account row.
+/// Distinct from share-token.ts (B3): 10-min TTL, single-use, user-scoped,
+/// individually revocable without rotating AUTH_SECRET.
+model DiscordLinkCode {
+  code       String    @id // short, single-use (e.g. 8 base32 chars)
+  userId     String // the site user requesting the link
+  consumedAt DateTime? // burn-on-use (replay-proof)
+  expiresAt  DateTime // SHORT TTL (10 minutes)
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }

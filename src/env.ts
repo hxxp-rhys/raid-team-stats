@@ -94,6 +94,13 @@ export const env = createEnv({
     SMTP_PASSWORD: requiredInProd(z.string().min(1)),
     SMTP_FROM: requiredInProd(z.string().email()),
 
+    // Discord bot (calendar integration). OPTIONAL — all three must be set for
+    // Discord features to turn on; absent any one, the bot is disabled and the
+    // rest of the app runs normally (a deploy never breaks for not using it).
+    DISCORD_APP_ID: z.string().min(1).optional(),
+    DISCORD_PUBLIC_KEY: z.string().min(1).optional(), // Ed25519 public key (hex)
+    DISCORD_BOT_TOKEN: z.string().min(1).optional(),
+
     ADMIN_USER_IDS: z
       .string()
       .default("")
@@ -173,6 +180,9 @@ export const env = createEnv({
     SMTP_USER: process.env.SMTP_USER,
     SMTP_PASSWORD: process.env.SMTP_PASSWORD,
     SMTP_FROM: process.env.SMTP_FROM,
+    DISCORD_APP_ID: process.env.DISCORD_APP_ID,
+    DISCORD_PUBLIC_KEY: process.env.DISCORD_PUBLIC_KEY,
+    DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
     ADMIN_USER_IDS: process.env.ADMIN_USER_IDS,
     ADMIN_EMAILS: process.env.ADMIN_EMAILS,
     ADMIN_MFA_EXEMPT: process.env.ADMIN_MFA_EXEMPT,
