@@ -17,6 +17,7 @@ export function Modal({
   children,
   className,
   hideDefaultFooter = false,
+  showCloseIcon = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -27,6 +28,9 @@ export function Modal({
   /** Hide the built-in footer "Close" — for modals that supply their own
    *  dismiss action (e.g. a form's Cancel/Save) so there's only one. */
   hideDefaultFooter?: boolean;
+  /** Show a small "×" dismiss in the header — for modals that hide the footer
+   *  Close but still need an always-available close affordance. */
+  showCloseIcon?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -60,13 +64,25 @@ export function Modal({
           className,
         )}
       >
-        {(title || description) && (
-          <header className="border-border space-y-1 border-b px-5 py-4">
-            {title && (
-              <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
-            )}
-            {description && (
-              <p className="text-muted-foreground text-sm">{description}</p>
+        {(title || description || showCloseIcon) && (
+          <header className="border-border flex items-start gap-3 border-b px-5 py-4">
+            <div className="min-w-0 flex-1 space-y-1">
+              {title && (
+                <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+              )}
+              {description && (
+                <p className="text-muted-foreground text-sm">{description}</p>
+              )}
+            </div>
+            {showCloseIcon && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="text-muted-foreground hover:text-foreground hover:bg-muted -mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-lg leading-none transition-colors"
+              >
+                ✕
+              </button>
             )}
           </header>
         )}

@@ -69,6 +69,8 @@ export function SeriesManagerModal({
       onClose={onClose}
       title="Recurring schedules"
       description={`Weekly raid schedules (times in ${timezone}).`}
+      hideDefaultFooter
+      showCloseIcon
     >
       {open && <Body raidTeamId={raidTeamId} canLead={canLead} />}
     </Modal>
@@ -386,7 +388,7 @@ function SeriesEditor({
       )}
       <div className="flex justify-end gap-2">
         <Button type="submit" size="sm" disabled={save.isPending || !canSave}>
-          {save.isPending ? "Saving…" : "Save series"}
+          {save.isPending ? "Saving…" : "Save"}
         </Button>
       </div>
     </form>

@@ -14,6 +14,7 @@ import { SettingsModal } from "./settings-modal";
 import { SeriesManagerModal } from "./series-manager-modal";
 import { STATE_META, StatusControl } from "./parts";
 import type { AttendanceState } from "@/lib/calendar/roster";
+import { localDateInTz, zonedWallClockToUtc } from "@/lib/calendar/time";
 
 const DIFF_COLOR: Record<string, string> = {
   Mythic: "border-l-orange-500",
@@ -21,6 +22,34 @@ const DIFF_COLOR: Record<string, string> = {
   Normal: "border-l-sky-500",
   LFR: "border-l-zinc-500",
 };
+
+// WoW NA weekly lockout reset: Tuesday 11:00 America/New_York (15:00 UTC during
+// EDT). Agenda groups raids by this boundary: those before the next reset are
+// "This week" (the current lockout), the rest are "Upcoming".
+const RESET_TZ = "America/New_York";
+const RESET_TIME = "11:00";
+
+function addDaysStr(dateStr: string, n: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y!, m! - 1, d! + n));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    dt.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** The next Tuesday-11:00-Eastern reset instant strictly after `now`. */
+function nextWeeklyReset(now: Date): Date {
+  const todayET = localDateInTz(now, RESET_TZ);
+  const [y, m, d] = todayET.split("-").map(Number);
+  const dow = new Date(Date.UTC(y!, m! - 1, d!)).getUTCDay(); // Tue = 2
+  let dateStr = addDaysStr(todayET, (2 - dow + 7) % 7);
+  let reset = zonedWallClockToUtc(dateStr, RESET_TIME, RESET_TZ);
+  if (reset.getTime() <= now.getTime()) {
+    dateStr = addDaysStr(dateStr, 7);
+    reset = zonedWallClockToUtc(dateStr, RESET_TIME, RESET_TZ);
+  }
+  return reset;
+}
 
 export function CalendarPanel({
   guildId,
@@ -283,14 +312,9 @@ function AgendaView({
     return d;
   }, []);
   const to = useMemo(() => new Date(from.getTime() + 35 * 86400000), [from]);
-  // Start of next calendar week (Sun-Sat, matching the month grid): events
-  // before this split into "This week", the rest into "Upcoming".
-  const nextWeekStart = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() + (7 - d.getDay()));
-    return d;
-  }, []);
+  // Split on the next weekly reset (Tue 11:00 ET): raids before it belong to
+  // the current lockout ("This week"); raids at/after it are "Upcoming".
+  const resetMs = useMemo(() => nextWeeklyReset(new Date()).getTime(), []);
   const q = api.calendar.eventsInRange.useQuery({ raidTeamId: teamId, from, to });
 
   if (q.isPending) return <p className="text-muted-foreground text-sm">Loading…</p>;
@@ -304,9 +328,8 @@ function AgendaView({
   }
 
   const events = q.data.events as AgendaEvent[];
-  const split = nextWeekStart.getTime();
-  const thisWeek = events.filter((e) => new Date(e.startsAt).getTime() < split);
-  const upcoming = events.filter((e) => new Date(e.startsAt).getTime() >= split);
+  const thisWeek = events.filter((e) => new Date(e.startsAt).getTime() < resetMs);
+  const upcoming = events.filter((e) => new Date(e.startsAt).getTime() >= resetMs);
 
   return (
     <div className="space-y-5">
@@ -432,11 +455,19 @@ function MonthView({
               key={key}
               className={cn(
                 "border-border min-h-16 rounded border p-1",
-                !inMonth && "opacity-40",
                 key === todayKey && "ring-primary ring-1",
               )}
             >
-              <div className="text-muted-foreground mb-0.5 text-right text-[10px]">{day.getDate()}</div>
+              {/* Current month vs adjacent distinguished by NUMBER COLOR only
+                  (full opacity) — no cell fade. */}
+              <div
+                className={cn(
+                  "mb-0.5 text-right text-[10px]",
+                  inMonth ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {day.getDate()}
+              </div>
               <div className="space-y-0.5">
                 {events.map((e) => (
                   <button
