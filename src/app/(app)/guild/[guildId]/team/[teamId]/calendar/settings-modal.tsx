@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DiscordSettings } from "./discord-settings";
 
 type ReminderCfg = { enabled: boolean; leadMinutes: number[]; nudgeMinutes: number | null };
 type Current = {
@@ -235,6 +236,10 @@ function Body({
           {save.error && (
             <p className="text-destructive text-xs" role="alert">{save.error.message}</p>
           )}
+
+          {/* Discord binding (own mutations; hidden when the bot isn't configured) */}
+          <DiscordSettings raidTeamId={raidTeamId} canLead />
+
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={save.isPending}>
               Cancel

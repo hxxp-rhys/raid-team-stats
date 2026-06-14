@@ -83,6 +83,19 @@ export const discordRouter = router({
         },
         update: { guildId: input.guildId, channelId: input.channelId },
       });
+      // Start the relay cursor at the CURRENT outbox tip on first bind, so it
+      // only posts embeds for changes from here forward — never backfills every
+      // past event into the channel. `update: {}` leaves an existing cursor.
+      const tip = await ctx.db.syncOutbox.findFirst({
+        where: { raidTeamId: input.raidTeamId },
+        orderBy: { id: "desc" },
+        select: { id: true },
+      });
+      await ctx.db.deliveryCursor.upsert({
+        where: { consumer_raidTeamId: { consumer: "discord", raidTeamId: input.raidTeamId } },
+        create: { consumer: "discord", raidTeamId: input.raidTeamId, lastOutboxId: tip?.id ?? BigInt(0) },
+        update: {},
+      });
       await audit({
         event: "RAID_TEAM_SETTINGS_UPDATED",
         actorUserId: ctx.session.user.id,
