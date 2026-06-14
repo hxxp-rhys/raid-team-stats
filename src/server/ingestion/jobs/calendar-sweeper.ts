@@ -3,6 +3,7 @@ import { redis } from "@/lib/redis";
 import { logger } from "@/lib/logger";
 import { materializeAllActiveSeries } from "@/server/calendar/materialize";
 import { runReminderSweep } from "@/server/calendar/reminders";
+import { runDiscordFanout } from "@/server/calendar/discord/fanout";
 
 /**
  * Calendar background sweeps, driven from the worker's setInterval ticks:
@@ -53,6 +54,18 @@ export async function runCalendarMaterializeSweep(): Promise<{
   } finally {
     await release(MATERIALIZE_LOCK, lock);
   }
+}
+
+/**
+ * Drain the Discord fan-out relay (outbox → embed post/edit). Safe to call on a
+ * ~3s tick — self-gates when Discord is off and self-locks against overlap.
+ */
+export async function runCalendarDiscordFanout(): Promise<{
+  skipped?: boolean;
+  teams?: number;
+  rendered?: number;
+}> {
+  return runDiscordFanout(db);
 }
 
 /** Send due auto-reminders. Safe to call on a 5-min tick. */

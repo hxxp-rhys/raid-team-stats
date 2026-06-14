@@ -36,6 +36,7 @@ import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-swee
 import {
   runCalendarMaterializeSweep,
   runCalendarReminderSweep,
+  runCalendarDiscordFanout,
 } from "@/server/ingestion/jobs/calendar-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
@@ -197,6 +198,15 @@ const start = async () => {
       logger.warn({ err }, "calendar reminder sweep failed"),
     );
   }, 5 * 60_000);
+
+  // Discord fan-out relay: drain the outbox into the team's signup-board embed
+  // (post/edit-in-place). Every 3s — the relay poll floor; self-gates when
+  // Discord is off, self-locks against overlap, coalesces per event.
+  setInterval(() => {
+    void runCalendarDiscordFanout().catch((err) =>
+      logger.warn({ err }, "discord fanout sweep failed"),
+    );
+  }, 3_000);
 
   // QueueEvents emits completed/failed across the cluster — count + measure.
   for (const { name, q } of queueObjects) {
