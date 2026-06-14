@@ -155,7 +155,7 @@ export function CalendarPanel({
       </div>
 
       {view === "agenda" ? (
-        <AgendaView teamId={teamId} onOpen={setDetailId} />
+        <AgendaView teamId={teamId} onOpen={setDetailId} canManage={canManage} />
       ) : (
         <MonthView teamId={teamId} onOpen={setDetailId} />
       )}
@@ -214,12 +214,47 @@ type AgendaEvent = {
   myEta: number | null;
 };
 
+/** Leader-only "Post to Discord" — renders only when the team is connected. */
+function PostToDiscordButton({
+  eventId,
+  raidTeamId,
+}: {
+  eventId: string;
+  raidTeamId: string;
+}) {
+  const status = api.discord.status.useQuery();
+  const integ = api.discord.getIntegration.useQuery(
+    { raidTeamId },
+    { enabled: status.data?.enabled === true },
+  );
+  const post = api.discord.postEvent.useMutation();
+  if (status.data?.enabled !== true || !integ.data?.integration) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => post.mutate({ eventId })}
+      disabled={post.isPending}
+      title={post.error?.message ?? "Post this raid's signup board to Discord"}
+      className={cn(
+        "border-border hover:bg-muted inline-flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-50",
+        post.isError && "border-destructive text-destructive",
+      )}
+    >
+      {post.isPending ? "Posting…" : post.isSuccess ? "Posted ✓" : "↗ Post to Discord"}
+    </button>
+  );
+}
+
 function AgendaRow({
   e,
   onOpen,
+  canManage,
+  teamId,
 }: {
   e: AgendaEvent;
   onOpen: (id: string) => void;
+  canManage: boolean;
+  teamId: string;
 }) {
   return (
     <li
@@ -257,13 +292,14 @@ function AgendaRow({
         </span>
       </div>
       {e.status !== "CANCELLED" && (
-        <div className="mt-2">
+        <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
           <StatusControl
             eventId={e.id}
             current={(e.myState as AttendanceState) ?? null}
             currentEta={e.myEta}
             size="sm"
           />
+          {canManage && <PostToDiscordButton eventId={e.id} raidTeamId={teamId} />}
         </div>
       )}
     </li>
@@ -275,11 +311,15 @@ function AgendaSection({
   hint,
   events,
   onOpen,
+  canManage,
+  teamId,
 }: {
   title: string;
   hint?: string;
   events: AgendaEvent[];
   onOpen: (id: string) => void;
+  canManage: boolean;
+  teamId: string;
 }) {
   if (events.length === 0) return null;
   return (
@@ -292,7 +332,7 @@ function AgendaSection({
       </div>
       <ul className="space-y-2">
         {events.map((e) => (
-          <AgendaRow key={e.id} e={e} onOpen={onOpen} />
+          <AgendaRow key={e.id} e={e} onOpen={onOpen} canManage={canManage} teamId={teamId} />
         ))}
       </ul>
     </section>
@@ -302,9 +342,11 @@ function AgendaSection({
 function AgendaView({
   teamId,
   onOpen,
+  canManage,
 }: {
   teamId: string;
   onOpen: (id: string) => void;
+  canManage: boolean;
 }) {
   const from = useMemo(() => {
     const d = new Date();
@@ -344,8 +386,8 @@ function AgendaView({
 
   return (
     <div className="space-y-5">
-      <AgendaSection title="This week" events={thisWeek} onOpen={onOpen} />
-      <AgendaSection title="Upcoming" events={upcoming} onOpen={onOpen} />
+      <AgendaSection title="This week" events={thisWeek} onOpen={onOpen} canManage={canManage} teamId={teamId} />
+      <AgendaSection title="Upcoming" events={upcoming} onOpen={onOpen} canManage={canManage} teamId={teamId} />
     </div>
   );
 }

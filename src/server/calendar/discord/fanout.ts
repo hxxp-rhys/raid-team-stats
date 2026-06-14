@@ -5,6 +5,48 @@ import { isDiscordEnabled } from "@/lib/discord/config";
 import { renderEventToDiscord } from "./render";
 
 /**
+ * Auto-post sweep (time-driven, opt-in). The outbox relay is CHANGE-driven, so
+ * an event scheduled far out never re-triggers when it later enters its lead
+ * window. This sweep covers that: for each team with auto-post ON, post the
+ * boards for raids that have entered the window but aren't posted yet. Off by
+ * default — a team posts manually until they opt in.
+ */
+export async function runDiscordAutoPost(
+  db: ExtendedPrismaClient,
+): Promise<{ skipped?: boolean; posted?: number }> {
+  if (!isDiscordEnabled()) return { skipped: true };
+  const integrations = await db.discordIntegration.findMany({
+    where: { autoPostEnabled: true },
+    select: { raidTeamId: true, autoPostLeadDays: true },
+  });
+  const now = new Date();
+  let posted = 0;
+  for (const ig of integrations) {
+    const horizon = new Date(now.getTime() + ig.autoPostLeadDays * 86_400_000);
+    const due = await db.raidEvent.findMany({
+      where: {
+        raidTeamId: ig.raidTeamId,
+        discordMessageId: null,
+        status: { not: "CANCELLED" },
+        startsAt: { gt: now, lte: horizon },
+      },
+      orderBy: { startsAt: "asc" },
+      select: { id: true },
+    });
+    for (const e of due) {
+      const out = await renderEventToDiscord(db, e.id);
+      if (out.ok) {
+        if (out.action === "posted" || out.action === "adopted") posted++;
+      } else if (out.retryAfterMs) {
+        break; // rate limited — pick up the rest next sweep
+      }
+    }
+  }
+  if (posted > 0) logger.info({ posted }, "discord auto-post sweep");
+  return { posted };
+}
+
+/**
  * Discord fan-out relay. Drains each Discord-bound team's SyncOutbox past its
  * per-consumer DeliveryCursor, COALESCES the touched events (N signups in one
  * sweep → one render per event), re-renders each from current DB state, and

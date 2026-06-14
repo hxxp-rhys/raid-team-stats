@@ -6,6 +6,7 @@ import { isDiscordEnabled } from "@/lib/discord/config";
 import { issueLinkCode } from "@/server/discord/link";
 import { registerGuildCommands } from "@/server/discord/commands";
 import { serverActionKey } from "@/server/calendar/sync";
+import { renderEventToDiscord } from "@/server/calendar/discord/render";
 import { audit } from "@/server/security/audit";
 
 const snowflake = z.string().regex(/^\d{15,22}$/, "That doesn't look like a Discord ID.");
@@ -55,7 +56,12 @@ export const discordRouter = router({
       await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
       const integration = await ctx.db.discordIntegration.findUnique({
         where: { raidTeamId: input.raidTeamId },
-        select: { guildId: true, channelId: true },
+        select: {
+          guildId: true,
+          channelId: true,
+          autoPostEnabled: true,
+          autoPostLeadDays: true,
+        },
       });
       return { enabled: isDiscordEnabled(), integration };
     }),
@@ -67,6 +73,8 @@ export const discordRouter = router({
         raidTeamId: z.string().cuid(),
         guildId: snowflake,
         channelId: snowflake,
+        autoPostEnabled: z.boolean().optional(),
+        autoPostLeadDays: z.number().int().min(1).max(60).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -79,6 +87,10 @@ export const discordRouter = router({
         select: { channelId: true },
       });
       const channelChanged = before?.channelId !== input.channelId;
+      const autoFields = {
+        ...(input.autoPostEnabled !== undefined ? { autoPostEnabled: input.autoPostEnabled } : {}),
+        ...(input.autoPostLeadDays !== undefined ? { autoPostLeadDays: input.autoPostLeadDays } : {}),
+      };
       await ctx.db.discordIntegration.upsert({
         where: { raidTeamId: input.raidTeamId },
         create: {
@@ -86,8 +98,9 @@ export const discordRouter = router({
           guildId: input.guildId,
           channelId: input.channelId,
           installedByUserId: ctx.session.user.id,
+          ...autoFields,
         },
-        update: { guildId: input.guildId, channelId: input.channelId },
+        update: { guildId: input.guildId, channelId: input.channelId, ...autoFields },
       });
       // ALWAYS reset the relay cursor to the current outbox tip on bind. This
       // both prevents backfilling past/history events on first bind AND avoids a
@@ -135,6 +148,41 @@ export const discordRouter = router({
       // the UI so the leader knows if the bot lacks access.
       const reg = await registerGuildCommands(input.guildId);
       return { ok: true, commandsRegistered: reg.ok, commandError: reg.error ?? null };
+    }),
+
+  /** Manually post (or re-post) one event's board to the team's channel. LEADER. */
+  postEvent: protectedProcedure
+    .input(z.object({ eventId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!isDiscordEnabled()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Discord isn't enabled on this server." });
+      }
+      const event = await ctx.db.raidEvent.findUnique({
+        where: { id: input.eventId },
+        select: { raidTeamId: true },
+      });
+      if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+      await assertRaidTeamRole(ctx, event.raidTeamId, "LEADER");
+      const integration = await ctx.db.discordIntegration.findUnique({
+        where: { raidTeamId: event.raidTeamId },
+        select: { id: true },
+      });
+      if (!integration) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Connect this team to a Discord channel first (Calendar → Settings → Discord).",
+        });
+      }
+      const out = await renderEventToDiscord(ctx.db, input.eventId, { force: true });
+      if (!out.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: out.retryAfterMs
+            ? "Discord is rate-limiting us — try again in a moment."
+            : `Couldn't post to Discord: ${out.reason}`,
+        });
+      }
+      return { ok: true, action: out.action };
     }),
 
   removeIntegration: protectedProcedure

@@ -37,6 +37,7 @@ import {
   runCalendarMaterializeSweep,
   runCalendarReminderSweep,
   runCalendarDiscordFanout,
+  runCalendarDiscordAutoPost,
 } from "@/server/ingestion/jobs/calendar-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
 
@@ -207,6 +208,14 @@ const start = async () => {
       logger.warn({ err }, "discord fanout sweep failed"),
     );
   }, 3_000);
+
+  // Discord auto-post (opt-in): post boards for raids that have entered their
+  // lead window. Every 5 minutes — far finer than the days-ahead lead needs.
+  setInterval(() => {
+    void runCalendarDiscordAutoPost().catch((err) =>
+      logger.warn({ err }, "discord auto-post sweep failed"),
+    );
+  }, 5 * 60_000);
 
   // QueueEvents emits completed/failed across the cluster — count + measure.
   for (const { name, q } of queueObjects) {

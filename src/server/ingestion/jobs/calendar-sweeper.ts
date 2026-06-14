@@ -3,7 +3,7 @@ import { redis } from "@/lib/redis";
 import { logger } from "@/lib/logger";
 import { materializeAllActiveSeries } from "@/server/calendar/materialize";
 import { runReminderSweep } from "@/server/calendar/reminders";
-import { runDiscordFanout } from "@/server/calendar/discord/fanout";
+import { runDiscordFanout, runDiscordAutoPost } from "@/server/calendar/discord/fanout";
 
 /**
  * Calendar background sweeps, driven from the worker's setInterval ticks:
@@ -66,6 +66,14 @@ export async function runCalendarDiscordFanout(): Promise<{
   rendered?: number;
 }> {
   return runDiscordFanout(db);
+}
+
+/** Post boards for raids that just entered their auto-post lead window (opt-in). */
+export async function runCalendarDiscordAutoPost(): Promise<{
+  skipped?: boolean;
+  posted?: number;
+}> {
+  return runDiscordAutoPost(db);
 }
 
 /** Send due auto-reminders. Safe to call on a 5-min tick. */

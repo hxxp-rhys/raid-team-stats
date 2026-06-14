@@ -52,6 +52,8 @@ type LoadedEvent = {
   discordChannelId: string | null;
   discordMessageId: string | null;
   integrationChannelId: string | null;
+  autoPostEnabled: boolean;
+  autoPostLeadDays: number;
 };
 
 /** Load an event + its role-grouped roster (mirrors the eventDetail builder). */
@@ -67,7 +69,13 @@ async function loadEventRoster(
         select: {
           guildId: true,
           compTemplate: true,
-          discordIntegration: { select: { channelId: true } },
+          discordIntegration: {
+            select: {
+              channelId: true,
+              autoPostEnabled: true,
+              autoPostLeadDays: true,
+            },
+          },
         },
       },
     },
@@ -126,6 +134,8 @@ async function loadEventRoster(
       discordChannelId: event.discordChannelId,
       discordMessageId: event.discordMessageId,
       integrationChannelId: event.raidTeam.discordIntegration?.channelId ?? null,
+      autoPostEnabled: event.raidTeam.discordIntegration?.autoPostEnabled ?? false,
+      autoPostLeadDays: event.raidTeam.discordIntegration?.autoPostLeadDays ?? 5,
     },
     roster,
   };
@@ -142,6 +152,7 @@ export type RenderOutcome =
 export async function renderEventToDiscord(
   db: ExtendedPrismaClient,
   eventId: string,
+  opts?: { force?: boolean },
 ): Promise<RenderOutcome> {
   const data = await loadEventRoster(db, eventId);
   if (!data) return { ok: false, reason: "event not found" };
@@ -158,6 +169,19 @@ export async function renderEventToDiscord(
   const finished =
     loaded.event.startsAt.getTime() + loaded.durationMin * 60_000 < Date.now();
   if (finished && !loaded.discordMessageId) return { ok: true, action: "skipped" };
+
+  // Posting a NEW board is gated (an EXISTING board always keeps updating):
+  // allowed when forced (manual "Post to Discord") OR when auto-post is enabled
+  // AND the raid is within its lead window. Otherwise skip — it'll post when it
+  // enters the window (the due-post sweep) or when a leader posts it manually.
+  if (!loaded.discordMessageId && !opts?.force) {
+    const within =
+      loaded.event.startsAt.getTime() <=
+      Date.now() + loaded.autoPostLeadDays * 86_400_000;
+    if (!(loaded.autoPostEnabled && within)) {
+      return { ok: true, action: "skipped" };
+    }
+  }
 
   const message = buildEventMessage(loaded.event, roster, {
     eventUrl: eventUrl(loaded.guildId, loaded.raidTeamId, eventId),

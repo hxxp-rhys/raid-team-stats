@@ -54,11 +54,18 @@ function Form({
 }: {
   raidTeamId: string;
   canLead: boolean;
-  initial: { guildId: string; channelId: string } | null;
+  initial: {
+    guildId: string;
+    channelId: string;
+    autoPostEnabled: boolean;
+    autoPostLeadDays: number;
+  } | null;
 }) {
   const utils = api.useUtils();
   const [guildId, setGuildId] = useState(initial?.guildId ?? "");
   const [channelId, setChannelId] = useState(initial?.channelId ?? "");
+  const [autoPost, setAutoPost] = useState(initial?.autoPostEnabled ?? false);
+  const [leadDays, setLeadDays] = useState(initial?.autoPostLeadDays ?? 5);
 
   const save = api.discord.setIntegration.useMutation({
     onSuccess: () => void utils.discord.getIntegration.invalidate({ raidTeamId }),
@@ -92,14 +99,47 @@ function Form({
       </div>
       <p className="text-muted-foreground text-xs">
         Install the bot, enable Discord Developer Mode, then copy the server +
-        channel IDs. The bot posts each raid&apos;s signup board to that channel.
+        channel IDs. Use the “Post to Discord” button on a raid to post its board.
       </p>
+
+      <label className="flex items-center gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={autoPost}
+          onChange={(e) => setAutoPost(e.target.checked)}
+          className="accent-primary h-4 w-4"
+        />
+        Auto-post upcoming raids
+      </label>
+      {autoPost && (
+        <div className="flex items-center gap-2 pl-6 text-xs">
+          <span className="text-muted-foreground">Post each raid</span>
+          <Input
+            type="number"
+            min={1}
+            max={60}
+            value={leadDays}
+            onChange={(e) => setLeadDays(Math.max(1, Math.min(60, Number(e.target.value) || 5)))}
+            className="h-7 w-16"
+          />
+          <span className="text-muted-foreground">day(s) before it starts.</span>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <Button
           type="button"
           size="sm"
           disabled={save.isPending || !valid}
-          onClick={() => save.mutate({ raidTeamId, guildId, channelId })}
+          onClick={() =>
+            save.mutate({
+              raidTeamId,
+              guildId,
+              channelId,
+              autoPostEnabled: autoPost,
+              autoPostLeadDays: leadDays,
+            })
+          }
         >
           {save.isPending ? "Saving…" : initial ? "Update" : "Connect"}
         </Button>

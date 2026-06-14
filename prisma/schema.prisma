@@ -968,6 +968,12 @@ model DiscordIntegration {
   raidTeamId           String   @unique
   guildId              String // Discord guild snowflake
   channelId            String // channel where event embeds post
+  // Auto-post is OPT-IN (default off): when off, raids only reach the channel
+  // via the manual "Post to Discord" button. When on, each raid auto-posts once
+  // it's within `autoPostLeadDays` of starting (so a recurring schedule shows
+  // the upcoming raids, not the whole 8-week horizon at once).
+  autoPostEnabled      Boolean  @default(false)
+  autoPostLeadDays     Int      @default(5)
   reminderLeadsMinutes Int[]    @default([1440, 240]) // 24h + 4h non-responder nudges
   reminderMode         String   @default("CHANNEL") // "CHANNEL" | "DM"
   installedByUserId    String?
