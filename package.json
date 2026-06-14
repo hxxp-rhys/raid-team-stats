@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:ci": "SKIP_ENV_VALIDATION=1 NODE_ENV=production next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",

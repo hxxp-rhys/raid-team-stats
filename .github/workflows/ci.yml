@@ -85,8 +85,14 @@ jobs:
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: 1
+          # `next build` MUST run with NODE_ENV=production: React only loads its
+          # production build when NODE_ENV==="production" (react/index.js); under
+          # the job-level NODE_ENV=test it would load the DEV build, whose
+          # dispatcher throws "useContext of null" while statically prerendering
+          # /_global-error and /share under cacheComponents. Matches the
+          # Dockerfile, which sets the same for its build stage.
+          NODE_ENV: production
           # Build doesn't need live secrets — env.ts re-validates at boot.
-          # Matches the Dockerfile, which also sets this for the build stage.
           SKIP_ENV_VALIDATION: "1"
 
       - name: npm audit (production)
