@@ -34,7 +34,10 @@ export function DiscordSettings({
         <p className="text-muted-foreground text-xs">Loading…</p>
       ) : (
         <Form
-          key={q.data?.integration?.channelId ?? "new"}
+          // Keyed by team (stable across the first save) so the command-
+          // registration banner isn't unmounted when the post-save refetch
+          // flips `integration` from null to the saved binding.
+          key={raidTeamId}
           raidTeamId={raidTeamId}
           canLead={canLead}
           initial={q.data?.integration ?? null}

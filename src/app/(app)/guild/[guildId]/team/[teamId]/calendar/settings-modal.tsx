@@ -112,6 +112,7 @@ function Body({
       : COMMON_TZ;
 
   return (
+    <div className="space-y-4">
     <form
           className="space-y-4 text-sm"
           onSubmit={(e) => {
@@ -237,9 +238,6 @@ function Body({
             <p className="text-destructive text-xs" role="alert">{save.error.message}</p>
           )}
 
-          {/* Discord binding (own mutations; hidden when the bot isn't configured) */}
-          <DiscordSettings raidTeamId={raidTeamId} canLead />
-
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={save.isPending}>
               Cancel
@@ -249,5 +247,11 @@ function Body({
             </Button>
           </div>
     </form>
+
+    {/* Discord binding lives OUTSIDE the form (own mutations) so pressing Enter
+        in a Discord ID field can't submit the calendar settings form. Hidden
+        entirely when the bot isn't configured. */}
+    <DiscordSettings raidTeamId={raidTeamId} canLead />
+    </div>
   );
 }

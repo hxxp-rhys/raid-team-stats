@@ -26,6 +26,13 @@ export async function POST(req: Request) {
   const signature = req.headers.get("x-signature-ed25519");
   const timestamp = req.headers.get("x-signature-timestamp");
 
+  // Reject oversized payloads BEFORE buffering them (Content-Length short-circuit;
+  // the post-read check below is the backstop for chunked/absent-length requests).
+  const declaredLen = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_BODY) {
+    return new NextResponse("payload too large", { status: 413 });
+  }
+
   // Raw body (NOT req.json()): a re-serialization changes the bytes the
   // signature was computed over.
   const rawBody = await req.text();
@@ -35,6 +42,13 @@ export async function POST(req: Request) {
 
   if (!verifyInteractionSignature(rawBody, signature, timestamp, cfg.publicKey)) {
     return new NextResponse("invalid request signature", { status: 401 });
+  }
+
+  // Freshness: cap the cryptographic replay window (app-layer idempotency is the
+  // real guard, but Discord recommends rejecting stale timestamps). ±5 min.
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
+    return new NextResponse("stale request", { status: 401 });
   }
 
   let interaction: unknown;

@@ -15,10 +15,24 @@ import {
   type EmbedEvent,
 } from "@/lib/discord/embed";
 import {
+  deleteMessage,
   getChannelMessages,
   patchMessage,
   postMessage,
 } from "@/lib/discord/rest";
+
+/**
+ * Best-effort removal of an event's posted board — call BEFORE hard-deleting an
+ * event (the relay can't clean up a row that no longer exists). No-ops cleanly
+ * when the event was never posted or Discord is off.
+ */
+export async function removeEventBoard(
+  channelId: string | null | undefined,
+  messageId: string | null | undefined,
+): Promise<void> {
+  if (!channelId || !messageId) return;
+  await deleteMessage(channelId, messageId).catch(() => undefined);
+}
 
 /**
  * Render ONE event's signup board into its team's Discord channel — POST the
@@ -34,6 +48,7 @@ type LoadedEvent = {
   event: EmbedEvent;
   raidTeamId: string;
   guildId: string;
+  durationMin: number;
   discordChannelId: string | null;
   discordMessageId: string | null;
   integrationChannelId: string | null;
@@ -107,6 +122,7 @@ async function loadEventRoster(
       },
       raidTeamId: event.raidTeamId,
       guildId: event.raidTeam.guildId,
+      durationMin: event.durationMin,
       discordChannelId: event.discordChannelId,
       discordMessageId: event.discordMessageId,
       integrationChannelId: event.raidTeam.discordIntegration?.channelId ?? null,
@@ -131,15 +147,26 @@ export async function renderEventToDiscord(
   if (!data) return { ok: false, reason: "event not found" };
   const { loaded, roster } = data;
 
-  const channelId = loaded.discordChannelId ?? loaded.integrationChannelId;
+  // Prefer the team's CURRENT integration channel over any channel a past
+  // render stamped on the event — so re-binding a team to a new channel
+  // migrates the board there instead of editing the abandoned channel forever.
+  const channelId = loaded.integrationChannelId ?? loaded.discordChannelId;
   if (!channelId) return { ok: true, action: "skipped" }; // team not bound to a channel
+
+  // Never post a board for a finished raid (guards against any backfill of past
+  // events on a (re)bind; a live board is still editable to show cancellation).
+  const finished =
+    loaded.event.startsAt.getTime() + loaded.durationMin * 60_000 < Date.now();
+  if (finished && !loaded.discordMessageId) return { ok: true, action: "skipped" };
 
   const message = buildEventMessage(loaded.event, roster, {
     eventUrl: eventUrl(loaded.guildId, loaded.raidTeamId, eventId),
   });
 
-  // Edit in place when we have a message id.
-  if (loaded.discordMessageId) {
+  // Edit in place ONLY when the existing message is in the channel we're now
+  // targeting. If the channel changed (re-bind), fall through to post in the
+  // new channel (the old message is left as-is — we never delete history).
+  if (loaded.discordMessageId && loaded.discordChannelId === channelId) {
     const res = await patchMessage(channelId, loaded.discordMessageId, message);
     if (res.ok) return { ok: true, action: "patched" };
     if (res.status === 429) return { ok: false, retryAfterMs: res.retryAfterMs, reason: "rate limited" };
@@ -185,8 +212,13 @@ async function createOrAdopt(
           where: { id: eventId },
           data: { discordChannelId: channelId, discordMessageId: existing.id },
         });
-        // Bring the adopted message up to date.
-        await patchMessage(channelId, existing.id, message);
+        // Bring the adopted message up to date — honor a 429 so the cursor
+        // halts and retries (the linkage is already stored, so retry is a
+        // straight idempotent PATCH).
+        const p = await patchMessage(channelId, existing.id, message);
+        if (!p.ok && p.status === 429) {
+          return { ok: false, retryAfterMs: p.retryAfterMs, reason: "rate limited" };
+        }
         return { ok: true, action: "adopted" };
       }
     }

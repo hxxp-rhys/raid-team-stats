@@ -42,6 +42,7 @@ import {
   serverActionKey,
 } from "@/server/calendar/sync";
 import { applySignupIntent } from "@/server/calendar/signup-intent";
+import { removeEventBoard } from "@/server/calendar/discord/render";
 
 const stateSchema = z.enum(["CONFIRM", "TENTATIVE", "LATE", "ABSENT"]);
 const difficultySchema = z.enum(["Mythic", "Heroic", "Normal", "LFR"]);
@@ -261,6 +262,10 @@ async function applySeriesPlan(
   }
 
   for (const id of plan.toDelete) {
+    const linkage = await db.raidEvent.findUnique({
+      where: { id },
+      select: { discordChannelId: true, discordMessageId: true },
+    });
     await db.$transaction(async (tx) => {
       await appendOutbox(tx, {
         raidTeamId: series.raidTeamId,
@@ -272,6 +277,8 @@ async function applySeriesPlan(
       });
       await tx.raidEvent.delete({ where: { id } });
     });
+    // Best-effort: remove any posted Discord board for the deleted placeholder.
+    await removeEventBoard(linkage?.discordChannelId, linkage?.discordMessageId);
     deleted++;
   }
 
@@ -996,7 +1003,12 @@ export const calendarRouter = router({
     .mutation(async ({ ctx, input }) => {
       const event = await ctx.db.raidEvent.findUnique({
         where: { id: input.eventId },
-        select: { raidTeamId: true, seriesId: true },
+        select: {
+          raidTeamId: true,
+          seriesId: true,
+          discordChannelId: true,
+          discordMessageId: true,
+        },
       });
       if (!event) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, event.raidTeamId, "LEADER");
@@ -1023,6 +1035,9 @@ export const calendarRouter = router({
         });
         await tx.raidEvent.delete({ where: { id: input.eventId } });
       });
+      // Best-effort: remove the event's Discord board (the relay can't clean up
+      // a row that no longer exists).
+      await removeEventBoard(event.discordChannelId, event.discordMessageId);
       await audit({
         event: "CALENDAR_EVENT_CANCELLED",
         actorUserId: ctx.session.user.id,

@@ -13,7 +13,10 @@ events. Code: [src/lib/discord/](../../../src/lib/discord/),
 fan-out in [src/server/calendar/discord/](../../../src/server/calendar/discord/).
 Full design: [docs/design/raid-calendar-attendance.md](../../../docs/design/raid-calendar-attendance.md) §5.
 
-## Env (all `requiredInProd`, in BOTH `server:` and `runtimeEnv:` of env.ts)
+## Env (OPTIONAL — all-or-nothing; in BOTH `server:` and `runtimeEnv:` of env.ts)
+All three are `z.string().min(1).optional()` (NOT `requiredInProd`): the bot turns
+on only when ALL THREE are set; absent any one it's disabled and the rest of the
+app runs normally (a deploy never breaks for not using Discord). Gate via `discordConfig()`.
 - `DISCORD_APP_ID` — application (client) id (snowflake).
 - `DISCORD_PUBLIC_KEY` — Ed25519 public key (hex) for verifying interactions.
 - `DISCORD_BOT_TOKEN` — bot token for outbound REST (`Authorization: Bot <token>`).

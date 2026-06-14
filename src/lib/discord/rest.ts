@@ -79,6 +79,16 @@ export function patchMessage(
   });
 }
 
+/** Delete a message (best-effort cleanup when an event is hard-deleted). */
+export function deleteMessage(
+  channelId: string,
+  messageId: string,
+): Promise<DiscordRest<undefined>> {
+  return discordFetch(`/channels/${channelId}/messages/${messageId}`, {
+    method: "DELETE",
+  });
+}
+
 /** Recent bot messages in a channel — used for create-or-adopt 404 recovery. */
 export function getChannelMessages(
   channelId: string,

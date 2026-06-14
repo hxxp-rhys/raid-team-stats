@@ -89,14 +89,31 @@ export async function consumeLinkCode(
     return { ok: true, userId: row.userId, alreadyLinked: true };
   }
 
-  await db.account.create({
-    data: {
-      userId: row.userId,
-      type: "oauth",
-      provider: "discord",
-      providerAccountId: snowflake,
-    },
-  });
+  try {
+    await db.account.create({
+      data: {
+        userId: row.userId,
+        type: "oauth",
+        provider: "discord",
+        providerAccountId: snowflake,
+      },
+    });
+  } catch (err) {
+    // Concurrent redeem of two codes for the same signed snowflake: the unique
+    // (provider, providerAccountId) constraint is the authority. Re-read and
+    // return idempotently rather than a confusing generic error on a burned code.
+    if (isUniqueViolation(err)) {
+      const now2 = await db.account.findUnique({
+        where: { provider_providerAccountId: { provider: "discord", providerAccountId: snowflake } },
+        select: { userId: true },
+      });
+      if (now2?.userId === row.userId) {
+        return { ok: true, userId: row.userId, alreadyLinked: true };
+      }
+      return { ok: false, reason: "snowflake_taken" };
+    }
+    throw err;
+  }
   await audit({
     event: "AUTH_DISCORD_LINKED",
     actorUserId: row.userId,
