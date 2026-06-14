@@ -41,6 +41,7 @@ import {
   intentKey,
   serverActionKey,
 } from "@/server/calendar/sync";
+import { applySignupIntent } from "@/server/calendar/signup-intent";
 
 const stateSchema = z.enum(["CONFIRM", "TENTATIVE", "LATE", "ABSENT"]);
 const difficultySchema = z.enum(["Mythic", "Heroic", "Normal", "LFR"]);
@@ -1046,31 +1047,14 @@ export const calendarRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Role gate needs the team; the event-level guards (past/cancelled) and
+      // the membership gate live in the shared applySignupIntent service.
       const event = await ctx.db.raidEvent.findUnique({
         where: { id: input.eventId },
-        select: {
-          raidTeamId: true,
-          startsAt: true,
-          durationMin: true,
-          status: true,
-        },
+        select: { raidTeamId: true },
       });
       if (!event) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, event.raidTeamId, "MEMBER");
-
-      // Reject signups for an event that has already finished (M6).
-      if (endInstant(event.startsAt, event.durationMin).getTime() < Date.now()) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This raid has already finished.",
-        });
-      }
-      if (event.status === "CANCELLED") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This raid was cancelled.",
-        });
-      }
 
       const characterId = await defaultCharacterId(
         ctx.db,
@@ -1080,57 +1064,28 @@ export const calendarRouter = router({
       );
       const key = intentKey(ctx.session.user.id, input.eventId, input.clientActionId);
 
-      const result = await ctx.db.$transaction(async (tx) => {
-        // Idempotency: first writer wins; a replay is a no-op.
-        const claimed = await tx.processedIntent.createMany({
-          data: { idempotencyKey: key, raidEventId: input.eventId, userId: ctx.session.user.id },
-          skipDuplicates: true,
-        });
-        if (claimed.count === 0) {
-          return { applied: false as const };
+      const result = await applySignupIntent(ctx.db, {
+        userId: ctx.session.user.id,
+        eventId: input.eventId,
+        characterId,
+        state: input.state,
+        etaMinutes: input.etaMinutes,
+        reason: input.reason,
+        comment: input.comment,
+        source: "WEBSITE",
+        idempotencyKey: key,
+        updatedByUserId: ctx.session.user.id,
+      });
+      if (!result.ok) {
+        if (result.reason === "not_found") throw new TRPCError({ code: "NOT_FOUND" });
+        if (result.reason === "past") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This raid has already finished." });
         }
-        const signup = await tx.eventSignup.upsert({
-          where: { raidEventId_characterId: { raidEventId: input.eventId, characterId } },
-          create: {
-            raidEventId: input.eventId,
-            userId: ctx.session.user.id,
-            characterId,
-            state: input.state,
-            etaMinutes: input.state === "LATE" ? (input.etaMinutes ?? null) : null,
-            reason: input.reason ?? null,
-            comment: input.comment ?? null,
-            source: "WEBSITE",
-            updatedByUserId: ctx.session.user.id,
-          },
-          update: {
-            state: input.state,
-            etaMinutes: input.state === "LATE" ? (input.etaMinutes ?? null) : null,
-            reason: input.reason ?? null,
-            comment: input.comment ?? null,
-            source: "WEBSITE",
-            updatedByUserId: ctx.session.user.id,
-            version: { increment: 1 },
-          },
-          select: { version: true },
-        });
-        await appendOutbox(tx, {
-          raidTeamId: event.raidTeamId,
-          raidEventId: input.eventId,
-          kind: "signup.changed",
-          payload: { eventId: input.eventId, characterId, state: input.state },
-          version: signup.version,
-          idempotencyKey: key,
-        });
-        return { applied: true as const, characterId };
-      });
-
-      await audit({
-        event: "CALENDAR_SIGNUP_CHANGED",
-        actorUserId: ctx.session.user.id,
-        subjectType: "raidEvent",
-        subjectId: input.eventId,
-        metadata: { state: input.state, characterId, source: "WEBSITE" },
-      });
+        if (result.reason === "cancelled") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This raid was cancelled." });
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That character is not on this raid team." });
+      }
       return { ok: true, applied: result.applied, characterId };
     }),
 
