@@ -16,6 +16,7 @@ import { DeleteAccountCard } from "@/app/(app)/profile/delete-account-card";
 import { OwnerMfaWarning } from "@/app/(app)/profile/owner-mfa-warning";
 import { AddonUploaderCard } from "@/app/(app)/account/addon-uploader-card";
 import { AccountRefreshButton } from "@/app/(app)/account/account-refresh-button";
+import { DiscordLinkCard } from "@/app/(app)/account/discord-link-card";
 
 export default async function AccountPage() {
   const session =
@@ -113,6 +114,8 @@ export default async function AccountPage() {
             </p>
           </CardContent>
         </Card>
+
+        <DiscordLinkCard />
 
         <MfaCard />
 
