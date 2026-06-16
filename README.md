@@ -4,6 +4,10 @@ Customizable raid-team stat tracking for World of Warcraft guilds. Pulls charact
 M+, raid, vault, and parse data from Blizzard, Warcraft Logs, and Raider.IO and
 renders configurable dashboards scoped to guild-internal raid teams.
 
+> 💙 **Free & open source.** If your guild finds this useful, you can support
+> development and hosting via the **[Sponsor button](https://github.com/sponsors/hxxp-rhys)**.
+> Totally optional — the app and the in-game addon are free and always will be.
+
 ## Setup / self-hosting
 
 **New here? Start with [SETUP.md](./SETUP.md)** — a step-by-step guide to running
