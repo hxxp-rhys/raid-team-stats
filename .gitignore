@@ -56,7 +56,11 @@ next-env.d.ts
 !.vscode/settings.json
 *.code-workspace
 
-# OS / OneDrive metadata
+# AI-assistant working files (Claude Code skills + local settings/notes) —
+# kept on-disk for local use, not tracked in the public repo.
+.claude/
+
+# OS metadata
 desktop.ini
 $RECYCLE.BIN/
 
