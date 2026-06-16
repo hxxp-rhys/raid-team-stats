@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import {
   resolveUploadTokenUserId,
+  rotateUploadToken,
   hashUploadToken,
 } from "@/server/auth/upload-token";
 import {
@@ -124,6 +125,12 @@ export async function POST(req: Request) {
   const userId = await resolveUploadTokenUserId(token);
   if (!userId) return bad(401, "unauthorized");
 
+  // Rolling token rotation is OPT-IN per request: only rotate for companions
+  // that advertise they will persist the new token (`X-RTS-Rotate: 1`). Older
+  // clients that can't persist would otherwise lock themselves out after the
+  // one-use grace window, so for them we leave the token static.
+  const wantsRotation = req.headers.get("x-rts-rotate") === "1";
+
   // ── body (JSON object, JSON string, or RTS1:<base64>) ──
   const raw = await req.text();
   if (!raw || raw.length > MAX_BODY) return bad(400, "empty or oversized body");
@@ -171,6 +178,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       skipped: "partial capture — stay logged in ~5 min for a full sync",
+      ...(wantsRotation ? { nextToken: await rotateUploadToken(userId) } : {}),
     });
   }
 
@@ -253,6 +261,7 @@ export async function POST(req: Request) {
     character: character.name,
     world: { unlocked: v.worldUnlocked, total: v.worldTotal },
     weeklyMplusRuns: v.weeklyMplusRuns,
+    ...(wantsRotation ? { nextToken: await rotateUploadToken(userId) } : {}),
   });
 }
 

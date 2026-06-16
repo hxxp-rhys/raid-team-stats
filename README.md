@@ -147,6 +147,76 @@ src/
 └── proxy.ts            # Next 16 proxy.ts — applies CSP/headers + rate limit
 ```
 
+## Hardening your hosting environment
+
+The app already encrypts the most sensitive data itself (passwords with Argon2id;
+OAuth and MFA secrets with AES‑256‑GCM) and ships with strict security headers,
+rate limiting, authenticated Redis, and hardened containers. But a few important
+protections live in the **hosting environment**, not the code — and they matter
+most when you're handling real people's data (logins, emails, and recruitment
+applications). Here's what to do and *why*, with quick examples for **AWS**,
+**Azure**, and a **self‑hosted** VPS.
+
+> **Rule of thumb:** only **80/443** should ever be reachable from the internet.
+> The database, cache, pooler, metrics, and dashboards all stay on a private network.
+
+### 1. Encrypt the disks at rest
+**Why:** your database, Redis (which persists API tokens and job data to disk), the
+backups, and any recruitment applications all live on disk. Disk encryption makes a
+stolen disk, snapshot, or decommissioned drive useless to an attacker — it's the
+safety net underneath everything the app doesn't field‑encrypt itself.
+- **AWS:** turn on EBS encryption (enable account‑level *"Always encrypt new EBS volumes"*); use an encrypted RDS instance and encrypted snapshots.
+- **Azure:** managed disks are encrypted by default; add Azure Disk Encryption or a customer‑managed key in Key Vault for stronger control.
+- **Self‑hosted:** enable full‑disk encryption (LUKS) on the data partition. Check with `lsblk -o NAME,FSTYPE,MOUNTPOINT` and `cryptsetup status`.
+
+### 2. Lock down the firewall / network
+**Why:** Postgres, Redis, and PgBouncer trust their private network and aren't meant
+to face the internet. If a data port is exposed, an attacker can reach it directly.
+- **AWS:** a Security Group on the web tier that allows only 80/443 from `0.0.0.0/0`; put RDS / ElastiCache in a private subnet whose SG only accepts the app's SG.
+- **Azure:** a Network Security Group allowing 80/443 inbound and denying the rest; keep the database on a private endpoint / VNet.
+- **Self‑hosted:** `ufw default deny incoming; ufw allow 80; ufw allow 443; ufw allow <your-ssh-port>`. Never `docker run -p` a data port (the compose files already bind dev ports to `127.0.0.1`). If you front the app with Cloudflare, also restrict the origin to Cloudflare's IP ranges so nobody can bypass it.
+
+### 3. Force HTTPS everywhere, strictly
+**Why:** TLS protects every login, token, and personal detail in transit and blocks
+downgrade attacks.
+- **AWS:** terminate TLS at an ALB with an auto‑renewing ACM certificate; redirect 80→443.
+- **Azure:** Application Gateway or Front Door with a managed certificate; enable *"HTTPS only."*
+- **Self‑hosted:** Caddy already auto‑provisions Let's Encrypt certificates and sends HSTS. If Cloudflare is in front, set SSL/TLS mode to **Full (strict)** (so Cloudflare→origin is verified too) and enable *"Always Use HTTPS."*
+
+### 4. Encrypt the database connection (or keep it on a trusted network)
+**Why:** by default the app talks to Postgres over the private Docker network in
+plaintext — fine on a single host, but a risk the moment the database lives on a
+separate machine.
+- **AWS:** use RDS for PostgreSQL with `rds.force_ssl=1`, and put `?sslmode=verify-full` (plus the RDS CA bundle) in `DATABASE_URL`.
+- **Azure:** Azure Database for PostgreSQL enforces TLS by default; use `sslmode=verify-full`.
+- **Self‑hosted:** keeping Postgres and the app on the same host's private bridge is an acceptable trusted boundary. If they're on different hosts, enable Postgres server TLS and use `sslmode=verify-full`.
+
+### 5. Keep secrets in a managed store, not a plaintext file
+**Why:** `.env.prod` sits in cleartext on the host. A secret store adds access
+control, rotation, and an audit trail, and keeps secrets out of disk images and backups.
+- **AWS:** store secrets in Secrets Manager or SSM Parameter Store (SecureString) and inject them at container start; give the instance an IAM role instead of static keys.
+- **Azure:** store them in Key Vault and read them via a managed identity (nothing on disk).
+- **Self‑hosted:** use Docker secrets or a SOPS‑encrypted env file. At minimum, `chmod 600` the `.env.prod`, own it as `root`, and exclude it from backups.
+
+### 6. Encrypt, off‑site, and test your backups
+**Why:** a backup is a full copy of everyone's data — it must be encrypted, stored
+off the host, and actually restorable.
+- **AWS:** RDS automated snapshots are encrypted; or send the bundled backup to an S3 bucket with SSE, versioning, and lifecycle rules.
+- **Azure:** Azure Backup, or send the bundled backup to Blob Storage (encrypted at rest).
+- **Self‑hosted:** the repo ships an **age‑encrypted** `pg_dump` → `rclone` backup (`scripts/backup.sh`, the `backup` compose profile). Set `BACKUP_AGE_PUBKEY` + `RCLONE_REMOTE`, keep the age **private** key offline, and **test a restore** now and then.
+
+### 7. Rotate credentials and use least privilege
+**Why:** rotation limits how long a leaked secret stays useful; least privilege limits
+how much one leaked credential can touch.
+- Rotate `AUTH_SECRET`, `SHARE_TOKEN_SECRET` (kept separate so you can revoke *all* share links without logging everyone out), `TOKEN_ENCRYPTION_KEY`, the Postgres/Redis passwords, and provider API keys on a schedule.
+- **AWS / Azure:** use Secrets Manager / Key Vault rotation, and scope IAM or managed‑identity roles to exactly what's needed.
+- **Self‑hosted:** the app already connects as a non‑superuser Postgres role — keep it that way. Regenerate the in‑game **upload token** from the Account page if a machine is lost (it's a long‑lived bearer credential).
+
+### 8. Patch and scan
+**Why:** most real compromises use known, already‑patched vulnerabilities.
+- **AWS / Azure:** enable image scanning (ECR / ACR) and managed OS patching.
+- **Self‑hosted:** enable `unattended-upgrades`, keep Docker updated, and watch the repo's CI scans (Trivy + `npm audit` run on every change). Also lock down SSH: key‑only auth, no root login.
+
 ## Production deployment (sketch)
 
 Phase 6 ships the full production compose. For now, the building blocks are:

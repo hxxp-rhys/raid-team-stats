@@ -58,11 +58,18 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@pgbouncer:6432/raid_team_stats?schema=public
-      REDIS_URL: redis://redis:6379
+      # The entrypoint runs migrations on start (the web container is the single
+      # place they run). Migrations need a DIRECT Postgres connection — a
+      # transaction-pooled PgBouncer can't run Prisma's migration session.
+      RUN_MIGRATIONS: "true"
+      MIGRATE_DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@postgres:5432/raid_team_stats?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       RATE_LIMIT_TRUST_PROXY: "true"
       HOSTNAME: 0.0.0.0
       PORT: "3000"
     depends_on:
+      postgres:
+        condition: service_healthy
       pgbouncer:
         condition: service_healthy
       redis:
@@ -93,9 +100,13 @@ services:
       - .env.prod
     environment:
       NODE_ENV: production
+      # The web container owns migrations; the worker must NOT also run them.
+      RUN_MIGRATIONS: "false"
       DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@pgbouncer:6432/raid_team_stats?schema=public
-      REDIS_URL: redis://redis:6379
-    command: ["node", "dist/server/ingestion/worker.js"]
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    # Run the worker straight from TypeScript via tsx (shipped in the image),
+    # the same way it runs in development.
+    command: ["node_modules/.bin/tsx", "src/server/ingestion/worker.ts"]
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -106,6 +117,9 @@ services:
     image: postgres:16-alpine
     container_name: rts-postgres-prod
     restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     environment:
       POSTGRES_USER: raid_team_stats
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -122,6 +136,9 @@ services:
     image: edoburu/pgbouncer:1.23.0
     container_name: rts-pgbouncer
     restart: unless-stopped
+    # no-new-privileges is always safe; full cap-drop for this image should be
+    # smoke-tested on the host before adding (it drops to a non-root user).
+    security_opt: ["no-new-privileges:true"]
     environment:
       DB_USER: raid_team_stats
       DB_PASSWORD: ${POSTGRES_PASSWORD}
@@ -144,8 +161,16 @@ services:
     image: redis:7-alpine
     container_name: rts-redis-prod
     restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
     command:
       - redis-server
+      # Authenticate every client. REDIS_PASSWORD MUST be set in .env.prod
+      # (fail-closed). Redis caches service API tokens + job payloads and
+      # persists them via AOF/RDB, so an unauthenticated Redis is a real leak.
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}
       - --appendonly
       - "yes"
       - --maxmemory-policy
@@ -156,7 +181,7 @@ services:
     volumes:
       - rts-redisdata-prod:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -168,6 +193,7 @@ services:
     image: alpine:3.20
     container_name: rts-backup
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     profiles:
       - backup
     env_file:

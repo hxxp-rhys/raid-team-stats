@@ -33,13 +33,13 @@ services:
     image: redis:7-alpine
     container_name: rts-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-dev_redis_change_me}", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - ./persistent_data/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-dev_redis_change_me}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -59,7 +59,7 @@ services:
     environment:
       NODE_ENV: development
       DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dev_redis_change_me}@redis:6379
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       # Docker bind-mount on Linux does NOT deliver host inotify events into
@@ -137,7 +137,7 @@ services:
     environment:
       NODE_ENV: development
       DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dev_redis_change_me}@redis:6379
       METRICS_TOKEN: ${METRICS_TOKEN:-dev-metrics-token-change-me}
     command: ["sh", "-c", "if [ ! -f /app/node_modules/.package-lock.json ]; then echo 'Bootstrapping node_modules (first run)...'; npm ci --no-audit --no-fund; fi && npx prisma generate && npx tsx src/server/ingestion/worker.ts"]
     volumes:
@@ -204,7 +204,10 @@ services:
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Dev-only, bound to localhost (see the ports mapping below). The default
+      # is a placeholder — NOT the classic admin/admin. Set a strong
+      # GRAFANA_ADMIN_PASSWORD in .env and never expose Grafana publicly.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme-local-only}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"

@@ -5,42 +5,101 @@ import { logger } from "@/lib/logger";
 import { encryptToken, decryptToken, isEncrypted } from "@/server/crypto/token-cipher";
 
 /**
- * Transparent column-level encryption for OAuth tokens stored in the Account
- * table. Layered on top of database-level encryption-at-rest (defense in depth).
+ * Transparent, NON-OPTIONAL column-level encryption (AES-256-GCM) for tokens and
+ * PII, enforced at the data layer so application code can never accidentally
+ * store plaintext. Layered on top of database/disk encryption-at-rest (defense
+ * in depth). A single `$allModels.$allOperations` interceptor encrypts the
+ * registered fields on writes and decrypts them on reads — including fields that
+ * arrive nested via `include` (e.g. FormSubmission → FormAnswer).
  *
  * The cipher is idempotent: writes skip already-encrypted values, reads return
- * plaintext as-is if a row predates the extension. Decrypt failures (wrong
- * key, tampering) become null rather than throwing, so a single bad row never
- * takes down an auth flow — it surfaces as a forced re-link instead.
+ * legacy plaintext as-is (so a row predating encryption still works, and a
+ * one-time backfill — scripts/backfill-pii-encryption.ts — converts old rows).
+ * Decrypt failures (wrong key, tampering) become null + a log line rather than
+ * throwing, so one bad row never takes down a read path.
+ *
+ * NOTE: `email` is intentionally NOT here yet — it's the @unique login
+ * identifier and needs a blind-index migration + live auth testing (tracked
+ * separately). All other PII is covered.
  */
-const ENCRYPTED_FIELDS = ["access_token", "refresh_token", "id_token"] as const;
+type FieldType = "string" | "json";
+
+/** model delegate (camelCase) -> { field -> type }. */
+const ENCRYPTED: Record<string, Record<string, FieldType>> = {
+  account: { access_token: "string", refresh_token: "string", id_token: "string" },
+  user: { displayName: "string", avatarUrl: "string" },
+  formSubmission: { answersJson: "json", applicantLabel: "string" },
+  formAnswer: { valueText: "string", valueJson: "json" },
+};
+
+/** parent delegate -> { relation field -> child delegate } (for nested writes/includes). */
+const NESTED: Record<string, Record<string, string>> = {
+  formSubmission: { answers: "formAnswer" },
+};
 
 type MutableRecord = Record<string, unknown>;
 
-const encryptInPlace = (data: MutableRecord | null | undefined): void => {
-  if (!data) return;
-  for (const field of ENCRYPTED_FIELDS) {
-    const v = data[field];
-    if (typeof v === "string" && v.length > 0 && !isEncrypted(v)) {
-      data[field] = encryptToken(v);
+const encField = (value: unknown, type: FieldType): unknown => {
+  if (value == null) return value;
+  if (typeof value === "string" && isEncrypted(value)) return value; // already encrypted
+  if (type === "string") {
+    return typeof value === "string" && value.length > 0 ? encryptToken(value) : value;
+  }
+  // json: serialize then encrypt; stored as a JSON string primitive.
+  try {
+    return encryptToken(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+};
+
+const decField = (value: unknown, type: FieldType): unknown => {
+  if (typeof value !== "string" || !isEncrypted(value)) return value; // legacy plaintext / non-string
+  try {
+    const plain = decryptToken(value);
+    if (plain == null) return null;
+    return type === "json" ? JSON.parse(plain) : plain;
+  } catch (err) {
+    logger.error({ err, type }, "PII/token decrypt failed; returning null so the read path recovers");
+    return null;
+  }
+};
+
+export const encryptRecord = (modelKey: string, data: unknown): void => {
+  if (!data || typeof data !== "object") return;
+  const rec = data as MutableRecord;
+  const fields = ENCRYPTED[modelKey];
+  if (fields) {
+    for (const [f, t] of Object.entries(fields)) {
+      if (f in rec) rec[f] = encField(rec[f], t);
+    }
+  }
+  const nested = NESTED[modelKey];
+  if (nested) {
+    for (const [rel, childKey] of Object.entries(nested)) {
+      const relData = rec[rel] as { create?: unknown } | undefined;
+      const create = relData?.create;
+      if (Array.isArray(create)) create.forEach((row) => encryptRecord(childKey, row));
+      else if (create) encryptRecord(childKey, create);
     }
   }
 };
 
-const decryptInPlace = (data: MutableRecord | null | undefined): void => {
-  if (!data) return;
-  for (const field of ENCRYPTED_FIELDS) {
-    const v = data[field];
-    if (typeof v === "string" && isEncrypted(v)) {
-      try {
-        data[field] = decryptToken(v);
-      } catch (err) {
-        logger.error(
-          { err, field },
-          "account token decrypt failed; setting to null so auth flow can recover",
-        );
-        data[field] = null;
-      }
+export const decryptRecord = (modelKey: string, rec: unknown): void => {
+  if (!rec || typeof rec !== "object") return;
+  const r = rec as MutableRecord;
+  const fields = ENCRYPTED[modelKey];
+  if (fields) {
+    for (const [f, t] of Object.entries(fields)) {
+      if (f in r) r[f] = decField(r[f], t);
+    }
+  }
+  const nested = NESTED[modelKey];
+  if (nested) {
+    for (const [rel, childKey] of Object.entries(nested)) {
+      const v = r[rel];
+      if (Array.isArray(v)) v.forEach((child) => decryptRecord(childKey, child));
+      else if (v && typeof v === "object") decryptRecord(childKey, v);
     }
   }
 };
@@ -56,64 +115,35 @@ const buildClient = () => {
   });
 
   return base.$extends({
-    name: "encryptAccountTokens",
+    name: "encryptPiiAndTokens",
     query: {
-      account: {
-        async create({ args, query }) {
-          encryptInPlace(args.data as MutableRecord);
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async createMany({ args, query }) {
-          if (Array.isArray(args.data)) {
-            for (const d of args.data) encryptInPlace(d as MutableRecord);
-          } else {
-            encryptInPlace(args.data as MutableRecord);
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          // Prisma passes the PascalCase model name; our registry is camelCase.
+          const key = model.charAt(0).toLowerCase() + model.slice(1);
+          if (!(key in ENCRYPTED) && !(key in NESTED)) return query(args);
+
+          const a = args as {
+            data?: unknown;
+            create?: unknown;
+            update?: unknown;
+          };
+          if (operation === "create" || operation === "update") {
+            encryptRecord(key, a.data);
+          } else if (operation === "createMany" || operation === "updateMany") {
+            if (Array.isArray(a.data)) a.data.forEach((d) => encryptRecord(key, d));
+            else encryptRecord(key, a.data);
+          } else if (operation === "upsert") {
+            encryptRecord(key, a.create);
+            encryptRecord(key, a.update);
           }
-          return query(args);
-        },
-        async update({ args, query }) {
-          encryptInPlace(args.data as MutableRecord);
+
           const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async updateMany({ args, query }) {
-          encryptInPlace(args.data as MutableRecord);
-          return query(args);
-        },
-        async upsert({ args, query }) {
-          encryptInPlace(args.create as MutableRecord);
-          encryptInPlace(args.update as MutableRecord);
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async findUnique({ args, query }) {
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async findUniqueOrThrow({ args, query }) {
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async findFirst({ args, query }) {
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async findFirstOrThrow({ args, query }) {
-          const result = await query(args);
-          decryptInPlace(result as unknown as MutableRecord);
-          return result;
-        },
-        async findMany({ args, query }) {
-          const result = await query(args);
+
           if (Array.isArray(result)) {
-            for (const r of result) decryptInPlace(r as MutableRecord);
+            for (const row of result) decryptRecord(key, row);
+          } else if (result && typeof result === "object") {
+            decryptRecord(key, result);
           }
           return result;
         },

@@ -51,7 +51,19 @@ COPY --from=build --chown=app:app /app/public ./public
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build --chown=app:app /app/next.config.ts ./next.config.ts
-COPY --from=build --chown=app:app /app/src/generated ./src/generated
+# Full src tree + tsconfig so the SAME image can also run the BullMQ background
+# worker via tsx (it imports across src/server + src/lib using the @/* alias).
+# Includes the generated Prisma client (src/generated).
+COPY --from=build --chown=app:app /app/src ./src
+COPY --from=build --chown=app:app /app/tsconfig.json ./tsconfig.json
+# Operational script run via tsx (the one-time PII encryption backfill the
+# entrypoint can trigger with RUN_PII_BACKFILL=true). Only this one ships — the
+# dev/diagnostic scripts stay out of the runtime image.
+COPY --from=build --chown=app:app /app/scripts/backfill-pii-encryption.ts ./scripts/backfill-pii-encryption.ts
+
+# Entrypoint applies pending migrations on start, then launches the CMD.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 USER app
 
@@ -59,5 +71,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
 
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]

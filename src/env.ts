@@ -30,6 +30,12 @@ export const env = createEnv({
       .string()
       .min(32, "AUTH_SECRET must be at least 32 chars (use `openssl rand -base64 48`)"),
 
+    // Dedicated signing key for shareable-dashboard links, kept SEPARATE from
+    // AUTH_SECRET so a leaked share link can be revoked by rotating THIS key
+    // WITHOUT logging out every signed-in user. Falls back to AUTH_SECRET when
+    // unset (backwards-compatible). Generate with `openssl rand -base64 48`.
+    SHARE_TOKEN_SECRET: z.string().min(32).optional(),
+
     APP_URL: z.string().url().default("http://localhost:3000"),
 
     // Locks Auth.js's URL computation to a fixed origin. Without this, Auth.js
@@ -147,9 +153,10 @@ export const env = createEnv({
       .transform((v) => v === "true"),
 
     // Shared bearer used by the Prometheus container to scrape /api/metrics.
-    // Empty in dev allows the admin-session path to access metrics in a
-    // browser; production should always set this.
-    METRICS_TOKEN: z.string().optional(),
+    // REQUIRED in production (fail-closed) so metrics are never left on the
+    // admin-session-only fallback by accident; optional in dev, where an empty
+    // value falls back to the admin-session path.
+    METRICS_TOKEN: requiredInProd(z.string().min(1)),
   },
 
   client: {
@@ -161,6 +168,7 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     REDIS_URL: process.env.REDIS_URL,
     AUTH_SECRET: process.env.AUTH_SECRET,
+    SHARE_TOKEN_SECRET: process.env.SHARE_TOKEN_SECRET,
     APP_URL: process.env.APP_URL,
     AUTH_URL: process.env.AUTH_URL,
     TRUSTED_ORIGINS: process.env.TRUSTED_ORIGINS,

@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Prepare .env for compose
         run: |
@@ -56,7 +56,7 @@ jobs:
           exit 1
 
       - name: Run ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.13.0
+        uses: zaproxy/action-baseline@0619037bb784a56e2e06b104f0ebe157e076f075 # v0.13.0
         with:
           target: "http://localhost:3000/"
           fail_action: false
