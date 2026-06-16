@@ -35,6 +35,12 @@ export const CURRENT_TIER_INSTANCES: Record<string, number> = {
   "The Voidspire": 1307,
   "March on Quel'Danas": 1308,
   "The Dreamrift": 1314,
+  // 12.0.7 "Sporefall" (WCL zone 50, single boss "Rotmire") is live, but its
+  // Blizzard journal-instance is NOT yet published in the static game-data API
+  // (verified by scanning /data/wow/journal-instance on patch day). Add
+  // `"Sporefall": <id>` here once it appears; until then the calendar just shows
+  // no custom art/boss-list for it (getZoneArtUrl/getZoneEncounters degrade to
+  // null/[] gracefully).
 };
 
 /**

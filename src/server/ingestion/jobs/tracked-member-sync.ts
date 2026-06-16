@@ -818,10 +818,10 @@ export async function handleTrackedMemberSync(
   //    `reportStartTime` (current-week best, the parses widget).
   //
   //    Zone resolves via `currentRaidZoneId()` (env WCL_RAID_ZONE_ID pin →
-  //    Redis cache → live worldData.zones). Prod pins 46 (live Midnight).
+  //    Redis cache → live worldData.zones). Prod pins 50 (Midnight / Sporefall).
   try {
     const wcl = warcraftLogsClient();
-    const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
+    const zoneID = (await wcl.currentRaidZoneId()) ?? 50;
 
     // Current raid lockout window: US weekly reset is Tuesday 15:00 UTC
     // (= "Tuesday 11:00" US Eastern, what the user specified). Matches the

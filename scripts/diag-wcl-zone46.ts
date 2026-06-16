@@ -30,7 +30,7 @@ const schema = z.object({
 
 async function main() {
   const wcl = warcraftLogsClient();
-  for (const id of [46, 51]) {
+  for (const id of [46, 50]) {
     const r = await wcl.query({ query: Q, variables: { id }, schema, estimatedPoints: 2 });
     const z = r.worldData.zone;
     console.log(

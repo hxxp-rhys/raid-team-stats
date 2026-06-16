@@ -26,8 +26,8 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
         <WidgetEmpty>No tracked members yet.</WidgetEmpty>
       ) : q.data.members.every((m) => m.latest.addon?.delves == null) ? (
         <WidgetEmpty>
-          No delve data yet — uploads from the in-game addon (12.0.5) populate
-          this once members run a delve and reload.
+          No delve data yet — uploads from the in-game addon populate this once
+          members run a delve and reload.
         </WidgetEmpty>
       ) : (
         <table className="w-full text-sm">

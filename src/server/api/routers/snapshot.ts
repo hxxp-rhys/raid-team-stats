@@ -772,7 +772,7 @@ export const snapshotRouter = router({
         },
       });
       const characterIds = memberships.map((m) => m.character.id);
-      const zoneId = (await warcraftLogsClient().currentRaidZoneId()) ?? 46;
+      const zoneId = (await warcraftLogsClient().currentRaidZoneId()) ?? 50;
 
       if (characterIds.length === 0) {
         return {

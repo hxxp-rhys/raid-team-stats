@@ -1,4 +1,4 @@
--- StatSmith.lua  (WoW Midnight 12.0.5 — Interface 120005)
+-- StatSmith.lua  (WoW Midnight 12.0.7 — Interface 120007)
 --
 -- Reads the player's live data that has NO Blizzard web API (Great Vault
 -- incl. the World/Delve row + per-row thresholds & reward previews, exact
@@ -60,7 +60,7 @@ local AddonName, ns = ...
 -- RaidNightObservation and unions observers at read time. Signups stay
 -- first-party (the website calendar) — never inferred from presence.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.0"
+local ADDON_VERSION = "1.2.1"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
