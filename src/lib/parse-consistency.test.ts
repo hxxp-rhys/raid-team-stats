@@ -2,11 +2,35 @@ import { describe, expect, it } from "vitest";
 
 import {
   bandOf,
+  extractKillRanks,
   roleOf,
   slopeBadge,
   stdevOf,
   theilSen,
 } from "./parse-consistency";
+
+describe("extractKillRanks", () => {
+  it("pulls {t, pct} from each kill, tolerating top-level or report.startTime and rankPercent/percentile", () => {
+    const raw = {
+      season: { totalKills: 3 },
+      ranks: [
+        { startTime: 1000, rankPercent: 90.5 }, // top-level startTime
+        { report: { startTime: 2000 }, percentile: 80 }, // nested time + percentile fallback
+        { rankPercent: 70 }, // no time → dropped
+        { startTime: 3000 }, // no pct → dropped
+      ],
+    };
+    expect(extractKillRanks(raw)).toEqual([
+      { t: 1000, pct: 90.5 },
+      { t: 2000, pct: 80 },
+    ]);
+  });
+  it("missing / malformed ranks → []", () => {
+    expect(extractKillRanks(null)).toEqual([]);
+    expect(extractKillRanks({})).toEqual([]);
+    expect(extractKillRanks({ ranks: "nope" })).toEqual([]);
+  });
+});
 
 describe("stdevOf", () => {
   it("computes sample stdev", () => {

@@ -43,6 +43,11 @@ import {
 } from "@/server/calendar/sync";
 import { applySignupIntent } from "@/server/calendar/signup-intent";
 import { removeEventBoard } from "@/server/calendar/discord/render";
+import {
+  getZoneArtUrl,
+  getZoneEncounters,
+  CURRENT_TIER_INSTANCES,
+} from "@/server/calendar/zone-art";
 
 const stateSchema = z.enum(["CONFIRM", "TENTATIVE", "LATE", "ABSENT"]);
 const difficultySchema = z.enum(["Mythic", "Heroic", "Normal", "LFR"]);
@@ -107,6 +112,8 @@ function eventSummary(e: {
   status: string;
   seriesId: string | null;
   notes: string | null;
+  targetZoneIds: number[];
+  targetEncounterIds: number[];
   version: number;
 }) {
   return {
@@ -123,9 +130,15 @@ function eventSummary(e: {
     status: e.status,
     seriesId: e.seriesId,
     notes: e.notes,
+    targetZoneIds: e.targetZoneIds,
+    targetEncounterIds: e.targetEncounterIds,
     version: e.version,
   };
 }
+
+/** Targeting input shared by event/series create+update. */
+const targetZoneIdsSchema = z.array(z.number().int()).max(2);
+const targetEncounterIdsSchema = z.array(z.number().int()).max(40);
 
 const bydaySchema = z
   .array(z.string())
@@ -138,7 +151,9 @@ const reminderConfigSchema = z.object({
   // Capped at MAX_LEAD_MINUTES so every accepted value is within the reminder
   // sweep's lookahead — a config the sweep could never deliver is unstorable.
   leadMinutes: z.array(z.number().int().min(5).max(MAX_LEAD_MINUTES)).max(6),
-  nudgeMinutes: z.number().int().min(5).max(MAX_LEAD_MINUTES).nullable(),
+  // Multiple non-responder nudges, each at the lead's discretion. Bounded count
+  // to keep the stored config + per-event mail volume sane.
+  nudgeMinutes: z.array(z.number().int().min(5).max(MAX_LEAD_MINUTES)).max(6),
 });
 
 /** Series fields the per-occurrence rows inherit (everything but the schedule). */
@@ -150,6 +165,8 @@ type SeriesFields = {
   raidSize: number | null;
   durationMin: number;
   notes: string | null;
+  targetZoneIds: number[];
+  targetEncounterIds: number[];
   createdByUserId: string | null;
 };
 
@@ -193,6 +210,8 @@ async function applySeriesPlan(
             localTime: o.localTime,
             occurrenceDate: o.occurrenceDate,
             notes: series.notes,
+            targetZoneIds: series.targetZoneIds,
+            targetEncounterIds: series.targetEncounterIds,
             createdByUserId: series.createdByUserId,
           },
           select: { id: true, version: true },
@@ -222,6 +241,8 @@ async function applySeriesPlan(
           difficulty: series.difficulty,
           raidSize: series.raidSize,
           notes: series.notes,
+          targetZoneIds: series.targetZoneIds,
+          targetEncounterIds: series.targetEncounterIds,
           durationMin: series.durationMin,
           timezone: u.occurrence.timezone,
           localTime: u.occurrence.localTime,
@@ -531,6 +552,42 @@ export const calendarRouter = router({
       return { series };
     }),
 
+  /**
+   * The current tier's raid ZONES (Blizzard journal-instances) + their bosses
+   * + official tile art, for the raid-lead event-targeting picker and the
+   * month-view zone-art day backgrounds. MEMBER.
+   *
+   * Zones come from a STATIC current-tier instance map (name → Blizzard id);
+   * encounter names come from WclParseSnapshot distinct rows (read-only, no WCL
+   * points). The art URL is resolved+cached per instance (7-day Redis TTL) and
+   * is null when the tier isn't released / media 404s — the cell then falls
+   * back to its difficulty tint. The WCL zone is resolved only to scope the
+   * encounter lookup; missing/unmapped data never blocks the response.
+   */
+  targetableZones: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "MEMBER");
+
+      // Each raid's OWN bosses + art come from its Blizzard journal-instance
+      // (both static per patch + Redis-cached). This is what makes the picker
+      // show the SELECTED raid's bosses — WCL lumps the whole tier into one
+      // combined zone whose encounter list can't separate the raids.
+      const zones = await Promise.all(
+        Object.entries(CURRENT_TIER_INSTANCES).map(
+          async ([name, blizzardInstanceId]) => ({
+            blizzardInstanceId,
+            name,
+            encounters: await getZoneEncounters(blizzardInstanceId).catch(
+              () => [],
+            ),
+            imageUrl: await getZoneArtUrl(blizzardInstanceId).catch(() => null),
+          }),
+        ),
+      );
+      return { zones };
+    }),
+
   // ─── Mutations ─────────────────────────────────────────────────────────
 
   /** Create a one-off event. CO_LEADER+. (Recurring → createSeries.) */
@@ -545,6 +602,8 @@ export const calendarRouter = router({
         difficulty: difficultySchema,
         raidSize: z.number().int().min(1).max(40).optional(),
         notes: z.string().max(4000).optional(),
+        targetZoneIds: targetZoneIdsSchema.optional(),
+        targetEncounterIds: targetEncounterIdsSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -565,6 +624,8 @@ export const calendarRouter = router({
             localTime: input.startTime,
             occurrenceDate: input.date,
             notes: input.notes ?? null,
+            targetZoneIds: input.targetZoneIds ?? [],
+            targetEncounterIds: input.targetEncounterIds ?? [],
             createdByUserId: ctx.session.user.id,
           },
         });
@@ -605,6 +666,8 @@ export const calendarRouter = router({
         difficulty: difficultySchema,
         raidSize: z.number().int().min(1).max(40).optional(),
         notes: z.string().max(4000).optional(),
+        targetZoneIds: targetZoneIdsSchema.optional(),
+        targetEncounterIds: targetEncounterIdsSchema.optional(),
         startDate: z.string().regex(ISO_DATE),
         endDate: z.string().regex(ISO_DATE).nullable().optional(),
       }),
@@ -634,6 +697,8 @@ export const calendarRouter = router({
           timezone,
           raidSize: input.raidSize ?? null,
           notes: input.notes ?? null,
+          targetZoneIds: input.targetZoneIds ?? [],
+          targetEncounterIds: input.targetEncounterIds ?? [],
           startsOn,
           endsOn,
           createdByUserId: ctx.session.user.id,
@@ -675,6 +740,8 @@ export const calendarRouter = router({
         difficulty: difficultySchema.optional(),
         raidSize: z.number().int().min(1).max(40).nullable().optional(),
         notes: z.string().max(4000).nullable().optional(),
+        targetZoneIds: targetZoneIdsSchema.optional(),
+        targetEncounterIds: targetEncounterIdsSchema.optional(),
         endDate: z.string().regex(ISO_DATE).nullable().optional(),
       }),
     )
@@ -700,6 +767,8 @@ export const calendarRouter = router({
       if (input.difficulty !== undefined) data.difficulty = input.difficulty;
       if (input.raidSize !== undefined) data.raidSize = input.raidSize;
       if (input.notes !== undefined) data.notes = input.notes;
+      if (input.targetZoneIds !== undefined) data.targetZoneIds = input.targetZoneIds;
+      if (input.targetEncounterIds !== undefined) data.targetEncounterIds = input.targetEncounterIds;
       if (input.durationMin !== undefined) data.durationMin = input.durationMin;
       if (input.byday !== undefined) data.byday = input.byday.map((b) => b.toUpperCase());
       if (input.startTime !== undefined) data.startLocal = input.startTime;
@@ -749,6 +818,8 @@ export const calendarRouter = router({
           raidSize: true,
           durationMin: true,
           notes: true,
+          targetZoneIds: true,
+          targetEncounterIds: true,
           createdByUserId: true,
           byday: true,
           startLocal: true,
@@ -820,6 +891,8 @@ export const calendarRouter = router({
           raidSize: true,
           durationMin: true,
           notes: true,
+          targetZoneIds: true,
+          targetEncounterIds: true,
           createdByUserId: true,
         },
       });
@@ -876,6 +949,8 @@ export const calendarRouter = router({
         difficulty: difficultySchema.optional(),
         raidSize: z.number().int().min(1).max(40).nullable().optional(),
         notes: z.string().max(4000).nullable().optional(),
+        targetZoneIds: targetZoneIdsSchema.optional(),
+        targetEncounterIds: targetEncounterIdsSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -917,6 +992,8 @@ export const calendarRouter = router({
       if (input.difficulty !== undefined) data.difficulty = input.difficulty;
       if (input.raidSize !== undefined) data.raidSize = input.raidSize;
       if (input.notes !== undefined) data.notes = input.notes;
+      if (input.targetZoneIds !== undefined) data.targetZoneIds = input.targetZoneIds;
+      if (input.targetEncounterIds !== undefined) data.targetEncounterIds = input.targetEncounterIds;
       if (input.durationMin !== undefined) data.durationMin = input.durationMin;
 
       // Date/time change → re-resolve startsAt in the event's own timezone.

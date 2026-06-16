@@ -10,9 +10,42 @@ import {
   GUILD_REPORTS_QUERY,
   guildLookupResponseSchema,
   guildReportsResponseSchema,
+  REPORT_DEATHS_QUERY,
+  reportDeathsResponseSchema,
+  REPORT_DEATHS_TABLE_QUERY,
+  reportDeathsTableResponseSchema,
+  REPORT_DAMAGE_TAKEN_QUERY,
+  reportDamageTakenResponseSchema,
+  REPORT_REZZES_QUERY,
+  REZ_FILTER_EXPRESSION,
+  REPORT_DEFENSIVE_BUFFS_QUERY,
+  REPORT_DEFENSIVE_CASTS_QUERY,
   REPORT_FIGHTS_QUERY,
   reportFightsResponseSchema,
 } from "@/server/ingestion/warcraftlogs/queries";
+import {
+  buildIngestDeaths,
+  matchRezzesToDeaths,
+  parseDeathEvents,
+  parseDeathsTable,
+  parseRezCasts,
+  type IngestDeath,
+  type ParsedDeathEvent,
+  type ParsedDeathTableEntry,
+  type RezTarget,
+} from "@/lib/first-death-ledger";
+import { parseDamageTakenTable } from "@/lib/learning-curve";
+import {
+  computeCooldownUsage,
+  parseBuffEvents,
+  parseDefensiveCasts,
+  type ParsedBuffEvent,
+  type ParsedDefensiveCast,
+} from "@/lib/cooldown-usage";
+import {
+  DEFENSIVE_BUFFS_FILTER,
+  DEFENSIVE_CASTS_FILTER,
+} from "@/lib/defensive-cooldowns";
 
 /**
  * Guild Report Sync (GRS) — hourly per-guild ingestion of public WCL
@@ -52,6 +85,19 @@ const WATERMARK_OVERLAP_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const FREEZE_AFTER_MS = 48 * 60 * 60 * 1000; // 48 hours
 /** Detail fetches per guild per run — caps the first-backfill burst. */
 const MAX_DETAIL_FETCHES = 15;
+/** Deaths-layer backfills per guild per run — drains the pre-existing
+ *  reports over a few hours without blowing the points budget. */
+const MAX_DEATHS_BACKFILL = 8;
+/** Cooldown-usage (defensive-at-death) backfills per guild per run. Each
+ *  backfill updates every death row of a report, so this is kept small to
+ *  bound the per-run write volume; it drains over hourly runs then stops. */
+const MAX_COOLDOWNS_BACKFILL = 6;
+/** learning_curve avoidable-damage enrichment bounds. Top-N killing abilities
+ *  (= auto-curated avoidable mechanics), only bosses with enough wipes to
+ *  split into halves, a few encounters per run — keeps WCL spend bounded. */
+const AVOIDABLE_TOP_N = 3;
+const MIN_AVOIDABLE_WIPES = 10;
+const MAX_AVOIDABLE_ENCOUNTERS_PER_RUN = 2;
 /**
  * Below this many stored reports the watermark optimization is pointless
  * (a single full-window discovery page covers everything) and actively
@@ -413,6 +459,143 @@ export async function handleGuildReportSync(
     logger.warn({ err, guild: guild.name }, "grs: member-report sweep failed");
   }
 
+  // Deaths-layer backfill — populate WclFightDeath for reports ingested
+  // before the deaths layer shipped (a frozen report never re-enters the
+  // fetch path on its own). Bounded per run; drains over a few hourly runs.
+  // Scoped to the widget's 56-day read window and to reports with at least
+  // one WIPE (the prog content the widget ranks). `deathsFetchedAt: null`
+  // means never-attempted, so a backfilled report — even a genuinely
+  // death-free one — drops out of this set permanently (no infinite
+  // re-fetch). Each backfill costs only the death calls, and the WCL client
+  // refuses work over budget, so this self-limits.
+  try {
+    const deathWindow = new Date(now - 56 * 24 * 60 * 60 * 1000);
+    const needDeaths = await db.wclReport.findMany({
+      where: {
+        guildId: guild.id,
+        revision: { gte: 0 },
+        startTime: { gte: deathWindow },
+        deathsFetchedAt: null,
+        fights: { some: { kill: false } },
+      },
+      orderBy: { startTime: "desc" },
+      take: MAX_DEATHS_BACKFILL,
+      select: { code: true },
+    });
+    let backfilled = 0;
+    for (const r of needDeaths) {
+      const n = await backfillReportDeaths(r.code);
+      if (n != null) backfilled++;
+    }
+    if (backfilled > 0) {
+      logger.info(
+        { guild: guild.name, backfilled },
+        "grs deaths: backfilled deaths layer for pre-existing reports",
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, guild: guild.name }, "grs deaths: backfill sweep failed");
+  }
+
+  // Cooldown-usage backfill — populate the defensive-at-death layer for death
+  // rows stored before it shipped (a frozen report's deaths never re-enter the
+  // normal fetch path). Pick reports (in the 56-day window, with wipes) that
+  // still have death rows lacking `cooldownsFetchedAt`; bounded per run, drains
+  // over hourly runs then stops. Each backfill is best-effort and the WCL
+  // client refuses work over budget, so this self-limits.
+  try {
+    const cdWindow = new Date(now - 56 * 24 * 60 * 60 * 1000);
+    const needCooldowns = await db.wclFightDeath.findMany({
+      where: {
+        cooldownsFetchedAt: null,
+        kill: false,
+        report: {
+          guildId: guild.id,
+          revision: { gte: 0 },
+          startTime: { gte: cdWindow },
+        },
+      },
+      distinct: ["reportCode"],
+      take: MAX_COOLDOWNS_BACKFILL,
+      select: { reportCode: true },
+    });
+    let cdBackfilled = 0;
+    for (const r of needCooldowns) {
+      const n = await backfillReportCooldowns(r.reportCode);
+      if (n != null) cdBackfilled++;
+    }
+    if (cdBackfilled > 0) {
+      logger.info(
+        { guild: guild.name, cdBackfilled },
+        "grs cooldowns: backfilled defensive-at-death layer",
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err, guild: guild.name },
+      "grs cooldowns: backfill sweep failed",
+    );
+  }
+
+  // Avoidable-damage sweep — recompute the learning_curve enrichment for
+  // encounters whose wipe set changed since last compute (cheap count-based
+  // change detector). Bounded per run; runs AFTER the deaths backfill so the
+  // killing-ability list is populated. The WCL client self-limits on budget.
+  try {
+    const deathWindow = new Date(now - 56 * 24 * 60 * 60 * 1000);
+    const wipeCounts = await db.wclFight.groupBy({
+      by: ["encounterId", "difficulty"],
+      where: {
+        kill: false,
+        report: {
+          guildId: guild.id,
+          revision: { gte: 0 },
+          startTime: { gte: deathWindow },
+        },
+      },
+      _count: { _all: true },
+    });
+    const states = await db.wclAvoidableState.findMany({
+      where: { guildId: guild.id },
+      select: { encounterId: true, difficulty: true, wipeFights: true },
+    });
+    const stateMap = new Map(
+      states.map((s) => [`${s.encounterId}|${s.difficulty}`, s.wipeFights]),
+    );
+    const candidates = wipeCounts
+      .filter(
+        (w) =>
+          w._count._all >= MIN_AVOIDABLE_WIPES &&
+          stateMap.get(`${w.encounterId}|${w.difficulty}`) !== w._count._all,
+      )
+      .sort((a, b) => b._count._all - a._count._all)
+      .slice(0, MAX_AVOIDABLE_ENCOUNTERS_PER_RUN);
+    let avoidableComputed = 0;
+    for (const c of candidates) {
+      try {
+        const n = await computeAvoidableForEncounter(
+          guild.id,
+          c.encounterId,
+          c.difficulty,
+        );
+        if (n != null) avoidableComputed++;
+      } catch (err) {
+        logger.warn(
+          { err, guild: guild.name, encounterId: c.encounterId },
+          "grs avoidable: encounter compute failed",
+        );
+      }
+    }
+    if (avoidableComputed > 0) {
+      logger.info(
+        { guild: guild.name, encounters: avoidableComputed },
+        "grs avoidable: recomputed learning_curve enrichment",
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, guild: guild.name }, "grs avoidable: sweep failed");
+  }
+
   if (fetched > 0) {
     logger.info(
       {
@@ -467,6 +650,553 @@ async function collectMemberReportCodes(guildId: string): Promise<Set<string>> {
     }
   }
   return codes;
+}
+
+/** Safety cap on death-event pages per report (each page is ≤10k events). */
+const MAX_DEATH_EVENT_PAGES = 15;
+
+/**
+ * Fetch + merge a report's death layer: the ordered `events(dataType:
+ * Deaths)` spine (time-cursor paginated) plus the `table(dataType: Deaths)`
+ * overkill/killing-ability drill-down (one best-effort call). Returns
+ * order-assigned deaths ready to persist. Throws only on the events spine
+ * failing — the caller treats any throw as "skip deaths, keep the fights".
+ */
+async function fetchReportDeaths(
+  code: string,
+  fightIds: number[],
+): Promise<IngestDeath[]> {
+  if (fightIds.length === 0) return [];
+  const wcl = warcraftLogsClient();
+
+  // Events spine — paginate via nextPageTimestamp until exhausted.
+  const events: ParsedDeathEvent[] = [];
+  let startTime: number | undefined;
+  for (let page = 0; page < MAX_DEATH_EVENT_PAGES; page++) {
+    const res = await wcl.query({
+      query: REPORT_DEATHS_QUERY,
+      variables: { code, fightIDs: fightIds, startTime },
+      schema: reportDeathsResponseSchema,
+      estimatedPoints: 5,
+    });
+    const ev = res.reportData?.report?.events;
+    events.push(...parseDeathEvents(ev?.data));
+    const next = ev?.nextPageTimestamp;
+    if (next == null) break;
+    startTime = next;
+    if (page === MAX_DEATH_EVENT_PAGES - 1) {
+      logger.warn(
+        { code },
+        "grs deaths: event pagination cap hit — late ride-the-wipe deaths truncated (first/early order unaffected)",
+      );
+    }
+  }
+
+  // Overkill / killing-ability drill-down — best effort, never fatal.
+  let table: ParsedDeathTableEntry[] = [];
+  try {
+    const tRes = await wcl.query({
+      query: REPORT_DEATHS_TABLE_QUERY,
+      variables: { code, fightIDs: fightIds },
+      schema: reportDeathsTableResponseSchema,
+      estimatedPoints: 5,
+    });
+    table = parseDeathsTable(tRes.reportData?.report?.table);
+  } catch (err) {
+    logger.warn(
+      { err, code },
+      "grs deaths: table fetch failed — overkill/ability omitted this run",
+    );
+  }
+
+  return buildIngestDeaths(events, table);
+}
+
+/**
+ * Fetch combat-resurrection casts for a report (brez_economy), paginated like
+ * the deaths events. Returns each LANDED rez with an ABSOLUTE timestamp, ready
+ * for matchRezzesToDeaths. Reuses the deaths events schema (same shape).
+ */
+async function fetchReportRezzes(
+  code: string,
+  fightIds: number[],
+  reportStartMs: number,
+): Promise<
+  Array<{
+    fightId: number;
+    targetActorId: number;
+    absTimeMs: number;
+    rezzerActorId: number | null;
+    abilityGameId: number | null;
+  }>
+> {
+  if (fightIds.length === 0) return [];
+  const wcl = warcraftLogsClient();
+  const out: Array<{
+    fightId: number;
+    targetActorId: number;
+    absTimeMs: number;
+    rezzerActorId: number | null;
+    abilityGameId: number | null;
+  }> = [];
+  let startTime: number | undefined;
+  for (let page = 0; page < MAX_DEATH_EVENT_PAGES; page++) {
+    const res = await wcl.query({
+      query: REPORT_REZZES_QUERY,
+      variables: {
+        code,
+        fightIDs: fightIds,
+        startTime,
+        filter: REZ_FILTER_EXPRESSION,
+      },
+      schema: reportDeathsResponseSchema,
+      estimatedPoints: 5,
+    });
+    const ev = res.reportData?.report?.events;
+    for (const r of parseRezCasts(ev?.data)) {
+      out.push({
+        fightId: r.fightId,
+        targetActorId: r.targetActorId,
+        absTimeMs: reportStartMs + r.timestamp,
+        rezzerActorId: r.rezzerActorId,
+        abilityGameId: r.abilityGameId,
+      });
+    }
+    const next = ev?.nextPageTimestamp;
+    if (next == null) break;
+    startTime = next;
+  }
+  return out;
+}
+
+/** A death row carrying the cooldown-usage layer fields (mutated in place). */
+type CooldownDeathRow = {
+  fightId: number;
+  targetActorId: number;
+  deathAt: Date;
+  defensiveActiveGameId: number | null;
+  defensiveActiveName: string | null;
+  lastDefensiveCastId: number | null;
+  lastDefensiveCastMsBefore: number | null;
+  cooldownsFetchedAt: Date | null;
+};
+
+/**
+ * Fetch the personal-defensive BUFF and CAST events for a report (cooldown_usage
+ * layer), both filtered to the defensive allowlist and paginated like the
+ * deaths events. Timestamps stay report-relative (the compute basis). One
+ * Buffs call + one Casts call across all the passed fight ids — ~10 pts total,
+ * the same order as the deaths layer.
+ */
+/** Paginate one filtered events query (Buffs or Casts) to a flat raw array. */
+async function fetchDefensiveEventPages(
+  code: string,
+  fightIds: number[],
+  query: string,
+  filter: string,
+): Promise<unknown[]> {
+  const wcl = warcraftLogsClient();
+  const out: unknown[] = [];
+  let startTime: number | undefined;
+  for (let page = 0; page < MAX_DEATH_EVENT_PAGES; page++) {
+    const res = await wcl.query({
+      query,
+      variables: { code, fightIDs: fightIds, startTime, filter },
+      schema: reportDeathsResponseSchema,
+      estimatedPoints: 5,
+    });
+    const ev = res.reportData?.report?.events;
+    if (Array.isArray(ev?.data)) out.push(...ev.data);
+    const next = ev?.nextPageTimestamp;
+    if (next == null) break;
+    startTime = next;
+  }
+  return out;
+}
+
+async function fetchReportDefensives(
+  code: string,
+  fightIds: number[],
+): Promise<{ buffs: ParsedBuffEvent[]; casts: ParsedDefensiveCast[] }> {
+  if (fightIds.length === 0) return { buffs: [], casts: [] };
+  const buffRaw = await fetchDefensiveEventPages(
+    code,
+    fightIds,
+    REPORT_DEFENSIVE_BUFFS_QUERY,
+    DEFENSIVE_BUFFS_FILTER,
+  );
+  const castRaw = await fetchDefensiveEventPages(
+    code,
+    fightIds,
+    REPORT_DEFENSIVE_CASTS_QUERY,
+    DEFENSIVE_CASTS_FILTER,
+  );
+  return {
+    buffs: parseBuffEvents(buffRaw),
+    casts: parseDefensiveCasts(castRaw),
+  };
+}
+
+/**
+ * Compute + stamp the cooldown-usage layer onto a set of in-memory death rows
+ * (mutates them in place). Best-effort: a defensive-fetch failure leaves the
+ * rows' cooldown fields null + `cooldownsFetchedAt` null, so the backfill sweep
+ * retries them later — it never blocks the deaths/rezzes persist. Returns true
+ * when computed.
+ */
+async function applyCooldownUsage(
+  code: string,
+  deathRows: CooldownDeathRow[],
+  reportStartMs: number,
+): Promise<boolean> {
+  const fightIds = [...new Set(deathRows.map((d) => d.fightId))];
+  if (fightIds.length === 0) return true;
+  let defensives: { buffs: ParsedBuffEvent[]; casts: ParsedDefensiveCast[] };
+  try {
+    defensives = await fetchReportDefensives(code, fightIds);
+  } catch (err) {
+    logger.warn({ err, code }, "grs cooldowns: defensive fetch failed");
+    return false;
+  }
+  const results = computeCooldownUsage(
+    deathRows.map((d) => ({
+      fightId: d.fightId,
+      targetActorId: d.targetActorId,
+      relMs: d.deathAt.getTime() - reportStartMs,
+    })),
+    defensives.buffs,
+    defensives.casts,
+  );
+  const now = new Date();
+  for (let i = 0; i < deathRows.length; i++) {
+    const r = results[i]!;
+    deathRows[i]!.defensiveActiveGameId = r.defensiveActiveGameId;
+    deathRows[i]!.defensiveActiveName = r.defensiveActiveName;
+    deathRows[i]!.lastDefensiveCastId = r.lastDefensiveCastId;
+    deathRows[i]!.lastDefensiveCastMsBefore = r.lastDefensiveCastMsBefore;
+    deathRows[i]!.cooldownsFetchedAt = now;
+  }
+  return true;
+}
+
+/**
+ * Backfill the cooldown-usage layer for an ALREADY-stored report's death rows
+ * (deaths persisted before the cooldown layer shipped). Updates each existing
+ * WclFightDeath row in place. Returns the number of rows stamped (or null on
+ * no deaths / fetch failure). One defensive fetch + a per-row update batch.
+ */
+export async function backfillReportCooldowns(
+  code: string,
+): Promise<number | null> {
+  const report = await db.wclReport.findUnique({
+    where: { code },
+    select: { startTime: true },
+  });
+  if (!report) return null;
+  const deaths = await db.wclFightDeath.findMany({
+    where: { reportCode: code },
+    select: { id: true, fightId: true, targetActorId: true, deathAt: true },
+  });
+  if (deaths.length === 0) return null;
+  const reportStartMs = report.startTime.getTime();
+  const fightIds = [...new Set(deaths.map((d) => d.fightId))];
+
+  let defensives: { buffs: ParsedBuffEvent[]; casts: ParsedDefensiveCast[] };
+  try {
+    defensives = await fetchReportDefensives(code, fightIds);
+  } catch (err) {
+    logger.warn({ err, code }, "grs cooldowns: backfill fetch failed");
+    return null;
+  }
+  const results = computeCooldownUsage(
+    deaths.map((d) => ({
+      fightId: d.fightId,
+      targetActorId: d.targetActorId,
+      relMs: d.deathAt.getTime() - reportStartMs,
+    })),
+    defensives.buffs,
+    defensives.casts,
+  );
+  const now = new Date();
+  await db.$transaction(
+    deaths.map((d, i) =>
+      db.wclFightDeath.update({
+        where: { id: d.id },
+        data: {
+          defensiveActiveGameId: results[i]!.defensiveActiveGameId,
+          defensiveActiveName: results[i]!.defensiveActiveName,
+          lastDefensiveCastId: results[i]!.lastDefensiveCastId,
+          lastDefensiveCastMsBefore: results[i]!.lastDefensiveCastMsBefore,
+          cooldownsFetchedAt: now,
+        },
+      }),
+    ),
+  );
+  return deaths.length;
+}
+
+/**
+ * Backfill the deaths layer for an ALREADY-stored report without re-fetching
+ * its fights — used to populate WclFightDeath for reports ingested before the
+ * deaths layer shipped (existing logs never re-enter the normal fetch path
+ * once frozen). Reuses the report's stored fights + resolved actor→character
+ * joins, so it costs only the death calls. Returns the number of deaths
+ * written (or null when the report has no stored fights / fetch failed).
+ */
+export async function backfillReportDeaths(
+  code: string,
+): Promise<number | null> {
+  const report = await db.wclReport.findUnique({
+    where: { code },
+    select: { code: true, startTime: true },
+  });
+  if (!report) return null;
+  const [fights, actors] = await Promise.all([
+    db.wclFight.findMany({
+      where: { reportCode: code },
+      select: {
+        fightId: true,
+        encounterId: true,
+        difficulty: true,
+        kill: true,
+      },
+    }),
+    db.wclReportActor.findMany({
+      where: { reportCode: code },
+      select: { actorId: true, characterId: true },
+    }),
+  ]);
+  if (fights.length === 0) return null;
+  const reportStartMs = report.startTime.getTime();
+  const fightById = new Map(fights.map((f) => [f.fightId, f]));
+  const actorToCharacter = new Map(
+    actors.map((a) => [a.actorId, a.characterId]),
+  );
+
+  let ingestDeaths: IngestDeath[];
+  try {
+    ingestDeaths = await fetchReportDeaths(
+      code,
+      fights.map((f) => f.fightId),
+    );
+  } catch (err) {
+    logger.warn({ err, code }, "grs deaths: backfill fetch failed");
+    return null;
+  }
+
+  const rows = ingestDeaths
+    .filter((d) => fightById.has(d.fightId))
+    .map((d) => {
+      const meta = fightById.get(d.fightId)!;
+      return {
+        reportCode: code,
+        fightId: d.fightId,
+        encounterId: meta.encounterId,
+        difficulty: meta.difficulty,
+        kill: meta.kill,
+        targetActorId: d.targetActorId,
+        characterId: actorToCharacter.get(d.targetActorId) ?? null,
+        killerActorId: d.killerActorId,
+        killingAbilityGameId: d.killingAbilityGameId,
+        killingAbilityName: d.killingAbilityName,
+        deathAt: new Date(reportStartMs + d.timestamp),
+        deathOrder: d.deathOrder,
+        overkill:
+          d.overkill != null ? BigInt(Math.max(0, Math.round(d.overkill))) : null,
+        rezzedAt: null as Date | null,
+        rezzerActorId: null as number | null,
+        rezAbilityGameId: null as number | null,
+        defensiveActiveGameId: null as number | null,
+        defensiveActiveName: null as string | null,
+        lastDefensiveCastId: null as number | null,
+        lastDefensiveCastMsBefore: null as number | null,
+        cooldownsFetchedAt: null as Date | null,
+      };
+    });
+
+  // Battle-rez economy: stamp deaths a combat-rez brought back (best-effort).
+  try {
+    const rezzes = await fetchReportRezzes(
+      code,
+      fights.map((f) => f.fightId),
+      reportStartMs,
+    );
+    if (rezzes.length > 0) {
+      const targets: RezTarget[] = rows.map((d) => ({
+        fightId: d.fightId,
+        targetActorId: d.targetActorId,
+        deathAtMs: d.deathAt.getTime(),
+        rezzedAtMs: null,
+        rezzerActorId: null,
+        rezAbilityGameId: null,
+      }));
+      matchRezzesToDeaths(targets, rezzes);
+      for (let i = 0; i < rows.length; i++) {
+        const t = targets[i]!;
+        if (t.rezzedAtMs != null) {
+          rows[i]!.rezzedAt = new Date(t.rezzedAtMs);
+          rows[i]!.rezzerActorId = t.rezzerActorId;
+          rows[i]!.rezAbilityGameId = t.rezAbilityGameId;
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, code }, "grs brez: backfill rez fetch failed");
+  }
+
+  // Cooldown-usage layer — stamp each row with defensive-at-death (best-effort;
+  // leaves cooldownsFetchedAt null on failure so the cooldown sweep retries).
+  await applyCooldownUsage(code, rows, reportStartMs);
+
+  await db.$transaction([
+    db.wclFightDeath.deleteMany({ where: { reportCode: code } }),
+    db.wclFightDeath.createMany({ data: rows, skipDuplicates: true }),
+    // Mark the deaths attempt (even at 0 rows) so the sweep won't re-fetch a
+    // genuinely death-free report every run.
+    db.wclReport.update({
+      where: { code },
+      data: { deathsFetchedAt: new Date() },
+    }),
+  ]);
+  return rows.length;
+}
+
+/**
+ * Compute the avoidable-damage enrichment for one (guild, encounter,
+ * difficulty): per-player damage taken from the boss's top killing abilities
+ * (auto-curated avoidable mechanics), split into an early/late wipe half.
+ * Persisted wholesale to WclAvoidableDamage + a WclAvoidableState stamp. Each
+ * DamageTaken call is best-effort; the WCL client refuses work over budget.
+ */
+export async function computeAvoidableForEncounter(
+  guildId: string,
+  encounterId: number,
+  difficulty: number,
+): Promise<number | null> {
+  const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+  const wipes = await db.wclFight.findMany({
+    where: {
+      encounterId,
+      difficulty,
+      kill: false,
+      report: { guildId, revision: { gte: 0 }, startTime: { gte: since } },
+    },
+    select: { reportCode: true, fightId: true },
+    orderBy: { startAt: "asc" },
+  });
+  if (wipes.length < MIN_AVOIDABLE_WIPES) return null;
+  const half = Math.floor(wipes.length / 2);
+  const buckets = [
+    { bucket: 0, fights: wipes.slice(0, half) },
+    { bucket: 1, fights: wipes.slice(wipes.length - half) },
+  ];
+
+  // Top-N killing abilities = the avoidable mechanics (no hand-curation).
+  const topAbilities = await db.wclFightDeath.groupBy({
+    by: ["killingAbilityGameId"],
+    where: {
+      encounterId,
+      difficulty,
+      kill: false,
+      killingAbilityGameId: { not: null },
+      report: { guildId },
+    },
+    _count: { _all: true },
+    orderBy: { _count: { killingAbilityGameId: "desc" } },
+    take: AVOIDABLE_TOP_N,
+  });
+  const abilities = topAbilities
+    .map((a) => a.killingAbilityGameId)
+    .filter((a): a is number => a != null);
+
+  // Actor→character maps per involved report (DamageTaken entries are by
+  // report-local actor id; keep only those resolving to a tracked character).
+  const involvedCodes = [...new Set(wipes.map((f) => f.reportCode))];
+  const actors = await db.wclReportActor.findMany({
+    where: { reportCode: { in: involvedCodes } },
+    select: { reportCode: true, actorId: true, characterId: true },
+  });
+  const actorMap = new Map<string, Map<number, string>>();
+  for (const a of actors) {
+    if (!a.characterId) continue;
+    (actorMap.get(a.reportCode) ??
+      actorMap.set(a.reportCode, new Map()).get(a.reportCode)!).set(
+      a.actorId,
+      a.characterId,
+    );
+  }
+
+  const wcl = warcraftLogsClient();
+  const totals = new Map<string, bigint>(); // `${bucket}|${ability}|${cid}` → total
+  for (const { bucket, fights } of buckets) {
+    const byReport = new Map<string, number[]>();
+    for (const f of fights) {
+      (byReport.get(f.reportCode) ??
+        byReport.set(f.reportCode, []).get(f.reportCode)!).push(f.fightId);
+    }
+    for (const [code, fids] of byReport) {
+      const amap = actorMap.get(code);
+      if (!amap) continue;
+      for (const ability of abilities) {
+        try {
+          const res = await wcl.query({
+            query: REPORT_DAMAGE_TAKEN_QUERY,
+            variables: { code, fightIDs: fids, abilityID: ability },
+            schema: reportDamageTakenResponseSchema,
+            estimatedPoints: 4,
+          });
+          for (const e of parseDamageTakenTable(res.reportData?.report?.table)) {
+            const cid = amap.get(e.actorId);
+            if (!cid) continue;
+            const key = `${bucket}|${ability}|${cid}`;
+            totals.set(
+              key,
+              (totals.get(key) ?? BigInt(0)) +
+                BigInt(Math.max(0, Math.round(e.total))),
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, code, ability },
+            "grs avoidable: DamageTaken fetch failed",
+          );
+        }
+      }
+    }
+  }
+
+  const rows = [...totals.entries()].map(([k, total]) => {
+    const [bucket, ability, cid] = k.split("|");
+    return {
+      guildId,
+      encounterId,
+      difficulty,
+      bucket: Number(bucket),
+      abilityGameId: Number(ability),
+      characterId: cid!,
+      total,
+    };
+  });
+  await db.$transaction([
+    db.wclAvoidableDamage.deleteMany({
+      where: { guildId, encounterId, difficulty },
+    }),
+    db.wclAvoidableDamage.createMany({ data: rows, skipDuplicates: true }),
+    db.wclAvoidableState.upsert({
+      where: {
+        guildId_encounterId_difficulty: { guildId, encounterId, difficulty },
+      },
+      create: {
+        guildId,
+        encounterId,
+        difficulty,
+        computedAt: new Date(),
+        wipeFights: wipes.length,
+      },
+      update: { computedAt: new Date(), wipeFights: wipes.length },
+    }),
+  ]);
+  return rows.length;
 }
 
 async function fetchAndPersistReport(
@@ -596,6 +1326,126 @@ async function fetchAndPersistReport(
     }
   }
 
+  // Deaths layer — best-effort enrichment, fetched AFTER fights are known
+  // (we need the fight ids). Two invariants: a failure must never drop the
+  // fights, and it must never WIPE previously-ingested deaths — so the death
+  // writes only join the transaction when THIS run actually fetched them.
+  const fightById = new Map(
+    fights.map((f) => [
+      f.id,
+      {
+        encounterId: f.encounterID,
+        difficulty: f.difficulty ?? 0,
+        kill: f.kill === true,
+      },
+    ]),
+  );
+  const actorById = new Map(actors.map((a) => [a.id, a]));
+  let deathRows: Array<{
+    reportCode: string;
+    fightId: number;
+    encounterId: number;
+    difficulty: number;
+    kill: boolean;
+    targetActorId: number;
+    characterId: string | null;
+    killerActorId: number | null;
+    killingAbilityGameId: number | null;
+    killingAbilityName: string | null;
+    deathAt: Date;
+    deathOrder: number;
+    overkill: bigint | null;
+    rezzedAt: Date | null;
+    rezzerActorId: number | null;
+    rezAbilityGameId: number | null;
+    defensiveActiveGameId: number | null;
+    defensiveActiveName: string | null;
+    lastDefensiveCastId: number | null;
+    lastDefensiveCastMsBefore: number | null;
+    cooldownsFetchedAt: Date | null;
+  }> = [];
+  let deathsFetched = false;
+  try {
+    const ingestDeaths = await fetchReportDeaths(
+      report.code,
+      fights.map((f) => f.id),
+    );
+    deathRows = ingestDeaths
+      .filter((d) => fightById.has(d.fightId))
+      .map((d) => {
+        const meta = fightById.get(d.fightId)!;
+        const actor = actorById.get(d.targetActorId);
+        return {
+          reportCode: report.code,
+          fightId: d.fightId,
+          encounterId: meta.encounterId,
+          difficulty: meta.difficulty,
+          kill: meta.kill,
+          targetActorId: d.targetActorId,
+          characterId: actor ? characterIdFor(actor) : null,
+          killerActorId: d.killerActorId,
+          killingAbilityGameId: d.killingAbilityGameId,
+          killingAbilityName: d.killingAbilityName,
+          deathAt: new Date(reportStartMs + d.timestamp),
+          deathOrder: d.deathOrder,
+          overkill:
+            d.overkill != null
+              ? BigInt(Math.max(0, Math.round(d.overkill)))
+              : null,
+          rezzedAt: null as Date | null,
+          rezzerActorId: null as number | null,
+          rezAbilityGameId: null as number | null,
+          defensiveActiveGameId: null as number | null,
+          defensiveActiveName: null as string | null,
+          lastDefensiveCastId: null as number | null,
+          lastDefensiveCastMsBefore: null as number | null,
+          cooldownsFetchedAt: null as Date | null,
+        };
+      });
+    // Battle-rez economy: stamp each death that a combat-rez brought back.
+    try {
+      const rezzes = await fetchReportRezzes(
+        report.code,
+        fights.map((f) => f.id),
+        reportStartMs,
+      );
+      if (rezzes.length > 0) {
+        const targets: RezTarget[] = deathRows.map((d) => ({
+          fightId: d.fightId,
+          targetActorId: d.targetActorId,
+          deathAtMs: d.deathAt.getTime(),
+          rezzedAtMs: null,
+          rezzerActorId: null,
+          rezAbilityGameId: null,
+        }));
+        matchRezzesToDeaths(targets, rezzes);
+        for (let i = 0; i < deathRows.length; i++) {
+          const t = targets[i]!;
+          if (t.rezzedAtMs != null) {
+            deathRows[i]!.rezzedAt = new Date(t.rezzedAtMs);
+            deathRows[i]!.rezzerActorId = t.rezzerActorId;
+            deathRows[i]!.rezAbilityGameId = t.rezAbilityGameId;
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { err, code: report.code },
+        "grs brez: rez fetch failed — deaths persisted without rez data",
+      );
+    }
+    // Cooldown-usage layer — defensive-at-death + last defensive cast. Stamps
+    // the rows in place (best-effort; a failure leaves cooldownsFetchedAt null
+    // so the cooldown sweep retries without blocking the deaths persist).
+    await applyCooldownUsage(report.code, deathRows, reportStartMs);
+    deathsFetched = true;
+  } catch (err) {
+    logger.warn(
+      { err, code: report.code },
+      "grs deaths: layer fetch failed — fights persisted, existing deaths preserved",
+    );
+  }
+
   const fetchedAt = new Date();
   await db.$transaction([
     db.wclReport.upsert({
@@ -610,6 +1460,7 @@ async function fetchAndPersistReport(
         endTime: new Date(report.endTime),
         revision: report.revision,
         fetchedAt,
+        ...(deathsFetched ? { deathsFetchedAt: fetchedAt } : {}),
       },
       update: {
         zoneId: report.zone?.id ?? null,
@@ -627,6 +1478,10 @@ async function fetchAndPersistReport(
         ...(opts?.sourceWclGuildId != null
           ? { wclGuildId: opts.sourceWclGuildId }
           : {}),
+        // Stamp the deaths attempt only when this run fetched them; a failed
+        // deaths fetch must not mark the report as attempted (so the sweep
+        // still retries it), and must not clear a prior stamp.
+        ...(deathsFetched ? { deathsFetchedAt: fetchedAt } : {}),
       },
     }),
     // Live logs grow and pulls can be re-cut — replace wholesale.
@@ -662,5 +1517,15 @@ async function fetchAndPersistReport(
         characterId: characterIdFor(a),
       })),
     }),
+    // Deaths replaced wholesale like fights — but ONLY when this run fetched
+    // them, so a transient deaths failure never erases a good prior ingest.
+    ...(deathsFetched
+      ? [
+          db.wclFightDeath.deleteMany({ where: { reportCode: report.code } }),
+          // skipDuplicates guards the (rare) same-actor-same-ms double death,
+          // which would otherwise P2002-abort the whole report transaction.
+          db.wclFightDeath.createMany({ data: deathRows, skipDuplicates: true }),
+        ]
+      : []),
   ]);
 }

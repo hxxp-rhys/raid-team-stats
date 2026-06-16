@@ -40,6 +40,7 @@ import {
   runCalendarDiscordAutoPost,
 } from "@/server/ingestion/jobs/calendar-sweeper";
 import { registerSchedules, FANOUT_KIND } from "@/server/ingestion/schedules";
+import { runRecruitmentNotificationSweep } from "@/server/recruitment/notification-sweep";
 
 const workers: Worker[] = [];
 
@@ -51,7 +52,7 @@ const start = async () => {
   workers.push(
     new Worker<ManualRosterRefreshPayload>(
       QUEUE_NAMES.manualRosterRefresh,
-      async (job) => handleManualRosterRefresh(job.data),
+      async (job) => handleManualRosterRefresh(job.data, job),
       {
         connection: redisBlocking,
         concurrency: 2,
@@ -216,6 +217,20 @@ const start = async () => {
       logger.warn({ err }, "discord auto-post sweep failed"),
     );
   }, 5 * 60_000);
+
+  // Recruitment notifications: drain the outbox to opted-in reviewers (email /
+  // Discord DM). Every 15s — new applications reach reviewers promptly.
+  setInterval(() => {
+    void runRecruitmentNotificationSweep()
+      .then((r) => {
+        if (r.processed > 0) {
+          logger.info(r, "recruitment notification sweep");
+        }
+      })
+      .catch((err) =>
+        logger.warn({ err }, "recruitment notification sweep failed"),
+      );
+  }, 15_000);
 
   // QueueEvents emits completed/failed across the cluster — count + measure.
   for (const { name, q } of queueObjects) {

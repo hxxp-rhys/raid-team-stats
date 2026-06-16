@@ -12,7 +12,70 @@ import {
   deriveVault,
   REGION_MAP,
   normalizeKey,
+  type AddonPayload,
 } from "@/server/ingestion/addon/payload";
+
+/** Hard cap on observed sessions persisted per upload — bounds DB churn. */
+const MAX_OBSERVED_SESSIONS = 20;
+
+/**
+ * Persist the addon's observed raid sessions (attendance_ledger feeder) to
+ * RaidNightObservation. Best-effort: the observer's guild is resolved from
+ * their active team membership; an observer not on a team has no attendance
+ * home and is skipped. Each session UPSERTS by (observer, sessionId), so the
+ * addon's repeated uploads of a growing night converge on its latest state.
+ */
+async function persistRaidObservations(
+  observerCharacterId: string,
+  userId: string,
+  raidObserver: NonNullable<AddonPayload["raidObserver"]>,
+): Promise<void> {
+  const sessions = raidObserver.sessions ?? [];
+  if (sessions.length === 0) return;
+  const membership = await db.raidTeamMembership.findFirst({
+    where: { characterId: observerCharacterId, isActive: true },
+    select: { raidTeam: { select: { guildId: true } } },
+  });
+  const guildId = membership?.raidTeam.guildId;
+  if (!guildId) return;
+
+  for (const s of sessions.slice(0, MAX_OBSERVED_SESSIONS)) {
+    const sessionId =
+      s.sessionId != null
+        ? String(s.sessionId)
+        : s.startedAt != null
+          ? String(s.startedAt)
+          : null;
+    const members = Array.isArray(s.members) ? s.members : [];
+    // A session needs an id, a start, and at least one observed member.
+    if (!sessionId || s.startedAt == null || members.length === 0) continue;
+    const startedAt = new Date(s.startedAt * 1000);
+    // Clamp end ≥ start: the addon stamps both from wall-clock time(), so a
+    // backward clock correction mid-session could otherwise persist a
+    // negative-length night.
+    const endedAt = new Date(
+      Math.max(s.endedAt ?? s.startedAt, s.startedAt) * 1000,
+    );
+    // Omit guildOnline when absent — a nullable Json column needs Prisma's
+    // JsonNull sentinel to be set null, and "leave unchanged" is the right
+    // update behaviour anyway.
+    const data = {
+      startedAt,
+      endedAt,
+      instanceName: s.instanceName ?? null,
+      difficulty: s.difficulty ?? null,
+      members: members as object,
+      ...(Array.isArray(s.guildOnline)
+        ? { guildOnline: s.guildOnline as object }
+        : {}),
+    };
+    await db.raidNightObservation.upsert({
+      where: { observerCharacterId_sessionId: { observerCharacterId, sessionId } },
+      create: { guildId, observerCharacterId, uploadedByUserId: userId, sessionId, ...data },
+      update: { ...data, capturedAt: new Date() },
+    });
+  }
+}
 
 /**
  * Ingest endpoint for our own in-game addon (via the companion uploader or
@@ -170,6 +233,19 @@ export async function POST(req: Request) {
   } catch (err) {
     logger.error({ err, characterId: character.id }, "addon upload persist failed");
     return bad(500, "failed to store upload");
+  }
+
+  // Observed raid presence (attendance_ledger) — separate store, best-effort:
+  // a failure here must never fail the gear/vault upload above.
+  if (payload.raidObserver) {
+    try {
+      await persistRaidObservations(character.id, userId, payload.raidObserver);
+    } catch (err) {
+      logger.warn(
+        { err, characterId: character.id },
+        "addon raidObserver persist failed",
+      );
+    }
   }
 
   return NextResponse.json({

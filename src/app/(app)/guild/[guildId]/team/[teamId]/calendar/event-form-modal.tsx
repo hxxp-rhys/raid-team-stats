@@ -35,6 +35,8 @@ type Initial = {
   durationMin: number;
   difficulty: Difficulty;
   notes: string;
+  targetZoneIds: number[];
+  targetEncounterIds: number[];
 };
 
 const EMPTY: Initial = {
@@ -44,6 +46,8 @@ const EMPTY: Initial = {
   durationMin: 180,
   difficulty: "Mythic",
   notes: "",
+  targetZoneIds: [],
+  targetEncounterIds: [],
 };
 
 export function EventFormModal({
@@ -120,6 +124,8 @@ function Loader({
       durationMin: e.durationMin,
       difficulty: e.difficulty as Difficulty,
       notes: e.notes ?? "",
+      targetZoneIds: e.targetZoneIds ?? [],
+      targetEncounterIds: e.targetEncounterIds ?? [],
     };
     return (
       <Fields
@@ -174,6 +180,25 @@ function Fields({
   const [durationMin, setDurationMin] = useState(initial.durationMin);
   const [difficulty, setDifficulty] = useState<Difficulty>(initial.difficulty);
   const [notes, setNotes] = useState(initial.notes);
+  // Raid-lead targeting: up to 2 zones; selecting one reveals its boss list.
+  const [targetZoneIds, setTargetZoneIds] = useState<number[]>(initial.targetZoneIds);
+  const [targetEncounterIds, setTargetEncounterIds] = useState<number[]>(
+    initial.targetEncounterIds,
+  );
+  const zonesQ = api.calendar.targetableZones.useQuery({ raidTeamId });
+  const zones = zonesQ.data?.zones ?? [];
+
+  const toggleZone = (id: number) =>
+    setTargetZoneIds((cur) => {
+      if (cur.includes(id)) return cur.filter((z) => z !== id);
+      if (cur.length >= 2) return cur; // cap at 2
+      return [...cur, id];
+    });
+  const toggleEncounter = (id: number) =>
+    setTargetEncounterIds((cur) =>
+      cur.includes(id) ? cur.filter((e) => e !== id) : [...cur, id],
+    );
+
   // Recurrence (create-only). Editing a single occurrence never recurs.
   const [repeat, setRepeat] = useState(false);
   const [byday, setByday] = useState<string[]>([]);
@@ -232,6 +257,19 @@ function Fields({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !date) return;
+    // Keep only boss selections that belong to a currently-targeted raid —
+    // deselecting a raid must not strand its bosses on the event.
+    const validEncounterIds = new Set(
+      targetZoneIds.flatMap(
+        (zid) =>
+          zones
+            .find((z) => z.blizzardInstanceId === zid)
+            ?.encounters.map((e) => e.id) ?? [],
+      ),
+    );
+    const encounters = targetEncounterIds.filter((id) =>
+      validEncounterIds.has(id),
+    );
     if (editEventId) {
       update.mutate({
         eventId: editEventId,
@@ -241,6 +279,8 @@ function Fields({
         durationMin,
         difficulty,
         notes: notes.trim() || null,
+        targetZoneIds,
+        targetEncounterIds: encounters,
       });
     } else if (recurring) {
       if (byday.length === 0) return;
@@ -254,6 +294,8 @@ function Fields({
         notes: notes.trim() || undefined,
         startDate: date,
         endDate: endDate || null,
+        targetZoneIds,
+        targetEncounterIds: encounters,
       });
     } else {
       create.mutate({
@@ -264,6 +306,8 @@ function Fields({
         durationMin,
         difficulty,
         notes: notes.trim() || undefined,
+        targetZoneIds,
+        targetEncounterIds: encounters,
       });
     }
   };
@@ -330,6 +374,73 @@ function Fields({
           </select>
         </div>
       </div>
+      {zones.length > 0 && (
+        <div className="border-border space-y-2 rounded-md border p-3">
+          <div className="flex items-center justify-between">
+            <Label>Target raid {targetZoneIds.length > 0 ? "" : "(optional)"}</Label>
+            <span className="text-muted-foreground text-xs">pick up to 2</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {zones.map((z) => {
+              const on = targetZoneIds.includes(z.blizzardInstanceId);
+              const atCap = !on && targetZoneIds.length >= 2;
+              return (
+                <button
+                  key={z.blizzardInstanceId}
+                  type="button"
+                  onClick={() => toggleZone(z.blizzardInstanceId)}
+                  aria-pressed={on}
+                  disabled={atCap}
+                  className={
+                    "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 " +
+                    (on
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-muted")
+                  }
+                >
+                  {z.name}
+                </button>
+              );
+            })}
+          </div>
+          {targetZoneIds.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-muted-foreground text-xs">Bosses (optional)</p>
+              {/* One boss group per TARGETED raid — each raid shows only its
+                  own bosses (labelled when more than one raid is targeted). */}
+              {targetZoneIds.map((zid) => {
+                const zone = zones.find((z) => z.blizzardInstanceId === zid);
+                if (!zone || zone.encounters.length === 0) return null;
+                return (
+                  <div key={zid} className="space-y-0.5">
+                    {targetZoneIds.length > 1 && (
+                      <p className="text-muted-foreground text-[10px] font-medium uppercase">
+                        {zone.name}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {zone.encounters.map((b) => (
+                        <label
+                          key={b.id}
+                          className="flex items-center gap-1.5 text-xs"
+                        >
+                          <input
+                            type="checkbox"
+                            className="accent-primary h-3.5 w-3.5"
+                            checked={targetEncounterIds.includes(b.id)}
+                            onChange={() => toggleEncounter(b.id)}
+                          />
+                          {b.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {!editEventId && (
         <div className="border-border space-y-2 rounded-md border p-3">
           <label className="flex items-center gap-2 text-sm font-medium">

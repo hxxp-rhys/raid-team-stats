@@ -1,4 +1,9 @@
-@import "tailwindcss";
+/* Scope Tailwind v4 automatic content detection to ./src (this file lives in src/app).
+   Without source(), oxide walks the whole project root and hangs indefinitely on the
+   OneDrive-backed bind mount when it descends into persistent_data/ (live postgres/loki/
+   prometheus data; postgres dir is mode 700). Symptom: Turbopack "failed to receive
+   message / timeout" on globals.css -> every page 500. src/ holds all class-bearing files. */
+@import "tailwindcss" source("../");
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 

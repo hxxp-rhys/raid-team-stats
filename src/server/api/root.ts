@@ -8,6 +8,7 @@ import { discordRouter } from "@/server/api/routers/discord";
 import { guildRouter } from "@/server/api/routers/guild";
 import { mfaRouter } from "@/server/api/routers/mfa";
 import { raidTeamRouter } from "@/server/api/routers/raidTeam";
+import { recruitmentRouter } from "@/server/api/routers/recruitment";
 import { snapshotRouter } from "@/server/api/routers/snapshot";
 
 export const appRouter = router({
@@ -19,6 +20,7 @@ export const appRouter = router({
   guild: guildRouter,
   mfa: mfaRouter,
   raidTeam: raidTeamRouter,
+  recruitment: recruitmentRouter,
   snapshot: snapshotRouter,
   dashboard: dashboardRouter,
 });

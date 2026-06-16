@@ -1021,4 +1021,57 @@ export const raidTeamRouter = router({
 
       return { ok: true };
     }),
+
+  /**
+   * Set (or clear) a member's roster RANK — Main / Trial / Flex / Rotational /
+   * Social. This is the raider's standing, distinct from their site permission
+   * tier (role). `rank: null` clears it back to unassigned. Co-leaders and above
+   * may set it.
+   */
+  setMemberRank: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        characterId: z.string().cuid(),
+        rank: z
+          .enum([
+            "MAIN",
+            "TRIAL",
+            "FLEX",
+            "ROTATIONAL",
+            "SOCIAL",
+            "OFFICER",
+            "RAID_LEADER",
+          ])
+          .nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+
+      const result = await ctx.db.raidTeamMembership.updateMany({
+        where: {
+          raidTeamId: input.raidTeamId,
+          characterId: input.characterId,
+          isActive: true,
+        },
+        data: { rank: input.rank },
+      });
+      if (result.count === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "That character is not currently on this team.",
+        });
+      }
+
+      await audit({
+        event: "RAID_TEAM_MEMBER_RANK_CHANGED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "raidTeam",
+        subjectId: input.raidTeamId,
+        metadata: { characterId: input.characterId, rank: input.rank },
+      });
+
+      return { ok: true };
+    }),
 });

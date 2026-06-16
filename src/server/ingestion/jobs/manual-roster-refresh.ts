@@ -94,9 +94,24 @@ export async function enqueueManualRosterRefresh(
  *      placeholder — the per-user Tier A sync will reassign them when each
  *      user runs Battle.net verification.
  */
+/**
+ * Minimal progress sink — the BullMQ Job exposes `updateProgress`, which
+ * persists to Redis and is read back by the manualSyncStatus query. Optional so
+ * the Tier-B weekly system run (no job object) can call the handler unchanged.
+ */
+type ProgressReporter = { updateProgress: (progress: object) => Promise<void> };
+export type RosterSyncProgress = {
+  phase: "roster" | "members" | "verifying" | "done";
+  processed: number;
+  total: number;
+};
+
 export async function handleManualRosterRefresh(
   payload: ManualRosterRefreshPayload,
+  job?: ProgressReporter,
 ): Promise<{ characters: number; guildMatches: number; autoClaims: number }> {
+  const report = (p: RosterSyncProgress) =>
+    job?.updateProgress(p).catch(() => {});
   const run = await db.syncRun.create({
     data: {
       tier: "C",
@@ -138,9 +153,19 @@ export async function handleManualRosterRefresh(
       minFloor: 0, // interactive path — allowed to hit the reserve.
     });
 
+    const total = roster.members.length;
+    await report({ phase: "roster", processed: 0, total });
+
     const observations = [];
+    let processed = 0;
     for (const m of roster.members) {
       const realmSlug = normalizeRealmSlug(m.character.realm.slug);
+      // Count every roster member toward progress (even skipped ones) so the
+      // bar always reaches 100% over the full member list.
+      processed++;
+      if (processed % 5 === 0 || processed === total) {
+        await report({ phase: "members", processed, total });
+      }
       if (!realmSlug) continue;
 
       // Per-character summary is OPTIONAL enrichment (character class /
@@ -192,11 +217,13 @@ export async function handleManualRosterRefresh(
       });
     }
 
+    await report({ phase: "verifying", processed: total, total });
     const result = await applyVerification({
       userId: ownerUserId,
       observedAt: new Date(),
       characters: observations,
     });
+    await report({ phase: "done", processed: total, total });
 
     await db.syncRun.update({
       where: { id: run.id },

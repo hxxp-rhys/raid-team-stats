@@ -3,9 +3,19 @@
 import { useId, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
+import { Modal } from "@/components/ui/modal";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
 type TimeWindow = "week" | "season";
+
+const MYTHIC = 5;
+
+type Drill = {
+  characterId: string;
+  characterName: string;
+  encounterId: number;
+  encounterName: string;
+};
 
 /**
  * Per-character × per-encounter best-percentile heatmap. The single most
@@ -44,6 +54,7 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
   // would collide and break the label/select association on the second.
   const windowSelectId = useId();
   const isWeek = timeWindow === "week";
+  const [drill, setDrill] = useState<Drill | null>(null);
 
   if (q.isPending) {
     return (
@@ -66,7 +77,6 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
   // Within's Manaforge Omega = zone 44) can never appear, even if such rows
   // still exist in the DB. If the server couldn't resolve it, fall back to
   // the highest zone id present in the data.
-  const MYTHIC = 5;
   const serverZone = q.data.currentRaidZoneId;
   let currentZone = serverZone ?? -1;
   if (serverZone == null) {
@@ -196,17 +206,34 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
                   <td className="py-1.5 pr-2 font-medium">{m.character.name}</td>
                   {encounterOrder.map((enc) => {
                     const p = cells?.get(enc.id) ?? null;
+                    if (p == null) {
+                      return (
+                        <td
+                          key={enc.id}
+                          className={`px-1 py-1 text-center font-mono ${colorFor(p)} ${textColorFor(p)}`}
+                          title={`${enc.name || `Encounter ${enc.id}`}: no parse`}
+                        >
+                          —
+                        </td>
+                      );
+                    }
                     return (
-                      <td
-                        key={enc.id}
-                        className={`px-1 py-1 text-center font-mono ${colorFor(p)} ${textColorFor(p)}`}
-                        title={
-                          p == null
-                            ? `${enc.name || `Encounter ${enc.id}`}: no parse`
-                            : `${enc.name || `Encounter ${enc.id}`}: ${p}%`
-                        }
-                      >
-                        {p == null ? "—" : Math.round(p)}
+                      <td key={enc.id} className="p-0 text-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDrill({
+                              characterId: m.character.id,
+                              characterName: m.character.name,
+                              encounterId: enc.id,
+                              encounterName: enc.name,
+                            })
+                          }
+                          className={`hover:ring-primary w-full px-1 py-1 text-center font-mono hover:ring-1 hover:ring-inset ${colorFor(p)} ${textColorFor(p)}`}
+                          title={`${enc.name || `Encounter ${enc.id}`}: ${p}% — click for per-kill history`}
+                        >
+                          {Math.round(p)}
+                        </button>
                       </td>
                     );
                   })}
@@ -230,7 +257,87 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
           ))}
         </ol>
       </div>
+      {drill && (
+        <KillDetailModal
+          raidTeamId={raidTeamId}
+          difficulty={MYTHIC}
+          drill={drill}
+          onClose={() => setDrill(null)}
+        />
+      )}
     </WidgetShell>
+  );
+}
+
+/** Per-kill history for one (character, boss) — lazily fetched on cell click. */
+function KillDetailModal({
+  raidTeamId,
+  difficulty,
+  drill,
+  onClose,
+}: {
+  raidTeamId: string;
+  difficulty: number;
+  drill: Drill;
+  onClose: () => void;
+}) {
+  const q = api.snapshot.encounterKills.useQuery({
+    raidTeamId,
+    characterId: drill.characterId,
+    encounterId: drill.encounterId,
+    difficulty,
+  });
+  const boss = drill.encounterName || `Encounter ${drill.encounterId}`;
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${drill.characterName} — ${boss}`}
+      description="Per-kill Mythic percentile history (newest first)"
+      hideDefaultFooter
+    >
+      {q.isPending ? (
+        <p className="text-muted-foreground text-xs">Loading kills…</p>
+      ) : q.error ? (
+        <p className="text-xs text-rose-400">{q.error.message}</p>
+      ) : q.data.kills.length === 0 ? (
+        <p className="text-muted-foreground text-xs">
+          No logged Mythic kills on this boss yet.
+        </p>
+      ) : (
+        <ul className="divide-border max-h-80 divide-y overflow-y-auto text-xs">
+          {q.data.kills.map((k, i) => (
+            <li
+              key={`${k.reportCode}-${k.t}-${i}`}
+              className="flex items-center justify-between gap-3 py-1.5"
+            >
+              <span className="text-muted-foreground tabular-nums">
+                {new Date(k.t).toLocaleDateString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+              <span className={`font-mono font-semibold ${textColorFor(k.pct)}`}>
+                {Math.round(k.pct)}%
+              </span>
+              {k.reportCode ? (
+                <a
+                  href={`https://www.warcraftlogs.com/reports/${k.reportCode}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary shrink-0 underline decoration-dotted hover:no-underline"
+                >
+                  view log ↗
+                </a>
+              ) : (
+                <span className="text-muted-foreground shrink-0">—</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   );
 }
 

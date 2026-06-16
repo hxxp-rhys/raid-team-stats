@@ -53,6 +53,14 @@ model User {
   dashboardsOwned     DashboardConfig[]    @relation("DashboardOwner")
   addonUploads        AddonUpload[]
   eventSignups        EventSignup[]
+
+  // Recruitment (Part 3)
+  recruitmentFormsCreated RecruitmentForm[]
+  recruitmentApplications FormSubmission[]
+  formReviewerRoles       FormReviewer[]
+  submissionVotes         SubmissionVote[]
+  submissionComments      SubmissionComment[]
+  recruitNotifyPrefs      RecruitmentNotificationPref[]
 }
 
 model Account {
@@ -147,6 +155,7 @@ enum AuditEvent {
   RAID_TEAM_CREATED
   RAID_TEAM_MEMBER_ADDED
   RAID_TEAM_MEMBER_REMOVED
+  RAID_TEAM_MEMBER_RANK_CHANGED
   RAID_TEAM_LEADERSHIP_TRANSFERRED
   RAID_TEAM_SETTINGS_UPDATED
   RAID_TEAM_WCL_SOURCE_CHANGED
@@ -246,6 +255,22 @@ enum RaidTeamMemberRole {
   MEMBER
 }
 
+// A raider's standing on the team — distinct from RaidTeamMemberRole (which is
+// a site PERMISSION tier). This is the roster rank an officer assigns: a Raid
+// Leader runs the raid, an Officer helps lead, a Main is a core raider, a Trial
+// is on probation, a Flex/Rotational swaps in and out, a Social is in the team's
+// orbit but not a raiding seat. Nullable = unassigned. (New values are appended
+// to match Postgres ALTER TYPE ADD VALUE; dropdown order is UI-controlled.)
+enum RaidRank {
+  MAIN
+  TRIAL
+  FLEX
+  ROTATIONAL
+  SOCIAL
+  OFFICER
+  RAID_LEADER
+}
+
 model Character {
   id                  String   @id @default(cuid())
   userId              String
@@ -269,6 +294,7 @@ model Character {
   raidSnapshots      RaidSnapshot[]
   vaultSnapshots     VaultSnapshot[]
   wclParseSnapshots  WclParseSnapshot[]
+  professionSnapshots ProfessionSnapshot[]
   // Pending-ownership back-references. Filled when the team/dashboard's
   // current owner has departed the guild and there is no on-site successor —
   // the first user to claim this character via Battle.net verification gets
@@ -277,6 +303,9 @@ model Character {
   pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
   addonUpload        AddonUpload?
   wclReportActors    WclReportActor[]
+  wclFightDeaths     WclFightDeath[]
+  wclAvoidableDamage WclAvoidableDamage[]
+  raidNightObservations RaidNightObservation[]
   eventSignups       EventSignup[]
 
   @@unique([region, realmSlug, name])
@@ -306,6 +335,10 @@ model Guild {
   characterLinks GuildCharacterLink[]
   raidTeams      RaidTeam[]
   wclReports     WclReport[]
+  wclAvoidableDamage WclAvoidableDamage[]
+  wclAvoidableState  WclAvoidableState[]
+  raidNightObservations RaidNightObservation[]
+  recruitmentForms RecruitmentForm[]
 
   // Identity is region+realm+guild slug ONLY. A guild is a single faction;
   // keeping `faction` in this key let a per-character faction misread mint
@@ -390,10 +423,11 @@ model RaidTeam {
   //   { "tanks": 2, "healers": 5, "melee": 7, "ranged": 6 }
   compTemplate Json?
   // Calendar auto-reminders. JSON shape:
-  //   { "enabled": true, "leadMinutes": [1440, 60], "nudgeMinutes": 720 }
-  // leadMinutes = minutes-before-start to remind people who are GOING;
-  // nudgeMinutes = minutes-before to nudge members who haven't responded
-  // (null = no nudge). null column = defaults applied in code.
+  //   { "enabled": true, "leadMinutes": [1440, 60], "nudgeMinutes": [720, 360] }
+  // leadMinutes  = minutes-before-start to remind people who are GOING;
+  // nudgeMinutes = LIST of minutes-before to nudge non-responders ([] = none).
+  // A legacy scalar nudgeMinutes (number|null) from the pre-multi-nudge version
+  // is still accepted and coerced by parseReminderConfig. null column = defaults.
   reminderConfig Json?
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
@@ -406,6 +440,7 @@ model RaidTeam {
   raidEventSeries RaidEventSeries[]
   raidEvents      RaidEvent[]
   discordIntegration DiscordIntegration?
+  recruitmentForms RecruitmentForm[]
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
@@ -417,6 +452,7 @@ model RaidTeamMembership {
   raidTeamId    String
   characterId   String
   role          RaidTeamMemberRole @default(MEMBER)
+  rank          RaidRank?
   addedAt       DateTime           @default(now())
   addedByUserId String?
   isActive      Boolean            @default(true)
@@ -488,6 +524,30 @@ model EquipmentSnapshot {
   items                Json
   rawPayload           Json
   createdAt            DateTime       @default(now())
+
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, capturedAt(sort: Desc)])
+}
+
+/// Per-character professions snapshot (Blizzard /professions). Stores a compact
+/// derived list the Professions widget renders directly, plus the full payload
+/// for replay. Shape of `professions`:
+///   { primaries:   [ProfEntry], secondaries: [ProfEntry] }
+///   ProfEntry = { id, name, kind: "primary"|"secondary",
+///                 current: { tierName, skill, max, knownRecipes } | null }
+/// `current` is the CURRENT-EXPANSION tier (resolved by name), or null when the
+/// character hasn't leveled this expansion's tier (legacy non-tiered professions
+/// like Archaeology fall back to their profession-level skill).
+model ProfessionSnapshot {
+  id          String         @id @default(cuid())
+  characterId String
+  capturedAt  DateTime       @default(now())
+  source      SnapshotSource
+  sourceHash  String
+  professions Json
+  rawPayload  Json
+  createdAt   DateTime       @default(now())
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
@@ -624,11 +684,17 @@ model WclReport {
   revision  Int
   frozen    Boolean  @default(false)
   fetchedAt DateTime
+  // When the deaths layer was last fetched for this report (any result, incl.
+  // zero deaths). Null = never attempted — distinguishes a genuinely
+  // death-free report from an un-backfilled one so the backfill sweep doesn't
+  // re-fetch death-free reports forever.
+  deathsFetchedAt DateTime?
   createdAt DateTime @default(now())
 
   guild  Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
   fights WclFight[]
   actors WclReportActor[]
+  deaths WclFightDeath[]
 
   @@index([guildId, startTime(sort: Desc)])
 }
@@ -680,6 +746,116 @@ model WclReportActor {
 
   @@unique([reportCode, actorId])
   @@index([characterId])
+}
+
+// One death within a raid-encounter pull — the first_death_ledger deaths
+// layer. Sourced from WCL `events(dataType: Deaths)` (the ordered spine) +
+// `table(dataType: Deaths)` (overkill / killing ability). Replaced wholesale
+// with its parent report, exactly like WclFight (live logs grow). Ordering
+// within a (reportCode, fightId) by `deathOrder` gives first/early-death rank.
+model WclFightDeath {
+  id          String  @id @default(cuid())
+  reportCode  String
+  fightId     Int
+  encounterId Int
+  difficulty  Int
+  // The fight's kill status — kill-pull deaths are kept separate from wipes.
+  kill        Boolean
+  // Report-local actor ids (join WclReportActor.actorId); characterId is the
+  // resolved roster join (null = unmatched, mirrors WclReportActor).
+  targetActorId        Int
+  characterId          String?
+  killerActorId        Int?
+  killingAbilityGameId Int?
+  // Killing-ability display name from the table drill-down (nullable: the
+  // table call is best-effort and never blocks the events spine).
+  killingAbilityName   String?
+  // Absolute wall-clock (report epoch + event timestamp) + the 0-based index
+  // within the pull by ascending timestamp (precomputed so the read is pure).
+  deathAt     DateTime
+  deathOrder  Int
+  // Overkill (killing blow minus remaining HP) from the table; null if
+  // unmatched. BigInt — overkill can exceed 2^31 on big hits.
+  overkill    BigInt?
+  // Battle-rez (combat resurrection) economy: if this death was followed by a
+  // rez of the SAME target later in the SAME pull, when + who cast it + which
+  // rez spell. Null = stayed dead. Set by the GRS rez pass matching each
+  // `events(dataType: Casts)` combat-rez to the most-recent prior unmatched
+  // death of its target. A rez with no later re-death of that target = a
+  // SUCCESSFUL rez (the brez-efficiency signal), tracked at read time.
+  rezzedAt         DateTime?
+  rezzerActorId    Int?
+  rezAbilityGameId Int?
+  // Cooldown-usage layer (cooldown_usage widget). For each death we record
+  // whether the dying player had a PERSONAL defensive buff active at the moment
+  // of death, and the most-recent personal defensive CAST before the death this
+  // pull. All from WCL Buffs/Casts events filtered to the defensive allowlist
+  // (src/lib/defensive-cooldowns.ts). `defensiveActive*` = an allowlisted buff
+  // whose window spanned deathAt (null = none active). `lastDefensiveCast*` =
+  // the most-recent self-cast allowlisted defensive before death + ms before
+  // (null = none cast this pull). `cooldownsFetchedAt` is the self-healing
+  // backfill marker (mirrors WclReport.deathsFetchedAt) — stamped even at 0
+  // rows so a processed death drops out of the backfill permanently.
+  defensiveActiveGameId     Int?
+  defensiveActiveName       String?
+  lastDefensiveCastId       Int?
+  lastDefensiveCastMsBefore Int?
+  cooldownsFetchedAt        DateTime?
+
+  report    WclReport  @relation(fields: [reportCode], references: [code], onDelete: Cascade)
+  character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+
+  @@unique([reportCode, fightId, targetActorId, deathAt])
+  @@index([encounterId, difficulty, deathAt(sort: Desc)])
+  @@index([characterId])
+  @@index([reportCode])
+  // Backfill sweep: find deaths whose cooldown layer hasn't been computed yet.
+  @@index([cooldownsFetchedAt])
+}
+
+// Avoidable-damage enrichment for the learning_curve widget. One row per
+// (guild, encounter, difficulty, early|late bucket, killing-ability, char):
+// that character's total damage TAKEN from that auto-curated avoidable ability
+// across the bucket's wipe pulls. The killing abilities come from
+// WclFightDeath.killingAbilityGameId (abilities that kill people ARE the
+// avoidable mechanics — no hand-curation). Aggregated per guild over the
+// rolling window, recomputed wholesale per (encounter,difficulty) by the GRS
+// avoidable sweep when its wipe set changes (gated by WclAvoidableState).
+model WclAvoidableDamage {
+  id            String   @id @default(cuid())
+  guildId       String
+  encounterId   Int
+  difficulty    Int
+  // 0 = early half, 1 = late half (chronological split of the enc's wipes).
+  bucket        Int
+  abilityGameId Int
+  characterId   String
+  // Total damage taken from this ability across the bucket's pulls. BigInt —
+  // summed damage over many pulls easily exceeds 2^31.
+  total         BigInt
+  computedAt    DateTime @default(now())
+
+  guild     Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, encounterId, difficulty, bucket, abilityGameId, characterId], map: "WclAvoidableDamage_full_unique")
+  @@index([guildId, encounterId, difficulty])
+}
+
+// One row per (guild, encounter, difficulty): when its avoidable-damage
+// aggregate was last computed + the wipe count then, so the GRS avoidable
+// sweep only recomputes when the wipe set changed (cheap change-detector).
+model WclAvoidableState {
+  id          String   @id @default(cuid())
+  guildId     String
+  encounterId Int
+  difficulty  Int
+  computedAt  DateTime
+  wipeFights  Int
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, encounterId, difficulty])
 }
 
 // Latest payload uploaded by our own in-game addon (via the companion
@@ -819,6 +995,11 @@ model RaidEventSeries {
   timezone        String // IANA, e.g. "Europe/London"
   raidSize        Int?
   notes           String?
+  // Raid-lead targeting: which raid ZONES (Blizzard journal-instance ids, max
+  // 2) + optional bosses (encounter ids) this series aims at. Drives the
+  // month-view zone-art day backgrounds. Empty = untargeted.
+  targetZoneIds      Int[] @default([])
+  targetEncounterIds Int[] @default([])
   startsOn        DateTime?
   endsOn          DateTime? // null = open-ended; materializer caps to window
   createdByUserId String?
@@ -847,6 +1028,11 @@ model RaidEvent {
   localTime    String // "19:00" wall-clock the occurrence was derived from
   occurrenceDate String // "2026-06-16" local date — STABLE re-derive/materialize key
   notes        String?
+  // Raid-lead targeting: which raid ZONES (Blizzard journal-instance ids, max
+  // 2) + optional bosses (encounter ids) this occurrence aims at. Drives the
+  // month-view zone-art day backgrounds. Empty = untargeted.
+  targetZoneIds      Int[] @default([])
+  targetEncounterIds Int[] @default([])
   status       RaidEventStatus @default(PLANNED)
   rosterLockedAt DateTime?
   // When true this occurrence was edited (or cancelled) for itself alone — the
@@ -900,6 +1086,41 @@ model EventSignup {
   @@unique([raidEventId, characterId])
   @@index([raidEventId, state])
   @@index([userId])
+}
+
+/// One OBSERVED raid session, uploaded by an in-game addon observer (the
+/// attendance_ledger widget's presence feeder — no public API exposes who was
+/// actually in a raid group). One row per (observer character, session): the
+/// addon accumulates per-member first/last-seen + sample counts client-side
+/// and re-uploads the growing session, so this is UPSERTED by the unique key
+/// (the latest upload is the most complete). Presence is unioned across
+/// observers at read time. Signups stay first-party (EventSignup); this layer
+/// adds who actually SHOWED. `members`/`guildOnline` are compact JSON arrays.
+model RaidNightObservation {
+  id                  String   @id @default(cuid())
+  guildId             String
+  observerCharacterId String
+  uploadedByUserId    String
+  // The addon's session id (its start epoch as a string) — stable across the
+  // re-uploads of one raid night so they upsert the same row.
+  sessionId           String
+  startedAt           DateTime
+  endedAt             DateTime
+  instanceName        String?
+  difficulty          String?
+  // [{ name, realm?, firstSeen, lastSeen, samples, online?, subgroup?, role?, class? }]
+  // epochs are seconds; name may be "Name" or "Name-Realm".
+  members             Json
+  // Optional enrichment: guild members seen online during the session (names)
+  // — distinguishes "absent (offline)" from "online but not in the raid".
+  guildOnline         Json?
+  capturedAt          DateTime @default(now())
+
+  guild    Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  observer Character @relation(fields: [observerCharacterId], references: [id], onDelete: Cascade)
+
+  @@unique([observerCharacterId, sessionId])
+  @@index([guildId, startedAt(sort: Desc)])
 }
 
 /// Append-only event log written in the SAME transaction as every mutation.
@@ -976,6 +1197,13 @@ model DiscordIntegration {
   autoPostLeadDays     Int      @default(5)
   reminderLeadsMinutes Int[]    @default([1440, 240]) // 24h + 4h non-responder nudges
   reminderMode         String   @default("CHANNEL") // "CHANNEL" | "DM"
+  // Role gate (two INDEPENDENT roles, each null = open for its surface):
+  //  - requiredRoleId gates `/statsmith link` (admins always bypass).
+  //  - buttonRoleId gates the signup BUTTONS. When set, a member may tap if they
+  //    hold the buttonRole OR the requiredRoleId (link role) OR are an admin.
+  //    Null buttonRole = buttons open to anyone.
+  requiredRoleId       String? // link-command role snowflake, or null for open
+  buttonRoleId         String? // signup-button role snowflake, or null for open
   installedByUserId    String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -997,4 +1225,238 @@ model DiscordLinkCode {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Recruitment forms (Part 3) — a config-driven, brandable public application
+// form per guild/team, an officer review inbox, optional reviewer voting, and
+// per-reviewer opt-in notifications. The public submit surface runs in its own
+// hardened container (APP_ROLE=recruit-public); officer review lives in the
+// main app gated by assertRaidTeamRole / assertGuildRole. Field/branding
+// shapes live in src/lib/recruitment/form-schema.ts (the validated JSON).
+// ──────────────────────────────────────────────────────────────────────────────
+
+enum RecruitFormStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum RecruitSubmissionStatus {
+  NEW
+  UNDER_REVIEW
+  TRIAL_OFFERED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+enum RecruitReviewerRole {
+  REVIEWER
+  LEAD
+}
+
+enum RecruitVoteValue {
+  STRONG_NO
+  NO
+  YES
+  STRONG_YES
+  ABSTAIN
+}
+
+enum RecruitVoteSource {
+  WEB
+  DISCORD
+}
+
+enum RecruitNotifyChannel {
+  EMAIL
+  DISCORD_DM
+}
+
+enum RecruitNotifyKind {
+  NEW_SUBMISSION
+  STATUS_CHANGE
+  QUORUM_REACHED
+}
+
+model RecruitmentForm {
+  id              String            @id @default(cuid())
+  guildId         String
+  // Optionally scoped to a team; null = guild-wide form.
+  raidTeamId      String?
+  name            String
+  // Public path segment; the form is reachable at /apply/<slug> only while
+  // status = OPEN (a CLOSED/DRAFT form re-locks the link instantly).
+  slug            String
+  status          RecruitFormStatus @default(DRAFT)
+  // Config-driven structure: { version, pages:[{id,title,fields:[…]}], layout,
+  // antiSpam, settings }. Validated by src/lib/recruitment/form-schema.ts.
+  schema          Json
+  // Bumped on every PUBLISHED edit; each submission stamps the version it was
+  // taken under so old submissions always render with their original fields.
+  schemaVersion   Int               @default(1)
+  // Branding object: { logoUrl, coverImageUrl, background, colors, font,
+  // welcome, thankYou, faviconUrl }. Null = default theme.
+  theme           Json?
+  // Voting is OFF by default (the user's explicit requirement); votingConfig
+  // holds { quorum, threshold, hideUntilVoted, allowAbstain } when enabled.
+  votingEnabled   Boolean           @default(false)
+  votingConfig    Json?
+  createdByUserId String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  guild       Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  raidTeam    RaidTeam?        @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  createdBy   User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  submissions FormSubmission[]
+  reviewers   FormReviewer[]
+  notifyPrefs RecruitmentNotificationPref[]
+
+  @@unique([guildId, slug])
+  @@index([raidTeamId])
+  @@index([status])
+}
+
+model FormSubmission {
+  id              String                  @id @default(cuid())
+  formId          String
+  // Which schema version rendered this submission (stable inbox rendering).
+  schemaVersion   Int
+  status          RecruitSubmissionStatus @default(NEW)
+  // A DRAFT (browser save-and-resume) is never reviewed and never notifies.
+  isDraft         Boolean                 @default(false)
+  // Anonymous applicants have null; a signed-in/Discord-linked applicant is
+  // attributed.
+  applicantUserId String?
+  // Denormalized answers snapshot (rendered against schemaVersion) for the
+  // single-view; FormAnswer rows power the inbox table/filter/export.
+  answersJson     Json
+  // A short label (applicant name/BattleTag) pulled from a designated field,
+  // for inbox lists + notifications.
+  applicantLabel  String?
+  // Hashed submitter IP for rate-limit / soft-dedup — never the raw IP.
+  ipHash          String?
+  submittedAt     DateTime?
+  // Discord relay linkage — the per-applicant embed + (when voting is on) the
+  // vote buttons, edited in place (mirrors RaidEvent's discordMessageId).
+  discordChannelId String?
+  discordMessageId String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  form      RecruitmentForm     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  applicant User?               @relation(fields: [applicantUserId], references: [id], onDelete: SetNull)
+  answers   FormAnswer[]
+  votes     SubmissionVote[]
+  comments  SubmissionComment[]
+
+  @@index([formId, status])
+  @@index([formId, submittedAt(sort: Desc)])
+}
+
+// One row per answered field — queryable for inbox table/filter/sort/export.
+model FormAnswer {
+  id           String  @id @default(cuid())
+  submissionId String
+  // Matches a Field.id in the form's schema JSON.
+  fieldId      String
+  // Denormalized for rendering/export without re-reading the schema.
+  fieldType    String
+  // Polymorphic value — the column matching the field type is populated;
+  // valueJson holds arrays (multi-select) + structured values.
+  valueText    String? @db.Text
+  valueNumber  Float?
+  valueJson    Json?
+
+  submission FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@index([fieldId])
+}
+
+// Who may review a form's submissions, beyond the implicit officer access
+// (assertRaidTeamRole CO_LEADER / assertGuildRole OFFICER). An explicit grant
+// lets a team add a non-officer reviewer (e.g. a trial lead).
+model FormReviewer {
+  id      String              @id @default(cuid())
+  formId  String
+  userId  String
+  role    RecruitReviewerRole @default(REVIEWER)
+  addedAt DateTime            @default(now())
+
+  form RecruitmentForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+  user User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, userId])
+  @@index([userId])
+}
+
+// One ordinal vote per reviewer per submission (upserted — last vote wins),
+// with a required rationale. Tally + hide-until-voted live in the read layer.
+model SubmissionVote {
+  id             String            @id @default(cuid())
+  submissionId   String
+  reviewerUserId String
+  value          RecruitVoteValue
+  rationale      String            @db.Text
+  source         RecruitVoteSource @default(WEB)
+  version        Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  submission FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  reviewer   User           @relation(fields: [reviewerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([submissionId, reviewerUserId])
+  @@index([submissionId])
+}
+
+model SubmissionComment {
+  id           String   @id @default(cuid())
+  submissionId String
+  authorUserId String
+  body         String   @db.Text
+  createdAt    DateTime @default(now())
+
+  submission FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  author     User           @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+}
+
+// Per-reviewer OPT-IN notification preference (the user's explicit
+// requirement). A row exists only when a reviewer has opted in. `channel` =
+// EMAIL or DISCORD_DM (user's choice). `formId` null = all forms in scope.
+model RecruitmentNotificationPref {
+  id             String               @id @default(cuid())
+  userId         String
+  formId         String?
+  channel        RecruitNotifyChannel
+  onNew          Boolean              @default(true)
+  onStatusChange Boolean              @default(false)
+  onQuorum       Boolean              @default(false)
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  form RecruitmentForm? @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, formId, channel])
+  @@index([formId])
+}
+
+// Notification outbox (decoupled, mirrors the calendar SyncOutbox pattern): a
+// row is written in the submit transaction; the worker drains it, fans out to
+// opted-in reviewers' channels + the team Discord, and stamps processedAt.
+model RecruitmentNotificationOutbox {
+  id           String            @id @default(cuid())
+  submissionId String
+  kind         RecruitNotifyKind
+  createdAt    DateTime          @default(now())
+  processedAt  DateTime?
+  attempts     Int               @default(0)
+
+  @@index([processedAt])
+  @@index([submissionId])
 }

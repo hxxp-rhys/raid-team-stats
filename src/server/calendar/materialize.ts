@@ -29,6 +29,8 @@ type SeriesRow = {
   timezone: string;
   raidSize: number | null;
   notes: string | null;
+  targetZoneIds: number[];
+  targetEncounterIds: number[];
   startsOn: Date | null;
   endsOn: Date | null;
   isActive: boolean;
@@ -46,6 +48,8 @@ const SERIES_SELECT = {
   timezone: true,
   raidSize: true,
   notes: true,
+  targetZoneIds: true,
+  targetEncounterIds: true,
   startsOn: true,
   endsOn: true,
   isActive: true,
@@ -123,6 +127,8 @@ export async function materializeSeries(
             localTime: o.localTime,
             occurrenceDate: o.occurrenceDate,
             notes: s.notes,
+            targetZoneIds: s.targetZoneIds,
+            targetEncounterIds: s.targetEncounterIds,
             createdByUserId: s.createdByUserId,
           },
           select: { id: true, version: true },

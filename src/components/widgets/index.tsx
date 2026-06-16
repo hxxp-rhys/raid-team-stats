@@ -8,7 +8,14 @@ import { ClassCompositionWidget } from "./class-composition";
 import { ConsumableReadinessWidget } from "./consumable-readiness";
 import { DataRefreshWidget } from "./data-refresh";
 import { DelveProgressWidget } from "./delve-progress";
+import { AttendanceLedgerWidget } from "./attendance-ledger";
+import { BenchEquityWidget } from "./bench-equity";
+import { BrezEconomyWidget } from "./brez-economy";
+import { CooldownUsageWidget } from "./cooldown-usage";
 import { EngagementPulseWidget } from "./engagement-pulse";
+import { FirstDeathLedgerWidget } from "./first-death-ledger";
+import { LearningCurveWidget } from "./learning-curve";
+import { TonightReadyWidget } from "./tonight-ready";
 import { IlvlDistributionWidget } from "./ilvl-distribution";
 import { IlvlRosterWidget } from "./ilvl-roster";
 import { KeystonesWidget } from "./keystones";
@@ -17,6 +24,7 @@ import { MplusLadderWidget } from "./mplus-ladder";
 import { MplusWeeklyWidget } from "./mplus-weekly";
 import { ParseConsistencyWidget } from "./parse-consistency";
 import { ParsesHeatmapWidget } from "./parses-heatmap";
+import { ProfessionsWidget } from "./professions";
 import { ProgCurveWidget } from "./prog-curve";
 import { RaidCompletionWidget } from "./raid-completion";
 import { RecentKillsWidget } from "./recent-kills";
@@ -70,6 +78,14 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetComponent> = {
   engagement_pulse: EngagementPulseWidget,
   prog_curve: ProgCurveWidget,
   parse_consistency: ParseConsistencyWidget,
+  professions: ProfessionsWidget,
+  first_death_ledger: FirstDeathLedgerWidget,
+  attendance_ledger: AttendanceLedgerWidget,
+  learning_curve: LearningCurveWidget,
+  tonight_ready: TonightReadyWidget,
+  bench_equity: BenchEquityWidget,
+  brez_economy: BrezEconomyWidget,
+  cooldown_usage: CooldownUsageWidget,
 };
 
 /**

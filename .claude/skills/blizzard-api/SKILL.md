@@ -44,10 +44,25 @@ cache key and retries once.
 | `characterMythicKeystoneIndex` | `…/mythic-keystone-profile` | app |
 | `characterMythicKeystone` | `…/mythic-keystone-profile/season/{seasonId}` | app |
 | `characterRaids` | `…/encounters/raids` | app |
+| `characterProfessions` | `…/professions` | app |
 | `guildRoster` | `/data/wow/guild/{realm}/{guild}/roster` | app |
+| `professionSkillTier` | `/data/wow/profession/{id}/skill-tier/{tierId}` (**static-{region}**) | app |
 
 Realm/character/guild slugs go through `@/lib/realm`
 (`buildCharacterPath`, `normalizeRealmSlug`) — don't build slugs by hand.
+
+**`professionSkillTier` is the ONLY `static-{region}` namespace use in the app**
+(everything else is `profile-{region}`). It returns the profession's recipe
+`categories[]` in **in-game display order** (Recrafting → Profession Equipment →
+Weapons → Armor → … → House Decor), each `{name, recipes:[{id,name}]}`. It's how
+we sort a character's known recipes "like in game": intersect the character's
+`known_recipes` ids with these ordered categories. The category structure is
+**static per patch + identical for everyone**, so it's Redis-cached (key
+`prof-cat:{region}:{profId}:{tierId}`, 7-day TTL) in
+[recipe-categories.ts](../../../src/server/professions/recipe-categories.ts) —
+NOT fetched per character. Char `/professions` `known_recipes` is a FLAT
+`{id,name}` list with NO meaningful order — the category order MUST come from
+this game-data endpoint.
 
 ## Rate limits
 

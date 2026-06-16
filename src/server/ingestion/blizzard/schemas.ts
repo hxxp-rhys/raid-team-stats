@@ -268,6 +268,121 @@ export const raidEncountersResponseSchema = z
   .passthrough();
 export type RaidEncountersResponse = z.infer<typeof raidEncountersResponseSchema>;
 
+/**
+ * /profile/wow/character/{realmSlug}/{characterName}/professions
+ * — primaries (max 2) + secondaries, each with per-expansion `tiers` carrying
+ * skill points + known recipes. Kept permissive (.passthrough); we only read
+ * what the derivation needs. A character with no professions omits both arrays.
+ */
+const profLocaleName = z
+  .union([z.string(), z.record(z.string(), z.string())])
+  .optional();
+const professionTierSchema = z
+  .object({
+    tier: z
+      .object({ id: z.number().int().optional(), name: profLocaleName })
+      .passthrough()
+      .optional(),
+    skill_points: z.number().optional(),
+    max_skill_points: z.number().optional(),
+    known_recipes: z.array(z.object({}).passthrough()).optional(),
+  })
+  .passthrough();
+const professionEntrySchema = z
+  .object({
+    profession: z
+      .object({ id: z.number().int().optional(), name: profLocaleName })
+      .passthrough()
+      .optional(),
+    skill_points: z.number().optional(),
+    max_skill_points: z.number().optional(),
+    tiers: z.array(professionTierSchema).optional(),
+  })
+  .passthrough();
+export const characterProfessionsResponseSchema = z
+  .object({
+    primaries: z.array(professionEntrySchema).optional(),
+    secondaries: z.array(professionEntrySchema).optional(),
+  })
+  .passthrough();
+export type CharacterProfessionsResponse = z.infer<
+  typeof characterProfessionsResponseSchema
+>;
+
+/**
+ * /data/wow/profession/{id}/skill-tier/{tierId} (STATIC namespace) — the recipe
+ * CATEGORIES in in-game display order. Each category lists its recipes (flat
+ * {id, name}). Permissive: we only read category name + recipe id/name.
+ */
+export const professionSkillTierResponseSchema = z
+  .object({
+    id: z.number().int().optional(),
+    categories: z
+      .array(
+        z
+          .object({
+            name: profLocaleName,
+            recipes: z
+              .array(
+                z
+                  .object({ id: z.number().int().optional(), name: profLocaleName })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type ProfessionSkillTierResponse = z.infer<
+  typeof professionSkillTierResponseSchema
+>;
+
+/**
+ * /data/wow/media/journal-instance/{id} (STATIC namespace) — a raid's media
+ * assets. We read the `tile` asset (the official zone art at
+ * render.worldofwarcraft.com/.../{name}-small.jpg). Permissive: only key+value.
+ */
+export const journalInstanceMediaResponseSchema = z
+  .object({
+    assets: z
+      .array(
+        z
+          .object({ key: z.string().optional(), value: z.string().optional() })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type JournalInstanceMediaResponse = z.infer<
+  typeof journalInstanceMediaResponseSchema
+>;
+
+/**
+ * /data/wow/journal-instance/{id} — a raid's data, incl. its `encounters[]`
+ * ({ id, name }). Permissive: with the locale pinned, name is a plain string;
+ * accept the rare localized-object form too rather than 422 the whole call.
+ */
+const localizedName = z.union([z.string(), z.record(z.string(), z.string())]);
+export const journalInstanceResponseSchema = z
+  .object({
+    id: z.number().int().optional(),
+    name: localizedName.optional(),
+    encounters: z
+      .array(
+        z
+          .object({ id: z.number().int(), name: localizedName.optional() })
+          .passthrough(),
+      )
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+export type JournalInstanceResponse = z.infer<
+  typeof journalInstanceResponseSchema
+>;
+
 // /data/wow/guild/{realm}/{slug}/roster — paginated roster.
 export const guildRosterResponseSchema = z
   .object({

@@ -193,3 +193,33 @@ export const sendRaidReminderEmail = async (args: {
       `Set your attendance here:\n${args.eventUrl}\n`,
   });
 };
+
+/**
+ * Recruitment: notify an opted-in reviewer about a new application (or a
+ * status change). Reuses the single sendMail choke point + dedupe.
+ */
+export const sendRecruitmentNotificationEmail = async (args: {
+  to: string;
+  formName: string;
+  applicantLabel: string;
+  kind: "new" | "status";
+  statusLabel?: string;
+  reviewUrl: string;
+}): Promise<void> => {
+  const subject =
+    args.kind === "new"
+      ? `New application: ${args.applicantLabel} — ${args.formName}`
+      : `Application ${args.statusLabel ?? "updated"}: ${args.applicantLabel} — ${args.formName}`;
+  const lead =
+    args.kind === "new"
+      ? `A new application was submitted to "${args.formName}".`
+      : `An application to "${args.formName}" is now ${args.statusLabel ?? "updated"}.`;
+  await sendMail({
+    to: args.to,
+    subject,
+    text:
+      `${lead}\n\n` +
+      `Applicant: ${args.applicantLabel}\n\n` +
+      `Review it here:\n${args.reviewUrl}\n`,
+  });
+};

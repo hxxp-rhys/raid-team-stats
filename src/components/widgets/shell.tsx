@@ -16,6 +16,7 @@ export function WidgetShell({
   title,
   description,
   requiresCompanion,
+  headerAction,
   children,
 }: {
   title: string;
@@ -23,6 +24,9 @@ export function WidgetShell({
   /** Show a small "Stat Smith addon required" chip in the header for
    *  widgets whose data comes only from the in-game addon/companion. */
   requiresCompanion?: boolean;
+  /** Optional action rendered top-right, inline with the title (e.g. a button
+   *  that opens a detail lightbox). */
+  headerAction?: ReactNode;
   children: ReactNode;
 }) {
   // h-full so the card stretches to fill its (resizable) grid cell; the
@@ -32,14 +36,17 @@ export function WidgetShell({
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle>{title}</CardTitle>
-          {requiresCompanion && (
-            <span
-              className="border-border bg-muted/50 text-muted-foreground shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium"
-              title="This widget's data comes from the Stat Smith in-game addon + companion uploader."
-            >
-              Stat Smith required
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {requiresCompanion && (
+              <span
+                className="border-border bg-muted/50 text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium"
+                title="This widget's data comes from the Stat Smith in-game addon + companion uploader."
+              >
+                Stat Smith required
+              </span>
+            )}
+            {headerAction}
+          </div>
         </div>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>

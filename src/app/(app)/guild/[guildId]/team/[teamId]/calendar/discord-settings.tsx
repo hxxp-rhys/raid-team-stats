@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+// Official Discord help: enabling Developer Mode + copying IDs. VERIFY-QUARTERLY:
+// re-check this URL still 200s and covers Developer Mode; next check 2026-09-14.
+// Single source of truth for the link lives in the discord-api skill.
+const DISCORD_DEV_MODE_HELP =
+  "https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID";
+
 /**
  * Per-team Discord binding, shown inside Calendar settings (LEADER only) and
  * only when the bot is configured on the deployment. Bind a guild + channel;
@@ -15,9 +21,15 @@ import { Label } from "@/components/ui/label";
 export function DiscordSettings({
   raidTeamId,
   canLead,
+  onSaved,
+  mainHasUnsavedEdits,
 }: {
   raidTeamId: string;
   canLead: boolean;
+  /** Called after a clean update so the parent can close the modal. */
+  onSaved?: () => void;
+  /** When the sibling (main) settings form has unsaved edits, we must NOT close. */
+  mainHasUnsavedEdits?: boolean;
 }) {
   const status = api.discord.status.useQuery();
   const enabled = status.data?.enabled === true;
@@ -40,6 +52,8 @@ export function DiscordSettings({
           key={raidTeamId}
           raidTeamId={raidTeamId}
           canLead={canLead}
+          onSaved={onSaved}
+          mainHasUnsavedEdits={mainHasUnsavedEdits}
           initial={q.data?.integration ?? null}
         />
       )}
@@ -50,15 +64,21 @@ export function DiscordSettings({
 function Form({
   raidTeamId,
   canLead,
+  onSaved,
+  mainHasUnsavedEdits,
   initial,
 }: {
   raidTeamId: string;
   canLead: boolean;
+  onSaved?: () => void;
+  mainHasUnsavedEdits?: boolean;
   initial: {
     guildId: string;
     channelId: string;
     autoPostEnabled: boolean;
     autoPostLeadDays: number;
+    requiredRoleId: string | null;
+    buttonRoleId: string | null;
   } | null;
 }) {
   const utils = api.useUtils();
@@ -66,9 +86,18 @@ function Form({
   const [channelId, setChannelId] = useState(initial?.channelId ?? "");
   const [autoPost, setAutoPost] = useState(initial?.autoPostEnabled ?? false);
   const [leadDays, setLeadDays] = useState(initial?.autoPostLeadDays ?? 5);
+  const [linkRoleId, setLinkRoleId] = useState(initial?.requiredRoleId ?? "");
+  const [buttonRoleId, setButtonRoleId] = useState(initial?.buttonRoleId ?? "");
 
   const save = api.discord.setIntegration.useMutation({
-    onSuccess: () => void utils.discord.getIntegration.invalidate({ raidTeamId }),
+    onSuccess: async (data) => {
+      await utils.discord.getIntegration.invalidate({ raidTeamId });
+      // Close the modal after a clean SAVE (update) — but only when it's safe:
+      //  - not a first connect (keep it open so the leader sees the banner),
+      //  - commands actually registered (else show the warning), and
+      //  - the sibling main form has no unsaved edits (don't discard them).
+      if (initial && data.commandsRegistered && !mainHasUnsavedEdits) onSaved?.();
+    },
   });
   const remove = api.discord.removeIntegration.useMutation({
     onSuccess: () => void utils.discord.getIntegration.invalidate({ raidTeamId }),
@@ -83,7 +112,10 @@ function Form({
     );
   }
 
-  const valid = /^\d{15,22}$/.test(guildId) && /^\d{15,22}$/.test(channelId);
+  const isRole = (v: string) => v === "" || /^\d{15,22}$/.test(v);
+  const rolesValid = isRole(linkRoleId) && isRole(buttonRoleId);
+  const valid =
+    /^\d{15,22}$/.test(guildId) && /^\d{15,22}$/.test(channelId) && rolesValid;
 
   return (
     <div className="space-y-2">
@@ -126,6 +158,52 @@ function Form({
         </div>
       )}
 
+      <div className="border-border/60 space-y-2 border-t pt-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Link-command role ID (optional)</Label>
+          <Input
+            value={linkRoleId}
+            onChange={(e) => setLinkRoleId(e.target.value.trim())}
+            placeholder="right-click a role → Copy ID (blank = anyone can link)"
+          />
+          <p className="text-muted-foreground text-xs">
+            When set, only members with this role can run{" "}
+            <span className="font-mono">/statsmith link</span> (server admins
+            always can).
+          </p>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Signup-button role ID (optional)</Label>
+          <Input
+            value={buttonRoleId}
+            onChange={(e) => setButtonRoleId(e.target.value.trim())}
+            placeholder="right-click a role → Copy ID (blank = anyone can sign up)"
+          />
+          <p className="text-muted-foreground text-xs">
+            When set, only members with this role —{" "}
+            <strong>or</strong> the link-command role above — can tap the signup
+            buttons (admins always can). Leave blank to let anyone sign up.
+          </p>
+        </div>
+        {!rolesValid && (
+          <p className="text-destructive text-xs" role="alert">
+            That doesn’t look like a Discord role ID.
+          </p>
+        )}
+        <p className="text-muted-foreground text-xs">
+          Need the IDs?{" "}
+          <a
+            href={DISCORD_DEV_MODE_HELP}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary underline underline-offset-2"
+          >
+            How to enable Developer Mode &amp; copy IDs
+          </a>{" "}
+          — turn on Developer Mode, then right-click a role to Copy ID.
+        </p>
+      </div>
+
       <div className="flex items-center gap-2">
         <Button
           type="button"
@@ -138,21 +216,34 @@ function Form({
               channelId,
               autoPostEnabled: autoPost,
               autoPostLeadDays: leadDays,
+              requiredRoleId: linkRoleId,
+              buttonRoleId,
             })
           }
         >
-          {save.isPending ? "Saving…" : initial ? "Update" : "Connect"}
+          {save.isPending ? "Saving…" : initial ? "Save" : "Connect"}
         </Button>
         {initial && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={remove.isPending}
-            onClick={() => remove.mutate({ raidTeamId })}
-          >
-            Disconnect
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate({ raidTeamId })}
+            >
+              Disconnect
+            </Button>
+            <span
+              role="img"
+              tabIndex={0}
+              aria-label="Disconnect: unlinks this Discord channel — the bot stops posting and updating raid boards. Existing posts stay; this is reversible."
+              title="Unlinks this Discord channel — the bot stops posting and updating raid boards. Existing posts stay; this is reversible."
+              className="border-border text-muted-foreground inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border text-[10px] font-semibold leading-none"
+            >
+              i
+            </span>
+          </>
         )}
       </div>
       {save.data && !save.data.commandsRegistered && (
@@ -162,7 +253,11 @@ function Form({
         </p>
       )}
       {save.data?.commandsRegistered && (
-        <p className="text-green-500 text-xs">Connected — commands registered. ✓</p>
+        <p className="text-green-500 text-xs">
+          {initial ? "Saved" : "Connected"} — commands registered. ✓
+          {initial && mainHasUnsavedEdits &&
+            " You still have unsaved calendar changes above — Save or Cancel them to finish."}
+        </p>
       )}
       {(save.error || remove.error) && (
         <p className="text-destructive text-xs" role="alert">

@@ -8,6 +8,22 @@ import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
 
 /**
+ * The roster ranks an officer can assign — Raid Leader / Officer / Main / Trial
+ * / Flex / Rotational / Social (leadership first). Distinct from the site
+ * permission tier (role). "" = unranked.
+ */
+const RANKS = [
+  { value: "RAID_LEADER", label: "Raid Leader" },
+  { value: "OFFICER", label: "Officer" },
+  { value: "MAIN", label: "Main" },
+  { value: "TRIAL", label: "Trial" },
+  { value: "FLEX", label: "Flex" },
+  { value: "ROTATIONAL", label: "Rotational" },
+  { value: "SOCIAL", label: "Social" },
+] as const;
+type RankValue = (typeof RANKS)[number]["value"];
+
+/**
  * Manage Members modal. Lists the active roster + a picker form for adding
  * new characters from the guild's eligible pool. Mirrors the existing
  * ManageMembers card on the legacy team page; lives in a modal here so the
@@ -78,6 +94,9 @@ export function MembersModal({
   const remove = api.raidTeam.removeMember.useMutation({
     onSuccess: invalidate,
   });
+  const setRank = api.raidTeam.setMemberRank.useMutation({
+    onSuccess: invalidate,
+  });
 
   const canManage = !eligible.error;
 
@@ -125,28 +144,58 @@ export function MembersModal({
                 key={m.id}
                 className="flex items-center justify-between gap-3 py-2"
               >
-                <div>
+                <div className="min-w-0">
                   <span className="font-medium">{m.character.name}</span>
                   <span className="text-muted-foreground ml-2">
                     {m.character.realmSlug} · lvl {m.character.level ?? "—"} ·{" "}
                     {m.role.toLowerCase()}
                   </span>
                 </div>
-                {canManage && (
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() =>
-                      remove.mutate({
-                        raidTeamId: teamId,
-                        characterId: m.character.id,
-                      })
-                    }
-                    disabled={remove.isPending}
-                  >
-                    Remove
-                  </Button>
-                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  {canManage ? (
+                    <select
+                      value={m.rank ?? ""}
+                      onChange={(e) =>
+                        setRank.mutate({
+                          raidTeamId: teamId,
+                          characterId: m.character.id,
+                          rank: (e.target.value || null) as RankValue | null,
+                        })
+                      }
+                      disabled={setRank.isPending}
+                      aria-label={`Rank for ${m.character.name}`}
+                      className="bg-background border-border h-8 rounded-md border px-2 text-xs"
+                    >
+                      <option value="">Unranked</option>
+                      {RANKS.map((r) => (
+                        <option key={r.value} value={r.value}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    m.rank && (
+                      <span className="text-muted-foreground text-xs">
+                        {RANKS.find((r) => r.value === m.rank)?.label}
+                      </span>
+                    )
+                  )}
+                  {canManage && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() =>
+                        remove.mutate({
+                          raidTeamId: teamId,
+                          characterId: m.character.id,
+                        })
+                      }
+                      disabled={remove.isPending}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

@@ -191,6 +191,46 @@ export const addonPayloadSchema = z
       })
       .passthrough()
       .optional(),
+
+    // ─── SCHEMA 3 (addon ≥ 1.2.0) ──────────────────────────────────────
+    // Observed raid presence for the attendance_ledger widget — who was
+    // actually in the raid group, accumulated per session by the addon (no
+    // public API exposes this). All optional + luaArray-coerced so older
+    // payloads (and an observer not in a raid) still validate. epochs are
+    // seconds; persisted to RaidNightObservation, not AddonUpload.
+    raidObserver: z
+      .object({
+        sessions: luaArray(
+          z
+            .object({
+              // epoch (seconds) as string or number — coerced to string key.
+              sessionId: z.union([z.string(), z.number()]).optional(),
+              startedAt: z.number().optional(),
+              endedAt: z.number().optional(),
+              instanceName: z.string().nullable().optional(),
+              difficulty: z.string().nullable().optional(),
+              members: luaArray(
+                z
+                  .object({
+                    name: z.string().min(1),
+                    realm: z.string().nullable().optional(),
+                    firstSeen: z.number().optional(),
+                    lastSeen: z.number().optional(),
+                    samples: z.number().optional(),
+                    online: z.boolean().nullable().optional(),
+                    subgroup: z.number().nullable().optional(),
+                    role: z.string().nullable().optional(),
+                    class: z.string().nullable().optional(),
+                  })
+                  .passthrough(),
+              ),
+              guildOnline: luaArray(z.string()).optional(),
+            })
+            .passthrough(),
+        ),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 

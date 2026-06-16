@@ -1,25 +1,26 @@
 "use client";
 
+import { useState } from "react";
+
 import { api } from "@/lib/trpc-client";
+import { Modal } from "@/components/ui/modal";
 import { wowClassColor, wowClassName } from "@/lib/wow";
 import { WidgetShell, WidgetLoading, WidgetError, WidgetEmpty } from "./shell";
+import {
+  formatSlots,
+  selectMissing,
+  sortByWorst,
+} from "@/lib/widgets/missing-fixes-logic";
 
 /**
  * Per-character enchant/gem readiness. Each character gets two gear icons:
  * red when something is missing (with the count), green when fully done.
  * Hovering an icon names the exact slots (e.g. "Head, Shoulder"). Slot
  * logic is Midnight-correct and computed server-side. Sorted worst-first.
+ * A "View list" header button opens a lightbox of only the characters still
+ * needing fixing, with their exact slots. (Pure data-shaping is unit-tested in
+ * src/lib/widgets/missing-fixes-logic.ts.)
  */
-
-// "Head, Shoulder" / "Ring 1, Neck ×2" — dedupe repeats (e.g. two empty
-// sockets on one item) into a "×N" suffix, preserving first-seen order.
-function formatSlots(slots: string[]): string {
-  const counts = new Map<string, number>();
-  for (const s of slots) counts.set(s, (counts.get(s) ?? 0) + 1);
-  return [...counts.entries()]
-    .map(([s, n]) => (n > 1 ? `${s} ×${n}` : s))
-    .join(", ");
-}
 
 function CogSvg() {
   return (
@@ -77,6 +78,7 @@ function StatusCell({
 
 export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
+  const [listOpen, setListOpen] = useState(false);
 
   if (q.isPending) {
     return (
@@ -120,16 +122,33 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
       };
     })
     // Worst (most missing) first, then by ilvl desc.
-    .sort(
-      (a, b) =>
-        b.missingEnchants + b.missingGems - (a.missingEnchants + a.missingGems) ||
-        b.ilvl - a.ilvl,
-    );
+    .sort(sortByWorst);
+
+  // Only the characters with at least one unfixed slot — the lightbox subject.
+  const missing = selectMissing(rows);
 
   return (
     <WidgetShell
       title="Missing enchants / gems"
       description="Green gear = ready · red gear = needs fixing. Hover an icon to see which slots (WoW Midnight enchant rules)."
+      headerAction={
+        <button
+          type="button"
+          onClick={() => setListOpen(true)}
+          className="border-border hover:bg-muted text-foreground inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-colors"
+          title="Open a list of only the characters missing enchants or gems"
+        >
+          View list
+          <span
+            className={
+              "tabular-nums " +
+              (missing.length > 0 ? "text-destructive" : "text-green-500")
+            }
+          >
+            ({missing.length})
+          </span>
+        </button>
+      }
     >
       <table className="w-full text-sm">
         <caption className="sr-only">Enchant and gem readiness</caption>
@@ -184,6 +203,66 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
           ))}
         </tbody>
       </table>
+
+      <Modal
+        open={listOpen}
+        onClose={() => setListOpen(false)}
+        title="Missing enchants / gems"
+        description={
+          missing.length > 0
+            ? `${missing.length} character${missing.length === 1 ? "" : "s"} need fixing — newest gear first.`
+            : undefined
+        }
+      >
+        {missing.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            Everyone’s fully enchanted and gemmed. ✅
+          </p>
+        ) : (
+          <ul className="divide-border divide-y">
+            {missing.map((m) => (
+              <li key={m.character.id} className="py-2.5 first:pt-0 last:pb-0">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span
+                    className="font-medium"
+                    style={{ color: wowClassColor(m.character.classId) }}
+                  >
+                    {m.character.name}
+                    <span className="text-muted-foreground ml-2 text-xs font-normal">
+                      {wowClassName(m.character.classId)}
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                    iLvL {m.ilvl || "—"}
+                  </span>
+                </div>
+                <div className="mt-1 space-y-0.5 text-sm">
+                  {m.missingEnchants > 0 && (
+                    <p>
+                      <span className="text-destructive font-medium">
+                        Missing enchant{m.missingEnchants === 1 ? "" : "s"} ({m.missingEnchants}):
+                      </span>{" "}
+                      <span className="text-muted-foreground">
+                        {formatSlots(m.enchSlots)}
+                      </span>
+                    </p>
+                  )}
+                  {m.missingGems > 0 && (
+                    <p>
+                      <span className="text-destructive font-medium">
+                        Empty socket{m.missingGems === 1 ? "" : "s"} ({m.missingGems}):
+                      </span>{" "}
+                      <span className="text-muted-foreground">
+                        {formatSlots(m.gemSlots)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </WidgetShell>
   );
 }

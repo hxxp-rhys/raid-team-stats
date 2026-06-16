@@ -7,6 +7,7 @@ import {
   decayChipOf,
   dedupePulls,
   isThrowaway,
+  nightBuckets,
   nightsOf,
   paceOf,
   progressOf,
@@ -28,6 +29,7 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
 
   const [tab, setTab] = useState<"curve" | "pace">("curve");
   const [axis, setAxis] = useState<"fight" | "boss">("fight");
+  const [xMode, setXMode] = useState<"pull" | "time">("pull");
   const [includeThrowaways, setIncludeThrowaways] = useState(false);
   const [encounterSel, setEncounterSel] = useState<number | null>(null);
   const [difficultySel, setDifficultySel] = useState<number | null>(null);
@@ -213,6 +215,16 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
             <option value="fight">Fight %</option>
             <option value="boss">Boss HP</option>
           </select>
+          <select
+            className="border-border bg-background rounded-md border px-1.5 py-1"
+            value={xMode}
+            onChange={(e) => setXMode(e.target.value as "pull" | "time")}
+            aria-label="Time axis"
+            title="By pull # spaces every attempt evenly (best for inspecting individual pulls). By date positions attempts on a real timeline so you can see when — and how spread out — they were; busy nights stack into a dense column."
+          >
+            <option value="pull">By pull #</option>
+            <option value="time">By date</option>
+          </select>
           {throwaways.length > 0 && (
             <button
               type="button"
@@ -236,7 +248,7 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
       {sourceNote}
       {staleNote}
       {tab === "curve" ? (
-        <CurveTab pulls={shownPulls} axis={axis} />
+        <CurveTab pulls={shownPulls} axis={axis} xMode={xMode} />
       ) : (
         <PaceTab pulls={paceReal} names={names} excluded={paceExcluded} />
       )}
@@ -290,10 +302,18 @@ function Shell({
 }
 
 const W = 720;
-const H = 220;
-const PAD = { l: 30, r: 8, t: 8, b: 18 };
+const H = 232;
+const PAD = { l: 30, r: 8, t: 8, b: 30 };
 
-function CurveTab({ pulls, axis }: { pulls: Pull[]; axis: "fight" | "boss" }) {
+function CurveTab({
+  pulls,
+  axis,
+  xMode,
+}: {
+  pulls: Pull[];
+  axis: "fight" | "boss";
+  xMode: "pull" | "time";
+}) {
   if (pulls.length === 0) {
     return <WidgetEmpty>No pulls on this boss yet.</WidgetEmpty>;
   }
@@ -305,21 +325,64 @@ function CurveTab({ pulls, axis }: { pulls: Pull[]; axis: "fight" | "boss" }) {
     .map((p) => progressOf(p, axis));
   const slope = slopeOf(wipesOnly);
   const nights = nightsOf(pulls);
+  const buckets = nightBuckets(pulls);
 
-  const x = (i: number) =>
-    PAD.l +
-    (pulls.length === 1
-      ? (W - PAD.l - PAD.r) / 2
-      : (i / (pulls.length - 1)) * (W - PAD.l - PAD.r));
+  const innerW = W - PAD.l - PAD.r;
+  // "By date" positions each pull on a real timeline (horizontal gaps = breaks
+  // and nights); "By pull #" spaces every attempt evenly. Both keep
+  // chronological order, so the rolling-best line and night separators line up.
+  const tMin = pulls[0]!.startAt;
+  const tSpan = Math.max(1, pulls[pulls.length - 1]!.startAt - tMin);
+  const x = (i: number) => {
+    if (pulls.length === 1) return PAD.l + innerW / 2;
+    if (xMode === "time") {
+      return PAD.l + ((pulls[i]!.startAt - tMin) / tSpan) * innerW;
+    }
+    return PAD.l + (i / (pulls.length - 1)) * innerW;
+  };
   const y = (v: number) => PAD.t + (1 - v / 100) * (H - PAD.t - PAD.b);
 
-  // Night boundaries as pull indexes (first pull of each night after the first).
-  const nightStartIdx: number[] = [];
-  let acc = 0;
-  for (const n of nights.slice(0, -1)) {
-    acc += n.length;
-    nightStartIdx.push(acc);
+  // Night separators sit before every night after the first.
+  const nightStartIdx = buckets.slice(1).map((b) => b.firstIndex);
+
+  // Per-night date BRACKET below the plot: a horizontal span from the night's
+  // first to last pull, capped at both ends, labelled with the date(s) it
+  // encompasses. A night that crosses local midnight reads as a date range.
+  const fmtDate = (ms: number) =>
+    new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const bucketLabel = (startAt: number, endAt: number): string => {
+    const s = new Date(startAt);
+    const e = new Date(endAt);
+    if (s.toDateString() === e.toDateString()) return fmtDate(startAt);
+    const sM = s.toLocaleDateString(undefined, { month: "short" });
+    const eM = e.toLocaleDateString(undefined, { month: "short" });
+    return sM === eM
+      ? `${sM} ${s.getDate()}–${e.getDate()}` // "Jun 10–11"
+      : `${fmtDate(startAt)}–${fmtDate(endAt)}`; // "Jun 30–Jul 1"
+  };
+  const bracketY = H - PAD.b + 9;
+  const brackets = buckets.map((b) => ({
+    key: b.firstIndex,
+    x1: x(b.firstIndex),
+    x2: x(b.lastIndex),
+    label: bucketLabel(b.startAt, b.endAt),
+  }));
+  // The bracket is always drawn (it shows the span); the date TEXT is dropped
+  // when it would overlap the previous one (dense pull-# nights) — the bracket
+  // and the per-pull tooltip still carry the date.
+  const dateTexts: Array<{ cx: number; text: string; key: number }> = [];
+  let lastRight = -Infinity;
+  for (const br of brackets) {
+    const cx = (br.x1 + br.x2) / 2;
+    const halfW = (br.label.length * 4.2) / 2; // ≈ fontSize-8 width
+    if (cx - halfW < lastRight + 2) continue;
+    lastRight = cx + halfW;
+    dateTexts.push({ cx, text: br.label, key: br.key });
   }
+  // In "By date" a busy night's pulls overlap into a narrow column; lower the
+  // dot opacity so the pile reads as a density gradient rather than a hard blob
+  // (the "By pull #" default stays fully separable for per-pull inspection).
+  const dotOpacity = xMode === "time" ? 0.5 : 0.85;
 
   const bestPath = best
     .map((v, i) => `${i === 0 ? "M" : "L"} ${x(i)} ${y(v)}`)
@@ -365,6 +428,27 @@ function CurveTab({ pulls, axis }: { pulls: Pull[]; axis: "fight" | "boss" }) {
             strokeDasharray="3 3"
           />
         ))}
+        {/* Date brackets — each spans a raid night's attempts and is labelled
+            with the date(s) it encompasses. */}
+        {brackets.map((br) => (
+          <g key={br.key} stroke="var(--border)" strokeWidth="1">
+            <line x1={br.x1} x2={br.x2} y1={bracketY} y2={bracketY} />
+            <line x1={br.x1} x2={br.x1} y1={bracketY} y2={bracketY - 3} />
+            <line x1={br.x2} x2={br.x2} y1={bracketY} y2={bracketY - 3} />
+          </g>
+        ))}
+        {dateTexts.map((d) => (
+          <text
+            key={d.key}
+            x={d.cx}
+            y={bracketY + 10}
+            textAnchor="middle"
+            fontSize="8"
+            fill="var(--muted-foreground)"
+          >
+            {d.text}
+          </text>
+        ))}
         <path d={bestPath} fill="none" stroke="var(--primary)" strokeWidth="1" opacity="0.5" />
         {pulls.map((p, i) => {
           const v = values[i]!;
@@ -393,7 +477,7 @@ function CurveTab({ pulls, axis }: { pulls: Pull[]; axis: "fight" | "boss" }) {
                   cy={y(v)}
                   r="2.5"
                   fill="var(--primary)"
-                  opacity="0.85"
+                  opacity={dotOpacity}
                 />
               )}
             </a>
@@ -411,7 +495,9 @@ function CurveTab({ pulls, axis }: { pulls: Pull[]; axis: "fight" | "boss" }) {
             wipes
           </>
         )}{" "}
-        · line = best-so-far · dashed = night break · click a dot for the log.
+        · line = best-so-far · dashed = night break · brackets below = each raid
+        night{xMode === "time" ? ", positioned by real time" : ""} · click a dot
+        for the log.
       </p>
     </div>
   );

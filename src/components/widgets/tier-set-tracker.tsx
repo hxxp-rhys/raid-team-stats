@@ -5,6 +5,7 @@ import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 import {
   GEAR_TRACK_BG,
   GEAR_TRACK_LABEL,
+  trackForItemLevel,
   type GearTrack,
 } from "@/lib/gear-tracks";
 
@@ -144,7 +145,12 @@ export function TierSetTrackerWidget({ raidTeamId }: { raidTeamId: string }) {
                   {SLOT_ORDER.map((slot) => {
                     const s = bySlot.get(slot);
                     const filled = !!s?.filled;
-                    const track = s?.track ?? null;
+                    // Derive the track from item level at read time so the dot
+                    // colours reflect the live Midnight bands even on snapshots
+                    // ingested under the old (TWW) bands; fall back to the
+                    // stored track if a piece somehow lacks an ilvl.
+                    const track =
+                      trackForItemLevel(s?.itemLevel) ?? s?.track ?? null;
                     const fill =
                       filled && track ? GEAR_TRACK_BG[track] : null;
                     return (

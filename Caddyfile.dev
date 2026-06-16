@@ -43,3 +43,6 @@ localhost, raiders.hxxp.io {
 		level INFO
 	}
 }
+
+# The public recruitment form is served by `web` at /apply/<guildId>/<slug> on
+# the primary host above — no separate `apply.*` subdomain.

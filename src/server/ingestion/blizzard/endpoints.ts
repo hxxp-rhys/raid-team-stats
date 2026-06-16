@@ -22,6 +22,9 @@ export type BlizzardPath = {
 };
 
 const profileNamespace = (region: string) => `profile-${lowerRegion(region)}`;
+// Game-data (catalogue) endpoints use the STATIC namespace, not profile. The
+// only static-namespace use in the app (the profession recipe categories).
+const staticNamespace = (region: string) => `static-${lowerRegion(region)}`;
 
 export const endpoints = {
   /** GET — characters owned by the calling BattleTag. Requires user OAuth. */
@@ -94,6 +97,47 @@ export const endpoints = {
   ): BlizzardPath => ({
     path: `/profile/wow/character/${buildCharacterPath(realmSlug, characterName)}/encounters/raids`,
     namespace: profileNamespace(region),
+  }),
+
+  /** GET — character professions: primaries + secondaries, each with per-tier
+   *  skill points and known recipes. App token; profile namespace. */
+  characterProfessions: (
+    region: string,
+    realmSlug: string,
+    characterName: string,
+  ): BlizzardPath => ({
+    path: `/profile/wow/character/${buildCharacterPath(realmSlug, characterName)}/professions`,
+    namespace: profileNamespace(region),
+  }),
+
+  /** GET — game-data: a profession's skill tier with its recipe CATEGORIES in
+   *  in-game display order. STATIC namespace. App token. Used to sort a
+   *  character's known recipes the way the in-game profession book groups them. */
+  professionSkillTier: (
+    region: string,
+    professionId: number,
+    skillTierId: number,
+  ): BlizzardPath => ({
+    path: `/data/wow/profession/${professionId}/skill-tier/${skillTierId}`,
+    namespace: staticNamespace(region),
+  }),
+
+  /** GET — media for a journal instance (a raid's tile/background art). STATIC
+   *  namespace. App token. `assets[]` carries the official zone graphic the
+   *  calendar paints behind a targeted day. */
+  journalInstanceMedia: (region: string, instanceId: number): BlizzardPath => ({
+    path: `/data/wow/media/journal-instance/${instanceId}`,
+    namespace: staticNamespace(region),
+  }),
+
+  /** GET — journal instance DATA (a raid's name + its `encounters[]`). STATIC
+   *  namespace. App token. Used to scope the calendar's target-boss list to
+   *  the SELECTED raid (WCL lumps the tier into one combined zone, so its
+   *  encounter list can't tell the raids apart — Blizzard's per-instance list
+   *  can). Encounter ids here are journal-encounter ids, stable per patch. */
+  journalInstance: (region: string, instanceId: number): BlizzardPath => ({
+    path: `/data/wow/journal-instance/${instanceId}`,
+    namespace: staticNamespace(region),
   }),
 
   /** GET — guild roster (members, ranks). */

@@ -4,6 +4,7 @@ import {
   decayChipOf,
   dedupePulls,
   isThrowaway,
+  nightBuckets,
   nightsOf,
   paceOf,
   progressOf,
@@ -122,6 +123,34 @@ describe("nightsOf", () => {
     expect(nights).toHaveLength(2);
     expect(nights[0]).toHaveLength(2);
     expect(nights[0]![0]!.startAt).toBe(BASE);
+  });
+});
+
+describe("nightBuckets", () => {
+  it("returns first-index, start time, and count per night (chronological)", () => {
+    const n1a = pull({ startAt: BASE, endAt: BASE + 300_000 });
+    const n1b = pull({ startAt: BASE + HOUR, endAt: BASE + HOUR + 300_000 });
+    const n2a = pull({ startAt: BASE + 12 * HOUR, endAt: BASE + 12 * HOUR + 300_000 });
+    const buckets = nightBuckets([n2a, n1b, n1a]); // shuffled input
+    expect(buckets).toEqual([
+      {
+        firstIndex: 0,
+        lastIndex: 1,
+        startAt: BASE,
+        endAt: BASE + HOUR + 300_000, // last pull of night 1 ends here
+        count: 2,
+      },
+      {
+        firstIndex: 2,
+        lastIndex: 2,
+        startAt: BASE + 12 * HOUR,
+        endAt: BASE + 12 * HOUR + 300_000,
+        count: 1,
+      },
+    ]);
+  });
+  it("empty → []", () => {
+    expect(nightBuckets([])).toEqual([]);
   });
 });
 

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DiscordSettings } from "./discord-settings";
 
-type ReminderCfg = { enabled: boolean; leadMinutes: number[]; nudgeMinutes: number | null };
+type ReminderCfg = { enabled: boolean; leadMinutes: number[]; nudgeMinutes: number[] };
 type Current = {
   timezone: string;
   comp: { tanks: number; healers: number; dps: number };
@@ -24,13 +24,19 @@ const LEAD_PRESETS = [
   { min: 60, label: "1h" },
   { min: 30, label: "30m" },
 ];
-const NUDGE_PRESETS: { min: number | null; label: string }[] = [
-  { min: null, label: "Off" },
-  { min: 1440, label: "24h before" },
-  { min: 720, label: "12h before" },
-  { min: 360, label: "6h before" },
-  { min: 120, label: "2h before" },
-];
+// Quick-add presets for non-responder nudges, ascending (1h→3d); leaders can
+// also add custom times in minutes/hours/days.
+const NUDGE_PRESETS = [60, 120, 360, 720, 1440, 4320];
+const NUDGE_MIN = 5;
+const NUDGE_MAX = 10080; // = MAX_LEAD_MINUTES (1 week)
+const NUDGE_CAP = 6; // matches reminderConfigSchema .max(6)
+
+/** minutes → compact label, e.g. 1440→"24h", 90→"90m", 2880→"2d". */
+function fmtMinutes(m: number): string {
+  if (m % 1440 === 0) return `${m / 1440}d`;
+  if (m % 60 === 0) return `${m / 60}h`;
+  return `${m}m`;
+}
 
 // A short curated list + free-type fallback covers the common raiding regions
 // without shipping the whole IANA database into the bundle.
@@ -83,20 +89,69 @@ function Body({
   current: Current | null;
 }) {
   const utils = api.useUtils();
-  const [tz, setTz] = useState(current?.timezone ?? "UTC");
-  const [tanks, setTanks] = useState(current?.comp.tanks ?? 2);
-  const [healers, setHealers] = useState(current?.comp.healers ?? 5);
-  const [dps, setDps] = useState(current?.comp.dps ?? 13);
-  const [remEnabled, setRemEnabled] = useState(current?.reminders.enabled ?? true);
-  const [leads, setLeads] = useState<number[]>(current?.reminders.leadMinutes ?? [1440, 60]);
-  const [nudge, setNudge] = useState<number | null>(
-    current?.reminders.nudgeMinutes ?? 720,
-  );
+  // Capture the seeded values once so we can detect unsaved edits in THIS (main)
+  // form — used to stop the independent Discord sub-form's Save from closing the
+  // modal and silently discarding them.
+  const [seed] = useState(() => ({
+    tz: current?.timezone ?? "UTC",
+    tanks: current?.comp.tanks ?? 2,
+    healers: current?.comp.healers ?? 5,
+    dps: current?.comp.dps ?? 13,
+    remEnabled: current?.reminders.enabled ?? true,
+    leads: current?.reminders.leadMinutes ?? [1440, 60],
+    nudges: current?.reminders.nudgeMinutes ?? [720],
+  }));
+  const [tz, setTz] = useState(seed.tz);
+  const [tanks, setTanks] = useState(seed.tanks);
+  const [healers, setHealers] = useState(seed.healers);
+  const [dps, setDps] = useState(seed.dps);
+  const [remEnabled, setRemEnabled] = useState(seed.remEnabled);
+  const [leads, setLeads] = useState<number[]>(seed.leads);
+  const [nudges, setNudges] = useState<number[]>(seed.nudges);
+  const [addVal, setAddVal] = useState("");
+  const [addUnit, setAddUnit] = useState<"m" | "h" | "d">("h");
+  const [addErr, setAddErr] = useState("");
 
   const toggleLead = (min: number) =>
     setLeads((cur) =>
       cur.includes(min) ? cur.filter((m) => m !== min) : [...cur, min],
     );
+
+  const addNudge = (min: number) =>
+    setNudges((cur) =>
+      cur.includes(min) || cur.length >= NUDGE_CAP
+        ? cur
+        : [...cur, min].sort((a, b) => b - a),
+    );
+  const removeNudge = (min: number) =>
+    setNudges((cur) => cur.filter((m) => m !== min));
+  const addCustomNudge = () => {
+    const n = Number(addVal);
+    if (!Number.isFinite(n) || n <= 0) {
+      setAddErr("Enter a number.");
+      return;
+    }
+    const mult = addUnit === "d" ? 1440 : addUnit === "h" ? 60 : 1;
+    const min = Math.round(n * mult);
+    if (min < NUDGE_MIN || min > NUDGE_MAX) {
+      setAddErr(`Pick a time between ${NUDGE_MIN}m and ${NUDGE_MAX / 1440}d before start.`);
+      return;
+    }
+    addNudge(min);
+    setAddVal("");
+    setAddErr("");
+  };
+
+  // True when any main-form field differs from its seeded value. The Discord
+  // sub-form uses this to avoid closing the modal (and discarding these edits).
+  const mainDirty =
+    tz !== seed.tz ||
+    tanks !== seed.tanks ||
+    healers !== seed.healers ||
+    dps !== seed.dps ||
+    remEnabled !== seed.remEnabled ||
+    leads.join(",") !== seed.leads.join(",") ||
+    nudges.join(",") !== seed.nudges.join(",");
 
   const save = api.calendar.setSettings.useMutation({
     onSuccess: async () => {
@@ -124,7 +179,7 @@ function Body({
               reminders: {
                 enabled: remEnabled,
                 leadMinutes: leads,
-                nudgeMinutes: nudge,
+                nudgeMinutes: nudges,
               },
             });
           }}
@@ -211,24 +266,99 @@ function Body({
                   </p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="rem-nudge" className="text-xs">
-                    Nudge non-responders
-                  </Label>
-                  <select
-                    id="rem-nudge"
-                    value={nudge === null ? "" : String(nudge)}
-                    onChange={(e) => setNudge(e.target.value === "" ? null : Number(e.target.value))}
-                    className="border-border bg-background h-9 w-full rounded-md border px-2 text-sm"
-                  >
-                    {NUDGE_PRESETS.map((p) => (
-                      <option key={p.label} value={p.min === null ? "" : String(p.min)}>
-                        {p.label}
-                      </option>
+                  <Label className="text-xs">Nudge non-responders</Label>
+                  {/* Quick presets + custom add. */}
+                  <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                    {NUDGE_PRESETS.filter((m) => !nudges.includes(m)).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => addNudge(m)}
+                        disabled={nudges.length >= NUDGE_CAP}
+                        className="border-border text-muted-foreground hover:bg-muted rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40"
+                      >
+                        + {fmtMinutes(m)}
+                      </button>
                     ))}
-                  </select>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={addVal}
+                      onChange={(e) => {
+                        setAddVal(e.target.value);
+                        if (addErr) setAddErr("");
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addCustomNudge();
+                        }
+                      }}
+                      placeholder="custom"
+                      className="h-8 w-20"
+                      disabled={nudges.length >= NUDGE_CAP}
+                    />
+                    <select
+                      value={addUnit}
+                      onChange={(e) => setAddUnit(e.target.value as "m" | "h" | "d")}
+                      disabled={nudges.length >= NUDGE_CAP}
+                      className="border-border bg-background h-8 rounded-md border px-2 text-xs"
+                    >
+                      <option value="d">days</option>
+                      <option value="h">hours</option>
+                      <option value="m">minutes</option>
+                    </select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={addCustomNudge}
+                      disabled={nudges.length >= NUDGE_CAP || addVal.trim() === ""}
+                    >
+                      Add
+                    </Button>
+                    <span className="text-muted-foreground text-xs">before start</span>
+                  </div>
+                  {addErr && (
+                    <p className="text-destructive text-xs" role="alert">
+                      {addErr}
+                    </p>
+                  )}
                   <p className="text-muted-foreground text-xs">
-                    One “please sign up” email to members with no response.
+                    One “please sign up” email to non-responders at each time
+                    (up to {NUDGE_CAP}). Between {NUDGE_MIN}m and{" "}
+                    {NUDGE_MAX / 1440} days before start.
                   </p>
+                  {/* Active nudges — removable chips (incl. custom times). */}
+                  <div className="space-y-1 pt-1">
+                    <Label className="text-xs">Scheduled nudges</Label>
+                    {nudges.length === 0 ? (
+                      <p className="text-muted-foreground text-xs italic">
+                        No nudges set.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {nudges.map((m) => (
+                        <span
+                          key={m}
+                          className="border-primary bg-primary/10 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium"
+                        >
+                          {fmtMinutes(m)} before
+                          <button
+                            type="button"
+                            onClick={() => removeNudge(m)}
+                            aria-label={`Remove ${fmtMinutes(m)} nudge`}
+                            className="text-muted-foreground hover:text-destructive -mr-0.5 ml-0.5 leading-none"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -250,8 +380,14 @@ function Body({
 
     {/* Discord binding lives OUTSIDE the form (own mutations) so pressing Enter
         in a Discord ID field can't submit the calendar settings form. Hidden
-        entirely when the bot isn't configured. */}
-    <DiscordSettings raidTeamId={raidTeamId} canLead />
+        entirely when the bot isn't configured. Its Save closes the modal on a
+        successful update (onSaved). */}
+    <DiscordSettings
+      raidTeamId={raidTeamId}
+      canLead
+      onSaved={onClose}
+      mainHasUnsavedEdits={mainDirty}
+    />
     </div>
   );
 }

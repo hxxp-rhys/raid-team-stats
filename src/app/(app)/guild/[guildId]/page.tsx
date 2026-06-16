@@ -264,9 +264,18 @@ function RefreshRosterButton({
     },
   );
 
+  // Phase label for the real per-member progress emitted by the job.
+  const PHASE_LABEL: Record<string, string> = {
+    roster: "Fetching roster from Battle.net…",
+    members: "Syncing characters…",
+    verifying: "Matching + verifying characters…",
+    done: "Finishing up…",
+  };
+
   // Render label + progress message based on current state.
   let label = "Refresh Roster";
   let progress: string | null = null;
+  let barPct: number | null = null;
   if (isPending) {
     label = "Queueing…";
   } else if (jobId && status.data) {
@@ -276,7 +285,18 @@ function RefreshRosterButton({
       progress = "Waiting for worker to pick up the job…";
     } else if (s === "active") {
       label = "Refreshing…";
-      progress = "Fetching roster from Battle.net + matching characters…";
+      const prog = status.data.progress;
+      if (prog && prog.total > 0) {
+        // Real, determinate progress: phase + processed/total + percent.
+        barPct = Math.min(100, Math.round((prog.processed / prog.total) * 100));
+        const phase = PHASE_LABEL[prog.phase] ?? "Syncing…";
+        progress =
+          prog.phase === "members"
+            ? `${phase} ${prog.processed}/${prog.total} (${barPct}%)`
+            : `${phase} (${barPct}%)`;
+      } else {
+        progress = "Fetching roster from Battle.net + matching characters…";
+      }
     } else if (s === "completed") {
       label = "Refresh Roster";
       const r =
@@ -312,6 +332,21 @@ function RefreshRosterButton({
       <Button onClick={onClickRefresh} disabled={!!inFlight}>
         {label}
       </Button>
+      {barPct != null && (
+        <div
+          className="bg-muted mt-2 h-2 w-full overflow-hidden rounded-full"
+          role="progressbar"
+          aria-valuenow={barPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Roster sync progress"
+        >
+          <div
+            className="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
+            style={{ width: `${barPct}%` }}
+          />
+        </div>
+      )}
       {progress && (
         <p
           className={`mt-2 text-sm ${

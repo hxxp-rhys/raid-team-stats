@@ -11,15 +11,22 @@ import {
 import { api } from "@/lib/trpc-client";
 import { setShareTokenHeader } from "@/lib/share-token-header";
 import {
+  DEFAULT_WIDGET_COLS,
+  DEFAULT_WIDGET_ROWS,
   DESKTOP_GRID_COLS,
   ROW_HEIGHT_PX,
   parseLayout,
   resolveDefaultTabId,
 } from "@/lib/widgets/types";
+import { autoPlaceWidgets } from "@/lib/widgets/layout-engine";
 import {
   sortForMobileStack,
   useIsMobile,
 } from "@/lib/widgets/use-is-mobile";
+
+// Same auto-placement the editor renders with, so the shared view never shows
+// the CSS auto-flow arrangement for widgets the owner never explicitly placed.
+const SHARE_DEFAULTS = { cols: DEFAULT_WIDGET_COLS, rows: DEFAULT_WIDGET_ROWS };
 import { isLightTheme, isValidTheme } from "@/lib/theme";
 import { WidgetCell } from "@/app/(app)/guild/[guildId]/team/[teamId]/widget-cell";
 
@@ -120,6 +127,11 @@ function Inner({ params }: { params: Params }) {
   const selectedTabId = activeTabId ?? resolveDefaultTabId(layout);
   const activeTab =
     tabsArr.find((t) => t.id === selectedTabId) ?? tabsArr[0];
+  const desktopWidgets = autoPlaceWidgets(
+    activeTab?.widgets ?? [],
+    DESKTOP_GRID_COLS,
+    SHARE_DEFAULTS,
+  );
   const expires = new Date(expiresAt);
 
   return (
@@ -193,7 +205,7 @@ function Inner({ params }: { params: Params }) {
             gridAutoFlow: "dense",
           }}
         >
-          {activeTab?.widgets.map((w) => (
+          {desktopWidgets.map((w) => (
             <WidgetCell
               key={w.id}
               widget={w}

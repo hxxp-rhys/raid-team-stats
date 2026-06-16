@@ -350,6 +350,20 @@ export const guildRouter = router({
         | "paused"
         | "unknown"
         | "waiting-children";
+      // Real progress emitted by the job via job.updateProgress (persisted in
+      // Redis by BullMQ, already available on this getJob result).
+      const rawProgress = job.progress;
+      const progress =
+        rawProgress &&
+        typeof rawProgress === "object" &&
+        typeof (rawProgress as { total?: unknown }).total === "number"
+          ? (rawProgress as {
+              phase: string;
+              processed: number;
+              total: number;
+            })
+          : null;
+
       const out: {
         state: typeof state;
         attemptsMade: number;
@@ -357,6 +371,11 @@ export const guildRouter = router({
         finishedAt: number | null;
         returnValue: unknown;
         failedReason: string | null;
+        progress: {
+          phase: string;
+          processed: number;
+          total: number;
+        } | null;
       } = {
         state,
         attemptsMade: job.attemptsMade,
@@ -364,6 +383,7 @@ export const guildRouter = router({
         finishedAt: job.finishedOn ?? null,
         returnValue: state === "completed" ? job.returnvalue : null,
         failedReason: state === "failed" ? job.failedReason ?? null : null,
+        progress,
       };
       return out;
     }),

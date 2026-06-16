@@ -144,6 +144,120 @@ export function riskScore(s: RiskSignals): number {
   return 0.4 * s.activity + 0.25 * s.login + 0.2 * s.mplus + 0.15 * s.absence;
 }
 
+// ── Weighted weekly engagement index (the trend-line score) ─────────────────
+
+/** The per-week metrics the engagement index is built from (one raid week). */
+export type EngagementCell = {
+  score: number | null; // raid+M+ vault slots, 0–6; null = unobserved week
+  raidUnlocked: number | null; // 0–3
+  mplusUnlocked: number | null; // 0–3
+  mplusRuns: number | null;
+  raided: boolean; // a logged raid kill that week
+};
+
+/**
+ * Weights for the combined engagement index. RAID-team-appropriate: raid
+ * activity (vault progress + an actually-logged kill) dominates; M+ vault and
+ * run frequency are the breadth signals. Documented + summing to 1 so the
+ * index is a transparent 0–100, never a vanity number. The per-metric lines on
+ * the player drill-in show exactly what moved the combined score.
+ */
+export const ENGAGEMENT_WEIGHTS = {
+  raidVault: 0.35,
+  raided: 0.25,
+  mplusVault: 0.25,
+  mplusRuns: 0.15,
+} as const;
+/** M+ runs are normalised against this weekly cap (a full-clear week of keys). */
+export const MPLUS_RUNS_CAP = 8;
+
+/** Each metric normalised to 0–100 for the drill-in lines; null on a gap week. */
+export function engagementComponents(cell: EngagementCell): {
+  raidVault: number;
+  raided: number;
+  mplusVault: number;
+  mplusRuns: number;
+} | null {
+  // A week is OBSERVED if there's any positive evidence the player was active:
+  // a vault row (score != null), a logged raid kill, or actual M+ runs. Weeks
+  // with no such evidence stay null (a gap, never a false zero). This lets a
+  // raid-only or keys-only week still plot a point even when the vault snapshot
+  // for that week is missing.
+  const observed =
+    cell.score != null || cell.raided || (cell.mplusRuns ?? 0) > 0;
+  if (!observed) return null;
+  return {
+    raidVault: (Math.min(Math.max(cell.raidUnlocked ?? 0, 0), 3) / 3) * 100,
+    raided: cell.raided ? 100 : 0,
+    mplusVault: (Math.min(Math.max(cell.mplusUnlocked ?? 0, 0), 3) / 3) * 100,
+    mplusRuns:
+      (Math.min(Math.max(cell.mplusRuns ?? 0, 0), MPLUS_RUNS_CAP) /
+        MPLUS_RUNS_CAP) *
+      100,
+  };
+}
+
+/**
+ * Combined weighted engagement index for one week, 0–100. Returns null for an
+ * UNOBSERVED week (no vault row) so the trend line breaks rather than dropping
+ * to a false zero — a sync gap is not disengagement.
+ */
+export function weeklyEngagementScore(cell: EngagementCell): number | null {
+  const c = engagementComponents(cell);
+  if (c == null) return null;
+  const w = ENGAGEMENT_WEIGHTS;
+  return Math.round(
+    w.raidVault * c.raidVault +
+      w.raided * c.raided +
+      w.mplusVault * c.mplusVault +
+      w.mplusRuns * c.mplusRuns,
+  );
+}
+
+export type EngagementTrend = {
+  dir: "up" | "down" | "flat";
+  /** Mean(recent half) − mean(earlier half) of OBSERVED weeks, or null. */
+  delta: number | null;
+};
+
+/**
+ * Trend direction over a series of weekly index values (oldest → newest).
+ * Compares the recent half against the earlier half of the OBSERVED (non-null)
+ * weeks, with a ±5-point deadband so noise reads as "flat". Needs ≥3 observed
+ * weeks to call a direction at all.
+ */
+export function engagementTrend(scores: Array<number | null>): EngagementTrend {
+  const obs = scores.filter((s): s is number => s != null);
+  if (obs.length < 3) return { dir: "flat", delta: null };
+  const half = Math.floor(obs.length / 2);
+  const mean = (a: number[]) => a.reduce((p, c) => p + c, 0) / a.length;
+  const delta = Math.round(mean(obs.slice(half)) - mean(obs.slice(0, half)));
+  return { dir: delta > 5 ? "up" : delta < -5 ? "down" : "flat", delta };
+}
+
+/**
+ * How many consecutive trailing OBSERVED weeks the player's weighted index has
+ * sat at or below half their own median — a sustained slump. Gaps (unknown
+ * weeks) are skipped, never break the run. Used to escalate a current concern
+ * from "caution" to "critical" once it has persisted (≥3 weeks). Requires a
+ * meaningful median (≥20) so a chronically-casual player isn't mislabeled as
+ * "declining" (their recent weeks aren't BELOW their own norm).
+ */
+export function concerningStreak(scores: Array<number | null>): number {
+  const obs = scores.filter((s): s is number => s != null);
+  if (obs.length < 3) return 0;
+  const base = medianOf(obs);
+  if (base == null || base < 20) return 0;
+  let streak = 0;
+  for (let i = scores.length - 1; i >= 0; i--) {
+    const s = scores[i];
+    if (s == null) continue; // gap — skip, don't break the run
+    if (s <= 0.5 * base) streak++;
+    else break;
+  }
+  return streak;
+}
+
 /**
  * Watchlist membership = weighted AND-ing: at least TWO independent signals
  * non-zero AND the weighted score clears the floor. A single signal — even a

@@ -1,0 +1,4 @@
+# Adds a "Sponsor" button to the repo. Requires GitHub Sponsors to be enabled
+# on this account: https://github.com/sponsors  (Settings → Sponsorship)
+# Until that onboarding is finished the button stays hidden / 404s.
+github: hxxp-rhys

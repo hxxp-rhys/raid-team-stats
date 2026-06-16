@@ -53,6 +53,20 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
   });
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Tabs the link will expose. `null` = "all tabs" (the default, and the state
+  // before the tab list loads); a Set = an explicit subset the creator picked.
+  const [selectedTabs, setSelectedTabs] = useState<Set<string> | null>(null);
+  const tabs = settings.data?.tabs ?? [];
+  const toggleTab = (id: string) =>
+    setSelectedTabs((cur) => {
+      // First toggle seeds from "all tabs", then removes the clicked one.
+      const base = cur ?? new Set(tabs.map((t) => t.id));
+      const next = new Set(base);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const isTabOn = (id: string) => selectedTabs === null || selectedTabs.has(id);
 
   // Clear the "Copied ✓" indicator ~2s after a copy. setState here is inside
   // the timeout callback (allowed), not synchronously in the effect body.
@@ -64,11 +78,19 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
 
   const generate = () => {
     if (!dashboardId) return;
+    // Only constrain the link when the creator picked a STRICT subset; "all
+    // tabs selected" (or none picked) issues an unscoped link (back-compat).
+    const picked = tabs.filter((t) => isTabOn(t.id)).map((t) => t.id);
+    const allowedTabIds =
+      tabs.length > 0 && picked.length < tabs.length ? picked : undefined;
     createShare.mutate(
-      { dashboardId, ttlDays: 7 },
+      { dashboardId, ttlDays: 7, allowedTabIds },
       { onSuccess: (r) => setShareUrl(r.url) },
     );
   };
+
+  const noTabsSelected =
+    tabs.length > 0 && tabs.every((t) => !isTabOn(t.id));
 
   const copy = async () => {
     if (!shareUrl) return;
@@ -91,11 +113,35 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
       ) : (
         <section className="space-y-2">
           <p className="font-medium">View-only link</p>
+          {tabs.length > 1 && !shareUrl && (
+            <div className="border-border space-y-1.5 rounded-md border p-2.5">
+              <p className="text-xs font-medium">Tabs to share</p>
+              <div className="space-y-1">
+                {tabs.map((t) => (
+                  <label key={t.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="accent-primary"
+                      checked={isTabOn(t.id)}
+                      onChange={() => toggleTab(t.id)}
+                    />
+                    {t.name}
+                  </label>
+                ))}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Unchecked tabs aren&apos;t reachable through this link.
+              </p>
+              {noTabsSelected && (
+                <p className="text-destructive text-xs">Pick at least one tab.</p>
+              )}
+            </div>
+          )}
           {!shareUrl ? (
             <Button
               size="sm"
               onClick={generate}
-              disabled={createShare.isPending}
+              disabled={createShare.isPending || noTabsSelected}
             >
               {createShare.isPending ? "Generating…" : "Generate link"}
             </Button>

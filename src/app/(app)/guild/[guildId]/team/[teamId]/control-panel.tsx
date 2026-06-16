@@ -20,7 +20,11 @@ import {
   type WidgetInstance,
   type WidgetType,
 } from "@/lib/widgets/types";
-import { findCollider } from "@/lib/widgets/collision";
+import {
+  autoPlaceWidgets,
+  moveWidgetWithPush,
+  resizeWidgetWithPush,
+} from "@/lib/widgets/layout-engine";
 import { useStrictLayout } from "@/lib/widgets/use-strict-layout";
 import {
   sortForMobileStack,
@@ -427,23 +431,32 @@ export function ControlPanel({
 
   // ─── Widget actions ──────────────────────────────────────────────────────
 
-  const addWidget = (type: WidgetType) => {
-    const recommended = WIDGET_DEFAULT_SIZE[type];
-    const inst: WidgetInstance = {
-      id: newId(),
-      type,
-      cols: mobileMode ? MOBILE_GRID_COLS : recommended.cols,
-      rows: recommended.rows,
-    };
-    updateCurrentTab((t) => ({ ...t, widgets: [...t.widgets, inst] }));
+  // Add one or many widgets in a single layout write (the debounced save then
+  // persists the whole batch in one round-trip). Each widget gets its
+  // recommended default size, narrowed to one column in mobile mode.
+  const addWidgets = (types: WidgetType[]) => {
+    if (types.length === 0) return;
+    const insts: WidgetInstance[] = types.map((type) => {
+      const recommended = WIDGET_DEFAULT_SIZE[type];
+      return {
+        id: newId(),
+        type,
+        cols: mobileMode ? MOBILE_GRID_COLS : recommended.cols,
+        rows: recommended.rows,
+      };
+    });
+    updateCurrentTab((t) => ({ ...t, widgets: [...t.widgets, ...insts] }));
   };
 
-  const removeWidget = (widgetId: string) => {
-    updateCurrentTab((t) => ({
-      ...t,
-      widgets: t.widgets.filter((w) => w.id !== widgetId),
-    }));
-  };
+  const removeWidget = useCallback(
+    (widgetId: string) => {
+      updateCurrentTab((t) => ({
+        ...t,
+        widgets: t.widgets.filter((w) => w.id !== widgetId),
+      }));
+    },
+    [updateCurrentTab],
+  );
 
   // Mobile stack reorder: swap with the neighbor in stack order, then
   // persist the order by writing sequential y values (x pinned to 0). Only
@@ -480,56 +493,143 @@ export function ControlPanel({
     [],
   );
 
-  const resizeWidget = (widgetId: string, cols: number, rows: number) => {
-    updateCurrentTab((t) => {
-      // The strict 2D-collision model is meaningless in the mobile stack —
-      // reorder normalizes everyone to x:0 / sequential y, which the AABB
-      // check reads as guaranteed overlap and would silently block every
-      // H-stepper resize. Stack rendering ignores 2D placement entirely.
-      if (strictLayout && !mobileMode) {
-        const target = t.widgets.find((w) => w.id === widgetId);
-        // Only widgets with an explicit position can collide. An unplaced
-        // widget being resized still flows via auto-place, so skip the
-        // check until it gets x/y.
-        if (target && typeof target.x === "number" && typeof target.y === "number") {
-          const blocker = findCollider(
-            t.widgets,
-            { id: widgetId, x: target.x, y: target.y, cols, rows },
-            strictDefaults,
-          );
-          if (blocker) return t;
-        }
-      }
-      return {
-        ...t,
-        widgets: t.widgets.map((w) =>
-          w.id === widgetId ? { ...w, cols, rows } : w,
-        ),
-      };
-    });
-  };
+  // Every desktop widget gets an explicit (x, y) before it renders, so the grid
+  // is stable (no CSS auto-flow re-shuffle when one widget becomes placed) and a
+  // freshly-added widget is dragged from where it actually sits — not teleported
+  // from (0,0). Idempotent + referentially stable once everything is placed.
+  const desktopWidgets = useMemo(
+    () =>
+      activeTab && !mobileMode
+        ? autoPlaceWidgets(activeTab.widgets, DESKTOP_GRID_COLS, strictDefaults)
+        : (activeTab?.widgets ?? []),
+    [activeTab, mobileMode, strictDefaults],
+  );
 
-  const moveWidget = (widgetId: string, x: number, y: number) => {
-    updateCurrentTab((t) => {
-      if (strictLayout) {
-        const target = t.widgets.find((w) => w.id === widgetId);
-        const cols = target?.cols ?? DEFAULT_WIDGET_COLS;
-        const rows = target?.rows ?? DEFAULT_WIDGET_ROWS;
-        const blocker = findCollider(
-          t.widgets,
-          { id: widgetId, x, y, cols, rows },
+  // ─── Live drag preview ────────────────────────────────────────────────────
+  // While a widget is dragged/resized in strict mode, hold its in-progress
+  // target geometry here and run the WHOLE grid through the push engine so the
+  // other widgets shift in real time (Grafana) — not just on drop. Only the
+  // dragged + pushed cells change position, so a memoized WidgetCell keeps the
+  // rest from re-rendering. Cleared the moment the gesture commits.
+  const [dragPreview, setDragPreview] = useState<
+    | { kind: "move"; id: string; x: number; y: number }
+    | { kind: "resize"; id: string; cols: number; rows: number }
+    | null
+  >(null);
+
+  const previewWidgets = useMemo(() => {
+    if (!dragPreview || !strictLayout) return desktopWidgets;
+    return dragPreview.kind === "move"
+      ? moveWidgetWithPush(
+          desktopWidgets,
+          dragPreview.id,
+          dragPreview.x,
+          dragPreview.y,
+          DESKTOP_GRID_COLS,
+          strictDefaults,
+        )
+      : resizeWidgetWithPush(
+          desktopWidgets,
+          dragPreview.id,
+          dragPreview.cols,
+          dragPreview.rows,
+          DESKTOP_GRID_COLS,
           strictDefaults,
         );
-        if (blocker) return t;
-      }
-      return {
-        ...t,
-        widgets: t.widgets.map((w) =>
-          w.id === widgetId ? { ...w, x, y } : w,
-        ),
-      };
-    });
-  };
+  }, [dragPreview, strictLayout, desktopWidgets, strictDefaults]);
+
+  // Preview reporters — no-op unless strict (non-strict allows free overlap, so
+  // only the dragged widget moves, which it does on its own).
+  const onMovePreview = useCallback(
+    (id: string, x: number, y: number) => {
+      if (!strictLayout) return;
+      setDragPreview((p) =>
+        p && p.kind === "move" && p.id === id && p.x === x && p.y === y
+          ? p
+          : { kind: "move", id, x, y },
+      );
+    },
+    [strictLayout],
+  );
+  const onResizePreview = useCallback(
+    (id: string, cols: number, rows: number) => {
+      if (!strictLayout) return;
+      setDragPreview((p) =>
+        p && p.kind === "resize" && p.id === id && p.cols === cols && p.rows === rows
+          ? p
+          : { kind: "resize", id, cols, rows },
+      );
+    },
+    [strictLayout],
+  );
+
+  const resizeWidget = useCallback(
+    (widgetId: string, cols: number, rows: number) => {
+      updateCurrentTab((t) => {
+        // The 2D engine is meaningless in the mobile stack — it normalizes
+        // everyone to x:0 / sequential y; stack rendering ignores 2D placement.
+        if (strictLayout && !mobileMode) {
+          // Strict: grow into neighbors and PUSH them out of the way (Grafana
+          // behaviour), auto-placing any unplaced widget first.
+          const widgets = resizeWidgetWithPush(
+            t.widgets,
+            widgetId,
+            cols,
+            rows,
+            DESKTOP_GRID_COLS,
+            strictDefaults,
+          );
+          return widgets === t.widgets ? t : { ...t, widgets };
+        }
+        return {
+          ...t,
+          widgets: t.widgets.map((w) =>
+            w.id === widgetId ? { ...w, cols, rows } : w,
+          ),
+        };
+      });
+      setDragPreview(null);
+    },
+    [updateCurrentTab, strictLayout, mobileMode, strictDefaults],
+  );
+
+  const moveWidget = useCallback(
+    (widgetId: string, x: number, y: number) => {
+      updateCurrentTab((t) => {
+        if (mobileMode) return t; // free 2D move isn't used in the stack
+        if (strictLayout) {
+          // Strict: drop where the cursor is and shift the widgets it lands on
+          // down to accommodate it, then compact gaps (Grafana behaviour).
+          const widgets = moveWidgetWithPush(
+            t.widgets,
+            widgetId,
+            x,
+            y,
+            DESKTOP_GRID_COLS,
+            strictDefaults,
+          );
+          return widgets === t.widgets ? t : { ...t, widgets };
+        }
+        // Non-strict: overlap is allowed, but still auto-place the rest so they
+        // hold a stable position instead of re-flowing (no teleport on drag).
+        const base = autoPlaceWidgets(
+          t.widgets,
+          DESKTOP_GRID_COLS,
+          strictDefaults,
+        );
+        return {
+          ...t,
+          widgets: base.map((w) =>
+            w.id === widgetId
+              ? { ...w, x: Math.max(0, x), y: Math.max(0, y) }
+              : w,
+          ),
+        };
+      });
+      setDragPreview(null);
+    },
+    [updateCurrentTab, mobileMode, strictLayout, strictDefaults],
+  );
 
   // ─── Edit-mode + permissions ─────────────────────────────────────────────
   // The real permission gates live server-side; we just want a hint here for
@@ -955,7 +1055,7 @@ export function ControlPanel({
               gridAutoFlow: "dense",
             }}
           >
-            {activeTab.widgets.map((w) => (
+            {previewWidgets.map((w) => (
               <WidgetCell
                 key={w.id}
                 widget={w}
@@ -965,6 +1065,8 @@ export function ControlPanel({
                 onRemove={removeWidget}
                 onResize={resizeWidget}
                 onMove={moveWidget}
+                onMovePreview={onMovePreview}
+                onResizePreview={onResizePreview}
               />
             ))}
           </div>
@@ -979,7 +1081,7 @@ export function ControlPanel({
       <AddWidgetModal
         open={openAddWidget}
         onClose={() => setOpenAddWidget(false)}
-        onPick={addWidget}
+        onAdd={addWidgets}
       />
       <ShareModal
         open={openShare}

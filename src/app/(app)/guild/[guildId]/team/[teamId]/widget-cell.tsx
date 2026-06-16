@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { WidgetRender } from "@/components/widgets";
 import {
@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
  * The grid is 48 cols (desktop) / 16 (mobile) with 24px row bands, so every
  * action snaps to a quarter-of-old-cell increment.
  */
-export function WidgetCell({
+export const WidgetCell = memo(function WidgetCell({
   widget,
   raidTeamId,
   editing,
@@ -36,6 +36,8 @@ export function WidgetCell({
   onRemove,
   onResize,
   onMove,
+  onMovePreview,
+  onResizePreview,
   onReorder,
   reorderDisabled,
 }: {
@@ -52,6 +54,13 @@ export function WidgetCell({
   onRemove?: (id: string) => void;
   onResize?: (id: string, cols: number, rows: number) => void;
   onMove?: (id: string, x: number, y: number) => void;
+  /**
+   * Live-preview reporters — fired on every drag/resize step (not just on
+   * commit) so the parent can run the push engine and shift the other widgets
+   * in real time.
+   */
+  onMovePreview?: (id: string, x: number, y: number) => void;
+  onResizePreview?: (id: string, cols: number, rows: number) => void;
   onReorder?: (id: string, dir: -1 | 1) => void;
   reorderDisabled?: { up: boolean; down: boolean };
 }) {
@@ -62,10 +71,25 @@ export function WidgetCell({
 
   const ref = useRef<HTMLDivElement>(null);
 
+  // Latest callbacks in refs so the drag/resize listener effects never need to
+  // re-subscribe when the parent re-renders (it recreates these each render —
+  // especially during a live-preview drag, which re-renders the parent on every
+  // pointer step).
+  const onMoveRef = useRef(onMove);
+  const onMovePreviewRef = useRef(onMovePreview);
+  const onResizePreviewRef = useRef(onResizePreview);
+  useEffect(() => {
+    onMoveRef.current = onMove;
+    onMovePreviewRef.current = onMovePreview;
+    onResizePreviewRef.current = onResizePreview;
+  }, [onMove, onMovePreview, onResizePreview]);
+
   // ── Resize drag ──────────────────────────────────────────────────────────
   const resizeState = useRef<{
     startX: number;
     startY: number;
+    startScrollX: number;
+    startScrollY: number;
     startCols: number;
     startRows: number;
     uniform: boolean;
@@ -81,8 +105,10 @@ export function WidgetCell({
     const onMoveEv = (e: PointerEvent) => {
       const s = resizeState.current;
       if (!s) return;
-      const dx = e.clientX - s.startX;
-      const dy = e.clientY - s.startY;
+      // Add the page-scroll delta so a resize tracks the cursor even if the
+      // page scrolls mid-drag (clientX/Y are viewport-relative).
+      const dx = e.clientX - s.startX + (window.scrollX - s.startScrollX);
+      const dy = e.clientY - s.startY + (window.scrollY - s.startScrollY);
       const deltaCols = Math.round(dx / s.cellWidth);
       const deltaRows = Math.round(dy / ROW_HEIGHT_PX);
       let nextCols = Math.min(gridCols, Math.max(1, s.startCols + deltaCols));
@@ -105,6 +131,8 @@ export function WidgetCell({
         );
       }
       setResizeDrag({ cols: nextCols, rows: nextRows });
+      // Live-preview the push as the widget grows/shrinks (Grafana).
+      onResizePreviewRef.current?.(widget.id, nextCols, nextRows);
     };
     const onUp = () => {
       if (resizeDrag && onResize)
@@ -134,6 +162,8 @@ export function WidgetCell({
     resizeState.current = {
       startX: e.clientX,
       startY: e.clientY,
+      startScrollX: window.scrollX,
+      startScrollY: window.scrollY,
       startCols: cols,
       startRows: rows,
       uniform: e.shiftKey,
@@ -146,44 +176,97 @@ export function WidgetCell({
   const moveState = useRef<{
     startClientX: number;
     startClientY: number;
+    startScrollX: number;
+    startScrollY: number;
     startCol: number;
     startRow: number;
     cellWidth: number;
+    cols: number;
+    lastClientX: number;
+    lastClientY: number;
+    curX: number;
+    curY: number;
   } | null>(null);
   const [moveDrag, setMoveDrag] = useState<{ x: number; y: number } | null>(
     null,
   );
+  // Boolean gate for the listener effect — it must subscribe ONCE per drag, not
+  // re-subscribe on every position change (which would restart the rAF loop).
+  const [moving, setMoving] = useState(false);
 
   useEffect(() => {
-    if (!moveDrag) return;
+    if (!moving) return;
+    let raf = 0;
+    const apply = (clientX: number, clientY: number) => {
+      const s = moveState.current;
+      if (!s) return;
+      // Document-space delta: add the page-scroll change so the widget tracks
+      // the cursor even when the page scrolls mid-drag (clientX/Y are
+      // viewport-relative — without this the widget drifts as you scroll).
+      const dx = clientX - s.startClientX + (window.scrollX - s.startScrollX);
+      const dy = clientY - s.startClientY + (window.scrollY - s.startScrollY);
+      const nextX = Math.min(
+        gridCols - s.cols,
+        Math.max(0, s.startCol + Math.round(dx / s.cellWidth)),
+      );
+      const nextY = Math.max(0, s.startRow + Math.round(dy / ROW_HEIGHT_PX));
+      if (nextX !== s.curX || nextY !== s.curY) {
+        s.curX = nextX;
+        s.curY = nextY;
+        setMoveDrag({ x: nextX, y: nextY });
+        // Tell the parent so it can push the other widgets live (Grafana).
+        onMovePreviewRef.current?.(widget.id, nextX, nextY);
+      }
+    };
     const onMoveEv = (e: PointerEvent) => {
       const s = moveState.current;
       if (!s) return;
-      const dx = e.clientX - s.startClientX;
-      const dy = e.clientY - s.startClientY;
-      const deltaCol = Math.round(dx / s.cellWidth);
-      const deltaRow = Math.round(dy / ROW_HEIGHT_PX);
-      const nextX = Math.min(
-        gridCols - cols,
-        Math.max(0, s.startCol + deltaCol),
-      );
-      const nextY = Math.max(0, s.startRow + deltaRow);
-      setMoveDrag({ x: nextX, y: nextY });
+      s.lastClientX = e.clientX;
+      s.lastClientY = e.clientY;
+      apply(e.clientX, e.clientY);
     };
+    // Auto-scroll when the pointer nears the top/bottom viewport edge, so a
+    // widget can be dragged beyond what's on screen (e.g. one at the very
+    // bottom). rAF keeps scrolling while the pointer is held at the edge and
+    // re-applies the position each scrolled frame.
+    const EDGE = 60;
+    const tick = () => {
+      const s = moveState.current;
+      if (s) {
+        const vh = window.innerHeight;
+        let sy = 0;
+        if (s.lastClientY < EDGE) {
+          sy = -Math.ceil((EDGE - s.lastClientY) / 5) - 2;
+        } else if (s.lastClientY > vh - EDGE) {
+          sy = Math.ceil((s.lastClientY - (vh - EDGE)) / 5) + 2;
+        }
+        if (sy !== 0) {
+          const before = window.scrollY;
+          window.scrollBy(0, sy);
+          if (window.scrollY !== before) apply(s.lastClientX, s.lastClientY);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
     const onUp = () => {
-      if (moveDrag && onMove) onMove(widget.id, moveDrag.x, moveDrag.y);
-      setMoveDrag(null);
+      const s = moveState.current;
+      if (s && onMoveRef.current) onMoveRef.current(widget.id, s.curX, s.curY);
+      cancelAnimationFrame(raf);
       moveState.current = null;
+      setMoving(false);
+      setMoveDrag(null);
       window.removeEventListener("pointermove", onMoveEv);
       window.removeEventListener("pointerup", onUp);
     };
     window.addEventListener("pointermove", onMoveEv);
     window.addEventListener("pointerup", onUp);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("pointermove", onMoveEv);
       window.removeEventListener("pointerup", onUp);
     };
-  }, [moveDrag, gridCols, cols, widget.id, onMove]);
+  }, [moving, gridCols, widget.id]);
 
   const startMove = (e: React.PointerEvent) => {
     if (!editing) return;
@@ -193,14 +276,24 @@ export function WidgetCell({
     if (!el) return;
     const parent = el.parentElement;
     const containerWidth = parent?.clientWidth ?? el.offsetWidth;
+    const startCol = widget.x ?? 0;
+    const startRow = widget.y ?? 0;
     moveState.current = {
       startClientX: e.clientX,
       startClientY: e.clientY,
-      startCol: widget.x ?? 0,
-      startRow: widget.y ?? 0,
+      startScrollX: window.scrollX,
+      startScrollY: window.scrollY,
+      startCol,
+      startRow,
       cellWidth: containerWidth / gridCols,
+      cols,
+      lastClientX: e.clientX,
+      lastClientY: e.clientY,
+      curX: startCol,
+      curY: startRow,
     };
-    setMoveDrag({ x: widget.x ?? 0, y: widget.y ?? 0 });
+    setMoveDrag({ x: startCol, y: startRow });
+    setMoving(true);
   };
 
   // ── Rendered geometry ────────────────────────────────────────────────────
@@ -368,7 +461,7 @@ export function WidgetCell({
       )}
     </div>
   );
-}
+});
 
 function Stepper({
   label,

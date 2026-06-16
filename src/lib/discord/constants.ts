@@ -48,7 +48,9 @@ export const STATE_GLYPH: Record<string, string> = {
   TENTATIVE: "🟡",
   LATE: "🕒",
   ABSENT: "❌",
-  NO_RESPONSE: "⬜",
+  // Smaller, padded square (vs the large ⬜) so a column of no-response members
+  // reads as separate rows instead of one fused white bar.
+  NO_RESPONSE: "◽",
 };
 
 /** Embed left-bar colour by difficulty (decimal RGB). */

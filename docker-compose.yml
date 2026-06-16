@@ -95,6 +95,11 @@ services:
       start_period: 90s
       retries: 6
 
+  # NOTE: the public recruitment form (/apply/<guildId>/<slug>) is served by the
+  # main `web` container at a PATH on the primary host — no separate container
+  # or `apply.*` subdomain. (An isolated recruit-public container was removed in
+  # favour of keeping everything on raiders.hxxp.io paths.)
+
   # TLS terminator for local dev. Hits the same `web` service on 3000 but adds
   # an HTTPS entrypoint at https://localhost (or https://raiders.hxxp.io if DNS
   # points here) using the bind-mounted Cloudflare Origin cert in ./certs/

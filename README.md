@@ -4,9 +4,11 @@ Customizable raid-team stat tracking for World of Warcraft guilds. Pulls charact
 M+, raid, vault, and parse data from Blizzard, Warcraft Logs, and Raider.IO and
 renders configurable dashboards scoped to guild-internal raid teams.
 
-> Phase 1 of a multi-phase build. The current commit ships only the secure
-> foundation — auth, guilds, and dashboards land in subsequent phases. See
-> `~/.claude/plans/synchronous-inventing-candle.md` for the full plan.
+## Setup / self-hosting
+
+**New here? Start with [SETUP.md](./SETUP.md)** — a step-by-step guide to running
+your own instance (Docker, API credentials, and the optional in-game addon) so
+any guild can stand it up with minimal effort.
 
 ## Stack
 

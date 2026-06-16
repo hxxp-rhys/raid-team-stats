@@ -37,6 +37,7 @@ type Payload = {
   d: string; // dashboardId
   r: string; // raidTeamId (for the resolver's authorization fast-path)
   e: number; // expiresAt (ms since epoch)
+  t?: string[]; // allowed tab ids (omitted = every tab is shared)
 };
 
 function b64urlEncode(buf: Buffer): string {
@@ -58,6 +59,11 @@ export type CreateShareTokenInput = {
   raidTeamId: string;
   /** Defaults to 7 days. Clamped to MAX_TTL_DAYS. */
   ttlDays?: number;
+  /**
+   * If set, the link only exposes these dashboard tab ids. Omitted/empty =
+   * every tab is shared (back-compat with tokens minted before this existed).
+   */
+  allowedTabIds?: string[];
 };
 
 export function createShareToken(input: CreateShareTokenInput): {
@@ -70,6 +76,9 @@ export function createShareToken(input: CreateShareTokenInput): {
     d: input.dashboardId,
     r: input.raidTeamId,
     e: expiresAt.getTime(),
+    ...(input.allowedTabIds && input.allowedTabIds.length > 0
+      ? { t: input.allowedTabIds }
+      : {}),
   };
   const payloadStr = JSON.stringify(payload);
   const payloadEnc = b64urlEncode(Buffer.from(payloadStr, "utf8"));
@@ -82,6 +91,8 @@ export type VerifiedShareToken = {
   dashboardId: string;
   raidTeamId: string;
   expiresAt: Date;
+  /** Allowed tab ids, or undefined when the link shares every tab. */
+  allowedTabIds?: string[];
 };
 
 export function verifyShareToken(token: string): VerifiedShareToken | null {
@@ -113,5 +124,16 @@ export function verifyShareToken(token: string): VerifiedShareToken | null {
   }
   const p = payload as Payload;
   if (p.e < Date.now()) return null;
-  return { dashboardId: p.d, raidTeamId: p.r, expiresAt: new Date(p.e) };
+  // `t` is optional; only honor it when it's an array of strings (old tokens
+  // lack it → undefined → every tab is shared).
+  const allowedTabIds =
+    Array.isArray(p.t) && p.t.every((x) => typeof x === "string")
+      ? p.t
+      : undefined;
+  return {
+    dashboardId: p.d,
+    raidTeamId: p.r,
+    expiresAt: new Date(p.e),
+    ...(allowedTabIds ? { allowedTabIds } : {}),
+  };
 }

@@ -14,14 +14,14 @@ export type ReminderConfig = {
   enabled: boolean;
   /** Minutes-before-start to remind people who are GOING. */
   leadMinutes: number[];
-  /** Minutes-before to nudge non-responders, or null = no nudge. */
-  nudgeMinutes: number | null;
+  /** Minutes-before to nudge non-responders. Empty = no nudges. */
+  nudgeMinutes: number[];
 };
 
 export const DEFAULT_REMINDER_CONFIG: ReminderConfig = {
   enabled: true,
   leadMinutes: [1440, 60], // 24h + 1h
-  nudgeMinutes: 720, // 12h
+  nudgeMinutes: [720], // 12h
 };
 
 /** How long after a lead threshold passes we'll still send it (downtime slack). */
@@ -45,8 +45,20 @@ export const REMINDER_LOOKAHEAD_MINUTES = MAX_LEAD_MINUTES + REMINDER_GRACE_MIN;
 
 /** Largest lead the sweep must look ahead by (minutes). Used to bound the query. */
 export function maxLookaheadMinutes(cfg: ReminderConfig): number {
-  const leads = [...cfg.leadMinutes, cfg.nudgeMinutes ?? 0];
+  const leads = [...cfg.leadMinutes, ...cfg.nudgeMinutes];
   return Math.max(0, ...leads) + REMINDER_GRACE_MIN;
+}
+
+/** Dedupe, drop non-positive, round, and sort minutes descending. */
+function normalizeMinutes(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(
+    new Set(
+      raw
+        .filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0)
+        .map((n) => Math.round(n)),
+    ),
+  ).sort((a, b) => b - a);
 }
 
 /** Coerce arbitrary JSON (or null) into a valid config, applying defaults. */
@@ -55,26 +67,25 @@ export function parseReminderConfig(raw: unknown): ReminderConfig {
   const r = raw as Record<string, unknown>;
   const enabled = typeof r.enabled === "boolean" ? r.enabled : true;
   const leadMinutes = Array.isArray(r.leadMinutes)
-    ? Array.from(
-        new Set(
-          r.leadMinutes
-            .filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0)
-            .map((n) => Math.round(n)),
-        ),
-      ).sort((a, b) => b - a)
+    ? normalizeMinutes(r.leadMinutes)
     : DEFAULT_REMINDER_CONFIG.leadMinutes;
-  const nudgeMinutes =
-    r.nudgeMinutes === null
-      ? null
+  // nudgeMinutes is now a LIST (multiple nudges). An explicit array — including
+  // an empty one — is honored verbatim (a leader turning all nudges off). A
+  // legacy scalar `number|null` (pre-multi-nudge) is coerced; an absent key
+  // falls back to the default, matching leadMinutes' missing-key behavior.
+  const nudgeMinutes = Array.isArray(r.nudgeMinutes)
+    ? normalizeMinutes(r.nudgeMinutes)
+    : r.nudgeMinutes === undefined
+      ? DEFAULT_REMINDER_CONFIG.nudgeMinutes
       : typeof r.nudgeMinutes === "number" && Number.isFinite(r.nudgeMinutes) && r.nudgeMinutes > 0
-        ? Math.round(r.nudgeMinutes)
-        : DEFAULT_REMINDER_CONFIG.nudgeMinutes;
+        ? [Math.round(r.nudgeMinutes)]
+        : []; // null or garbage → no nudges
   return { enabled, leadMinutes, nudgeMinutes };
 }
 
 export type DueReminder =
   | { kind: `lead:${number}`; audience: "going"; leadMinutes: number }
-  | { kind: "nudge"; audience: "no-response"; leadMinutes: number };
+  | { kind: `nudge:${number}`; audience: "no-response"; leadMinutes: number };
 
 /**
  * Which reminder kinds are due for an event starting at `startMs`, evaluated at
@@ -101,8 +112,12 @@ export function dueReminders(
       out.push({ kind: `lead:${leadMin}`, audience: "going", leadMinutes: leadMin });
     }
   }
-  if (cfg.nudgeMinutes != null && inWindow(cfg.nudgeMinutes)) {
-    out.push({ kind: "nudge", audience: "no-response", leadMinutes: cfg.nudgeMinutes });
+  // Each nudge time fires once per non-responder — distinct `nudge:<min>` kinds
+  // so the SentReminder (event, kind, user) ledger keeps them exactly-once each.
+  for (const nudgeMin of cfg.nudgeMinutes) {
+    if (inWindow(nudgeMin)) {
+      out.push({ kind: `nudge:${nudgeMin}`, audience: "no-response", leadMinutes: nudgeMin });
+    }
   }
   return out;
 }

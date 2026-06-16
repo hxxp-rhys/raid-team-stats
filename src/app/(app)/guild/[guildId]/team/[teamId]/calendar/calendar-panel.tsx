@@ -454,6 +454,7 @@ function MonthView({
         startsAt: Date;
         status: string;
         myState: string | null;
+        targetZoneIds: number[];
       }[]
     >();
     for (const e of q.data?.events ?? []) {
@@ -466,11 +467,24 @@ function MonthView({
         startsAt: new Date(e.startsAt),
         status: e.status,
         myState: e.myState,
+        targetZoneIds: e.targetZoneIds ?? [],
       });
       m.set(key, arr);
     }
     return m;
   }, [q.data]);
+
+  // Zone → official tile art, for painting targeted days. Fetched once; an
+  // empty/failed map just means no backgrounds (cells keep their difficulty
+  // tint). Resolved client-side from the same `targetableZones` the lead picks.
+  const zonesQ = api.calendar.targetableZones.useQuery({ raidTeamId: teamId });
+  const zoneArt = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const z of zonesQ.data?.zones ?? []) {
+      if (z.imageUrl) m.set(z.blizzardInstanceId, z.imageUrl);
+    }
+    return m;
+  }, [zonesQ.data]);
 
   const todayKey = new Date().toLocaleDateString("en-CA");
 
@@ -503,41 +517,98 @@ function MonthView({
           const key = day.toLocaleDateString("en-CA");
           const inMonth = day.getMonth() === monthStart.getMonth();
           const events = byDay.get(key) ?? [];
+          // Distinct targeted-zone tiles for this day (across its events), max 2
+          // — one zone fills the cell, two split it diagonally.
+          const tiles: string[] = [];
+          for (const e of events) {
+            for (const zid of e.targetZoneIds) {
+              const url = zoneArt.get(zid);
+              if (url && !tiles.includes(url) && tiles.length < 2) tiles.push(url);
+            }
+            if (tiles.length >= 2) break;
+          }
+          // Small squares can't show every raid — show the first 3, then "+N".
+          const shown = events.slice(0, 3);
+          const overflow = events.length - shown.length;
           return (
             <div
               key={key}
               className={cn(
-                "border-border min-h-16 rounded border p-1",
+                "border-border relative aspect-square overflow-hidden rounded border p-1",
                 key === todayKey && "ring-primary ring-1",
               )}
             >
-              {/* Current month vs adjacent distinguished by NUMBER COLOR only
-                  (full opacity) — no cell fade. */}
-              <div
-                className={cn(
-                  "mb-0.5 text-right text-[10px]",
-                  inMonth ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {day.getDate()}
-              </div>
-              <div className="space-y-0.5">
-                {events.map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={() => onOpen(e.id)}
-                    className={cn(
-                      "block w-full truncate rounded border-l-2 bg-muted/50 px-1 py-0.5 text-left text-[10px] hover:bg-muted",
-                      DIFF_COLOR[e.difficulty] ?? "border-l-border",
-                      e.status === "CANCELLED" && "line-through opacity-60",
-                    )}
-                    title={e.title}
-                  >
-                    {e.myState && <span aria-hidden>{STATE_META[e.myState as AttendanceState]?.glyph} </span>}
-                    {new Date(e.startsAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} {e.title}
-                  </button>
-                ))}
+              {/* Zone-art background layer (below content). A dark scrim keeps
+                  text legible over the tile. */}
+              {tiles.length === 1 && (
+                <div
+                  aria-hidden
+                  className="absolute inset-0 bg-cover bg-center opacity-25"
+                  style={{ backgroundImage: `url("${tiles[0]}")` }}
+                />
+              )}
+              {tiles.length === 2 && (
+                <>
+                  <div
+                    aria-hidden
+                    className="absolute inset-0 bg-cover bg-center opacity-25"
+                    style={{
+                      backgroundImage: `url("${tiles[0]}")`,
+                      clipPath: "polygon(0 0, 100% 0, 0 100%)",
+                    }}
+                  />
+                  <div
+                    aria-hidden
+                    className="absolute inset-0 bg-cover bg-center opacity-25"
+                    style={{
+                      backgroundImage: `url("${tiles[1]}")`,
+                      clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
+                    }}
+                  />
+                </>
+              )}
+              {tiles.length > 0 && (
+                <div aria-hidden className="from-background/70 absolute inset-0 bg-gradient-to-t to-transparent" />
+              )}
+
+              <div className="relative z-10 flex h-full flex-col">
+                {/* Current month vs adjacent distinguished by NUMBER COLOR only
+                    (full opacity) — no cell fade. */}
+                <div
+                  className={cn(
+                    "mb-0.5 shrink-0 text-right text-[10px]",
+                    inMonth ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {day.getDate()}
+                </div>
+                <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+                  {shown.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => onOpen(e.id)}
+                      className={cn(
+                        "block w-full truncate rounded border-l-2 bg-muted/50 px-1 py-0.5 text-left text-[10px] hover:bg-muted",
+                        DIFF_COLOR[e.difficulty] ?? "border-l-border",
+                        e.status === "CANCELLED" && "line-through opacity-60",
+                      )}
+                      title={e.title}
+                    >
+                      {e.myState && <span aria-hidden>{STATE_META[e.myState as AttendanceState]?.glyph} </span>}
+                      {new Date(e.startsAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} {e.title}
+                    </button>
+                  ))}
+                  {overflow > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onOpen(events[0]!.id)}
+                      className="text-muted-foreground hover:text-foreground block w-full px-1 text-left text-[10px]"
+                    >
+                      +{overflow} more
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );

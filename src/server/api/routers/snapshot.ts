@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 
 import { Prisma } from "@/generated/prisma/client";
 import {
@@ -18,12 +19,62 @@ import {
   watchlisted,
   weekStartUtc,
 } from "@/lib/engagement-pulse";
-import { roleOf, stdevOf, theilSen } from "@/lib/parse-consistency";
+import {
+  extractKillDetail,
+  extractKillRanks,
+  roleOf,
+  stdevOf,
+  theilSen,
+} from "@/lib/parse-consistency";
+import {
+  aggregateLedger,
+  type LedgerDeath,
+  type LedgerEncounter,
+  type LedgerFight,
+} from "@/lib/first-death-ledger";
+import {
+  aggregateCooldownUsage,
+  type CooldownDeathInput,
+  type CooldownDifficultyAgg,
+} from "@/lib/cooldown-usage";
+import {
+  computeAttendance,
+  mergeObservers,
+  type NightState,
+} from "@/lib/attendance-ledger";
+import {
+  computeLearning,
+  type LearnPull,
+  type MemberLearning,
+} from "@/lib/learning-curve";
+import {
+  extractCurrentTierKnown,
+  groupKnownAlphabetical,
+  groupKnownLikeInGame,
+} from "@/lib/widgets/professions-logic";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
+import {
+  DEATH_DAMAGE_TAKEN_QUERY,
+  DEATH_PLAYER_CASTS_QUERY,
+  DEATH_HEALING_TAKEN_QUERY,
+  REPORT_MASTERDATA_QUERY,
+  reportDeathsResponseSchema,
+  reportMasterDataResponseSchema,
+} from "@/server/ingestion/warcraftlogs/queries";
+import {
+  buildDeathContext,
+  parseCastWindow,
+  parseDamageTakenEvents,
+  parseHealWindow,
+  type DeathContextResult,
+} from "@/lib/death-context";
+import { redis } from "@/lib/redis";
 import { computeGearAudit } from "@/server/ingestion/gear-audit";
+import { getProfessionCategories } from "@/server/professions/recipe-categories";
 import {
   addonPayloadSchema,
   deriveVaultDetail,
+  normalizeKey,
 } from "@/server/ingestion/addon/payload";
 
 /**
@@ -406,6 +457,11 @@ export const snapshotRouter = router({
                 payload: true,
               },
             }),
+            ctx.db.professionSnapshot.findFirst({
+              where: { characterId: id, source: "BLIZZARD" },
+              orderBy: { capturedAt: "desc" },
+              select: { professions: true, capturedAt: true },
+            }),
           ]),
         ),
       );
@@ -481,6 +537,7 @@ export const snapshotRouter = router({
           return {
             character: m.character,
             role: m.role,
+            rank: m.rank,
             latest: {
               character: latest[i]![0],
               equipment,
@@ -489,6 +546,8 @@ export const snapshotRouter = router({
               raid: latest[i]![4],
               wclParses: latest[i]![5],
               addon: addonView,
+              professions: latest[i]![7]?.professions ?? null,
+              professionsAt: latest[i]![7]?.capturedAt ?? null,
             },
           };
         }),
@@ -579,6 +638,106 @@ export const snapshotRouter = router({
     }),
 
   /**
+   * One character's KNOWN recipes for the current expansion, grouped by the
+   * in-game recipe CATEGORIES in display order ("sorted like in game") — behind
+   * the Professions widget's per-player button. Reads the RAW snapshot (the
+   * latestForTeam derived blob keeps only counts) and fetches+caches the
+   * game-data categories. Same read access as characterTimeline.
+   */
+  professionRecipes: publicProcedure
+    .input(z.object({ characterId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const empty = {
+        character: null as { name: string; classId: number } | null,
+        capturedAt: null as Date | null,
+        professions: [] as Array<{
+          profId: number;
+          name: string;
+          kind: "primary" | "secondary";
+          tierName: string;
+          recipeCount: number;
+          sortedLikeInGame: boolean;
+          groups: Array<{ category: string; recipes: Array<{ id: number; name: string }> }>;
+        }>,
+      };
+
+      // Access mirrors characterTimeline: a shared team membership (or guild
+      // staff), else a valid public share token whose team the character is on.
+      const userId = ctx.session?.user?.id;
+      let memberAccess = false;
+      if (userId) {
+        const shared = await ctx.db.raidTeamMembership.findFirst({
+          where: {
+            characterId: input.characterId,
+            isActive: true,
+            raidTeam: {
+              OR: [
+                { memberships: { some: { character: { userId }, isActive: true } } },
+                { guild: { memberships: { some: { userId, status: "ACTIVE", role: { in: ["OWNER", "OFFICER"] } } } } },
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        memberAccess = shared != null;
+        if (!memberAccess && !ctx.shareToken) return empty;
+      }
+      if (!memberAccess) {
+        const { verifyShareToken } = await import("@/server/security/share-token");
+        const verified = ctx.shareToken ? verifyShareToken(ctx.shareToken) : null;
+        if (!verified) return empty;
+        const onTeam = await ctx.db.raidTeamMembership.findFirst({
+          where: { characterId: input.characterId, isActive: true, raidTeamId: verified.raidTeamId },
+          select: { id: true },
+        });
+        if (!onTeam) return empty;
+        try {
+          await assertTeamReadAccess(ctx, verified.raidTeamId);
+        } catch {
+          return empty;
+        }
+      }
+
+      const snap = await ctx.db.professionSnapshot.findFirst({
+        where: { characterId: input.characterId, source: "BLIZZARD" },
+        orderBy: { capturedAt: "desc" },
+        select: {
+          rawPayload: true,
+          capturedAt: true,
+          character: { select: { name: true, classId: true, region: true } },
+        },
+      });
+      if (!snap) return empty;
+
+      const region = snap.character.region.toLowerCase();
+      const professions: typeof empty.professions = [];
+      for (const prof of extractCurrentTierKnown(snap.rawPayload)) {
+        if (prof.knownRecipes.length === 0) continue;
+        const categories = prof.tierId
+          ? await getProfessionCategories(region, prof.profId, prof.tierId)
+          : [];
+        const groups =
+          categories.length > 0
+            ? groupKnownLikeInGame(prof.knownRecipes, categories)
+            : groupKnownAlphabetical(prof.knownRecipes);
+        professions.push({
+          profId: prof.profId,
+          name: prof.name,
+          kind: prof.kind,
+          tierName: prof.tierName,
+          recipeCount: prof.knownRecipes.length,
+          sortedLikeInGame: categories.length > 0,
+          groups,
+        });
+      }
+      return {
+        character: { name: snap.character.name, classId: snap.character.classId },
+        capturedAt: snap.capturedAt,
+        professions,
+      };
+    }),
+
+  /**
    * Parse consistency — the numbers leaders actually roster on: per-boss
    * season MEDIAN percentile, best-vs-median gap, per-kill volatility
    * (stdev over the ranks[] now persisted in rawPayload), and a
@@ -653,9 +812,12 @@ export const snapshotRouter = router({
         currentWeek.getTime() - TREND_WEEKS * 7 * 24 * 60 * 60 * 1000,
       );
 
-      const [latestRows, trendRows, specRows] = await Promise.all([
+      const [latestRows, specRows] = await Promise.all([
         // Latest row per (character, encounter): grab a recent window per
-        // character and reduce in JS (mirrors latestForTeam's approach).
+        // character and reduce in JS (mirrors latestForTeam's approach). The
+        // latest row's rawPayload carries the FULL per-kill rank history (ranks
+        // aggregate ALL public kills), which feeds both the volatility stat AND
+        // the week-over-week trend — so no separate weekPercentile query.
         Promise.all(
           characterIds.map((id) =>
             ctx.db.wclParseSnapshot.findMany({
@@ -671,28 +833,13 @@ export const snapshotRouter = router({
                 bestAvg: true,
                 medianAvg: true,
                 capturedAt: true,
-                // Parsed server-side for totalKills/volatility/partition —
-                // never shipped to the client.
+                // Parsed server-side for totalKills/volatility/partition/trend
+                // ranks — never shipped to the client.
                 rawPayload: true,
               },
             }),
           ),
         ),
-        ctx.db.wclParseSnapshot.findMany({
-          where: {
-            characterId: { in: characterIds },
-            zoneId,
-            difficulty: selectedDifficulty,
-            weekPercentile: { not: null },
-            reportStartTime: { gte: oldest },
-          },
-          select: {
-            characterId: true,
-            encounterId: true,
-            weekPercentile: true,
-            reportStartTime: true,
-          },
-        }),
         Promise.all(
           characterIds.map((id) =>
             ctx.db.characterSnapshot.findFirst({
@@ -743,20 +890,28 @@ export const snapshotRouter = router({
 
       let partition: number | null = null;
       const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-      const weekIndexOf = (d: Date): number =>
-        Math.floor((d.getTime() - oldest.getTime()) / WEEK_MS);
+      const weekIndexOf = (ms: number): number =>
+        Math.floor((ms - oldest.getTime()) / WEEK_MS);
 
-      // Per (char, week, encounter) keep the BEST weekPercentile (rows are
-      // insert-on-change — the same lockout can produce several rows).
+      // Per (char, week, encounter) keep the BEST per-kill percentile, sourced
+      // from the full rank history in each character's latest row per encounter
+      // (ranks aggregate ALL kills, so the week-over-week signal is available
+      // from the first fetch). The old weekPercentile column only ever captured
+      // the CURRENT lockout, which left the trend starved for most rosters.
       const weekBest = new Map<string, number>();
-      for (const r of trendRows) {
-        if (r.weekPercentile == null || r.reportStartTime == null) continue;
-        const idx = weekIndexOf(r.reportStartTime);
-        if (idx < 0 || idx >= TREND_WEEKS) continue; // closed weeks only
-        const key = `${r.characterId}|${idx}|${r.encounterId}`;
-        const prev = weekBest.get(key);
-        if (prev == null || r.weekPercentile > prev) {
-          weekBest.set(key, r.weekPercentile);
+      for (let i = 0; i < characterIds.length; i++) {
+        const charId = characterIds[i]!;
+        const seenEnc = new Set<number>();
+        for (const r of latestRows[i] ?? []) {
+          if (seenEnc.has(r.encounterId)) continue; // latest row per encounter
+          seenEnc.add(r.encounterId);
+          for (const rk of extractKillRanks(r.rawPayload)) {
+            const idx = weekIndexOf(rk.t);
+            if (idx < 0 || idx >= TREND_WEEKS) continue; // window only
+            const key = `${charId}|${idx}|${r.encounterId}`;
+            const prev = weekBest.get(key);
+            if (prev == null || rk.pct > prev) weekBest.set(key, rk.pct);
+          }
         }
       }
       // char|week → list of per-encounter week-bests
@@ -1077,6 +1232,1718 @@ export const snapshotRouter = router({
     }),
 
   /**
+   * First-Death Ledger — per-boss, per-player first/early-death rates from
+   * the WCL deaths layer (WclFightDeath, written by GRS alongside fights).
+   * Reads ONLY stored tables (zero WCL spend at request time), mirroring
+   * progressionPulls' source resolution + the ≥2-roster participation gate
+   * for member-swept reports so the pull set matches prog_curve. All ranking
+   * math lives in @/lib/first-death-ledger.
+   */
+  firstDeathLedger: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { id: true, wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: { select: { name: true, classId: true } },
+            },
+          },
+        },
+      });
+      const guildId = team?.guild.id ?? null;
+      const effectiveSource = team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+
+      const members: Record<string, { name: string; classId: number | null }> =
+        {};
+      for (const [cid, meta] of memberMeta) members[cid] = meta;
+
+      const empty = {
+        encounters: [] as LedgerEncounter[],
+        encounterNames: {} as Record<number, string>,
+        members,
+        reportCount: 0,
+        source,
+      };
+      if (!guildId || teamCharacterIds.length === 0) return empty;
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) {
+        sourceClauses.push({ wclGuildId: effectiveSource });
+      }
+
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
+        select: { code: true, wclGuildId: true },
+      });
+      if (reports.length === 0) return empty;
+      const reportCodes = reports.map((r) => r.code);
+      const sourcedCodes = new Set(
+        reports.filter((r) => r.wclGuildId != null).map((r) => r.code),
+      );
+
+      const [fightRows, deathRows, actorRows, observedReports] =
+        await Promise.all([
+          ctx.db.wclFight.findMany({
+            where: { reportCode: { in: reportCodes } },
+            select: {
+              reportCode: true,
+              fightId: true,
+              encounterId: true,
+              difficulty: true,
+              kill: true,
+              startAt: true,
+              friendlyPlayerIds: true,
+            },
+          }),
+          ctx.db.wclFightDeath.findMany({
+            where: {
+              reportCode: { in: reportCodes },
+              characterId: { in: teamCharacterIds },
+            },
+            select: {
+              reportCode: true,
+              fightId: true,
+              encounterId: true,
+              difficulty: true,
+              kill: true,
+              characterId: true,
+              deathOrder: true,
+              deathAt: true,
+              killingAbilityName: true,
+              overkill: true,
+            },
+          }),
+          ctx.db.wclReportActor.findMany({
+            where: {
+              reportCode: { in: reportCodes },
+              characterId: { in: teamCharacterIds },
+            },
+            select: { reportCode: true, actorId: true, characterId: true },
+          }),
+          // Which reports have a death layer at all (any death row, team or
+          // not) — only their pulls are "observed" for the rate denominators.
+          ctx.db.wclFightDeath.findMany({
+            where: { reportCode: { in: reportCodes } },
+            distinct: ["reportCode"],
+            select: { reportCode: true },
+          }),
+        ]);
+      const observedReportCodes = new Set(
+        observedReports.map((r) => r.reportCode),
+      );
+
+      // (reportCode → (report-local actorId → our characterId)), team only.
+      const actorMapByReport = new Map<string, Map<number, string>>();
+      for (const a of actorRows) {
+        if (!a.characterId) continue;
+        let m = actorMapByReport.get(a.reportCode);
+        if (!m) {
+          m = new Map();
+          actorMapByReport.set(a.reportCode, m);
+        }
+        m.set(a.actorId, a.characterId);
+      }
+
+      // Gated fights + a (reportCode|fightId → startAt) lookup for the deaths.
+      const fightStartByKey = new Map<string, number>();
+      const gatedFightKeys = new Set<string>();
+      const fights: LedgerFight[] = [];
+      for (const f of fightRows) {
+        const actorMap = actorMapByReport.get(f.reportCode);
+        const present = new Set<string>();
+        if (actorMap) {
+          for (const aid of f.friendlyPlayerIds) {
+            const cid = actorMap.get(aid);
+            if (cid) present.add(cid);
+          }
+        }
+        // Participation gate: the team's own sourced reports always count;
+        // member-swept reports need ≥2 of the roster in the pull.
+        if (!sourcedCodes.has(f.reportCode) && present.size < 2) continue;
+        const key = `${f.reportCode}|${f.fightId}`;
+        gatedFightKeys.add(key);
+        fightStartByKey.set(key, f.startAt.getTime());
+        fights.push({
+          encounterId: f.encounterId,
+          difficulty: f.difficulty,
+          kill: f.kill,
+          presentCharacterIds: [...present],
+          observed: observedReportCodes.has(f.reportCode),
+        });
+      }
+
+      const deaths: LedgerDeath[] = [];
+      for (const d of deathRows) {
+        const key = `${d.reportCode}|${d.fightId}`;
+        if (!gatedFightKeys.has(key)) continue; // gated-out pull
+        const start = fightStartByKey.get(key)!;
+        deaths.push({
+          encounterId: d.encounterId,
+          difficulty: d.difficulty,
+          kill: d.kill,
+          characterId: d.characterId, // already ∈ team roster (queried)
+          deathOrder: d.deathOrder,
+          msIntoPull: Math.max(0, d.deathAt.getTime() - start),
+          killingAbilityName: d.killingAbilityName,
+          overkill: d.overkill != null ? Number(d.overkill) : null,
+        });
+      }
+
+      const encounters = aggregateLedger(fights, deaths);
+
+      // Boss names ride from parse snapshots (same as progressionPulls).
+      const encIds = [...new Set(encounters.map((e) => e.encounterId))];
+      const nameRows = encIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: {
+              encounterId: { in: encIds },
+              encounterName: { not: null },
+            },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encounterNames: Record<number, string> = {};
+      for (const n of nameRows) {
+        if (n.encounterName) encounterNames[n.encounterId] = n.encounterName;
+      }
+
+      // Post-gate report count (mirrors progressionPulls): a sourced report
+      // always counts; a member-swept report counts only when a fight of its
+      // survived the participation gate — so another team's pug logs can't
+      // inflate "N logs analyzed".
+      const usedCodes = new Set(
+        [...gatedFightKeys].map((k) => k.slice(0, k.lastIndexOf("|"))),
+      );
+      const reportCount = reports.filter(
+        (r) => r.wclGuildId != null || usedCodes.has(r.code),
+      ).length;
+
+      return {
+        encounters,
+        encounterNames,
+        members,
+        reportCount,
+        source,
+      };
+    }),
+
+  /**
+   * Cooldown Usage — log-derived "did the dying player have a PERSONAL defensive
+   * active?" coaching view. Reuses the deaths layer (WclFightDeath) enriched
+   * with the cooldown columns (GRS Buffs/Casts pass). Same source-resolution +
+   * participation gating as firstDeathLedger; WIPE deaths only; aggregated per
+   * difficulty into overall coverage + a per-player table (who isn't mitigating
+   * the hits that kill them) + a per-mechanic table (what the team eats raw).
+   */
+  cooldownUsage: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { id: true, wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: { select: { name: true, classId: true } },
+            },
+          },
+        },
+      });
+      const guildId = team?.guild.id ?? null;
+      const effectiveSource = team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+      const members: Record<string, { name: string; classId: number | null }> =
+        {};
+      for (const [cid, meta] of memberMeta) members[cid] = meta;
+
+      const empty = {
+        difficulties: [] as CooldownDifficultyAgg[],
+        members,
+        reportCount: 0,
+        source,
+        reports: [] as Array<{ code: string; title: string | null; startAtMs: number }>,
+        encounters: [] as Array<{ encounterId: number; name: string }>,
+        fights: [] as Array<{
+          reportCode: string;
+          fightId: number;
+          encounterId: number;
+          difficulty: number;
+          kill: boolean;
+          bossPct: number | null;
+          pullNumber: number | null;
+        }>,
+        deaths: [] as Array<{
+          reportCode: string;
+          fightId: number;
+          targetActorId: number;
+          characterId: string | null;
+          encounterId: number;
+          difficulty: number;
+          deathAtMs: number;
+          deathOrder: number;
+          overkill: number | null;
+          killingAbilityName: string | null;
+          defensiveActiveName: string | null;
+          lastDefensiveCastMsBefore: number | null;
+          pullNumber: number | null;
+          bossPct: number | null;
+        }>,
+      };
+      if (!guildId || teamCharacterIds.length === 0) return empty;
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) sourceClauses.push({ wclGuildId: effectiveSource });
+
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
+        select: { code: true, wclGuildId: true, title: true, startTime: true },
+      });
+      if (reports.length === 0) return empty;
+      const reportCodes = reports.map((r) => r.code);
+      const sourcedCodes = new Set(
+        reports.filter((r) => r.wclGuildId != null).map((r) => r.code),
+      );
+
+      const [fightRows, deathRows, actorRows] = await Promise.all([
+        ctx.db.wclFight.findMany({
+          where: { reportCode: { in: reportCodes } },
+          select: {
+            reportCode: true,
+            fightId: true,
+            encounterId: true,
+            difficulty: true,
+            kill: true,
+            bossPct: true,
+            startAt: true,
+            friendlyPlayerIds: true,
+          },
+        }),
+        ctx.db.wclFightDeath.findMany({
+          where: {
+            reportCode: { in: reportCodes },
+            characterId: { in: teamCharacterIds },
+            kill: false,
+          },
+          orderBy: { deathAt: "desc" },
+          select: {
+            reportCode: true,
+            fightId: true,
+            encounterId: true,
+            difficulty: true,
+            kill: true,
+            characterId: true,
+            targetActorId: true,
+            deathAt: true,
+            deathOrder: true,
+            overkill: true,
+            killingAbilityGameId: true,
+            killingAbilityName: true,
+            defensiveActiveGameId: true,
+            defensiveActiveName: true,
+            lastDefensiveCastMsBefore: true,
+            cooldownsFetchedAt: true,
+          },
+        }),
+        ctx.db.wclReportActor.findMany({
+          where: {
+            reportCode: { in: reportCodes },
+            characterId: { in: teamCharacterIds },
+          },
+          select: { reportCode: true, actorId: true, characterId: true },
+        }),
+      ]);
+
+      // (reportCode → (actorId → characterId)), team only.
+      const actorMapByReport = new Map<string, Map<number, string>>();
+      for (const a of actorRows) {
+        if (!a.characterId) continue;
+        let m = actorMapByReport.get(a.reportCode);
+        if (!m) {
+          m = new Map();
+          actorMapByReport.set(a.reportCode, m);
+        }
+        m.set(a.actorId, a.characterId);
+      }
+
+      // Participation gate (mirrors firstDeathLedger): sourced reports always
+      // count; member-swept reports need ≥2 of the roster in the pull.
+      const gatedFightKeys = new Set<string>();
+      for (const f of fightRows) {
+        const actorMap = actorMapByReport.get(f.reportCode);
+        let present = 0;
+        if (actorMap) {
+          for (const aid of f.friendlyPlayerIds) if (actorMap.get(aid)) present++;
+        }
+        if (!sourcedCodes.has(f.reportCode) && present < 2) continue;
+        gatedFightKeys.add(`${f.reportCode}|${f.fightId}`);
+      }
+
+      const deaths: CooldownDeathInput[] = [];
+      for (const d of deathRows) {
+        if (!gatedFightKeys.has(`${d.reportCode}|${d.fightId}`)) continue;
+        deaths.push({
+          encounterId: d.encounterId,
+          difficulty: d.difficulty,
+          kill: d.kill,
+          characterId: d.characterId,
+          killingAbilityGameId: d.killingAbilityGameId,
+          killingAbilityName: d.killingAbilityName,
+          defensiveActiveGameId: d.defensiveActiveGameId,
+          lastDefensiveCastMsBefore: d.lastDefensiveCastMsBefore,
+          computed: d.cooldownsFetchedAt != null,
+        });
+      }
+
+      const difficulties = aggregateCooldownUsage(deaths);
+
+      const usedCodes = new Set(
+        [...gatedFightKeys].map((k) => k.slice(0, k.lastIndexOf("|"))),
+      );
+      const reportCount = reports.filter(
+        (r) => r.wclGuildId != null || usedCodes.has(r.code),
+      ).length;
+
+      // ── Dropdown facets + clickable death list (all from the rows above) ──
+      // Pull number = chronological index of a fight among same-boss pulls.
+      const fightMeta = new Map<
+        string,
+        { pullNumber: number; bossPct: number | null; kill: boolean }
+      >();
+      {
+        const groups = new Map<string, typeof fightRows>();
+        for (const f of fightRows) {
+          const gk = `${f.reportCode}|${f.encounterId}|${f.difficulty}`;
+          const arr = groups.get(gk);
+          if (arr) arr.push(f);
+          else groups.set(gk, [f]);
+        }
+        for (const g of groups.values()) {
+          g.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+          g.forEach((f, i) =>
+            fightMeta.set(`${f.reportCode}|${f.fightId}`, {
+              pullNumber: i + 1,
+              bossPct: f.bossPct,
+              kill: f.kill,
+            }),
+          );
+        }
+      }
+
+      const deathList: typeof empty.deaths = [];
+      for (const d of deathRows) {
+        const fk = `${d.reportCode}|${d.fightId}`;
+        if (!gatedFightKeys.has(fk)) continue;
+        const m = fightMeta.get(fk);
+        deathList.push({
+          reportCode: d.reportCode,
+          fightId: d.fightId,
+          targetActorId: d.targetActorId,
+          characterId: d.characterId,
+          encounterId: d.encounterId,
+          difficulty: d.difficulty,
+          deathAtMs: d.deathAt.getTime(),
+          deathOrder: d.deathOrder,
+          overkill: d.overkill != null ? Number(d.overkill) : null,
+          killingAbilityName: d.killingAbilityName,
+          defensiveActiveName: d.defensiveActiveName,
+          lastDefensiveCastMsBefore: d.lastDefensiveCastMsBefore,
+          pullNumber: m?.pullNumber ?? null,
+          bossPct: m?.bossPct ?? null,
+        });
+        if (deathList.length >= 1000) break;
+      }
+
+      const reportHasDeath = new Set(deathList.map((d) => d.reportCode));
+      const reportsFacet = reports
+        .filter((r) => reportHasDeath.has(r.code))
+        .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
+        .map((r) => ({
+          code: r.code,
+          title: r.title,
+          startAtMs: r.startTime.getTime(),
+        }));
+
+      const encIds = [...new Set(deathList.map((d) => d.encounterId))];
+      const nameRows = encIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: { encounterId: { in: encIds }, encounterName: { not: null } },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encNames: Record<number, string> = {};
+      for (const n of nameRows)
+        if (n.encounterName) encNames[n.encounterId] = n.encounterName;
+      const encountersFacet = encIds
+        .map((id) => ({ encounterId: id, name: encNames[id] ?? `Boss ${id}` }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const fightSeen = new Set<string>();
+      const fightsFacet: typeof empty.fights = [];
+      for (const d of deathList) {
+        const fk = `${d.reportCode}|${d.fightId}`;
+        if (fightSeen.has(fk)) continue;
+        fightSeen.add(fk);
+        const m = fightMeta.get(fk);
+        fightsFacet.push({
+          reportCode: d.reportCode,
+          fightId: d.fightId,
+          encounterId: d.encounterId,
+          difficulty: d.difficulty,
+          kill: m?.kill ?? false,
+          bossPct: m?.bossPct ?? null,
+          pullNumber: m?.pullNumber ?? null,
+        });
+      }
+
+      return {
+        difficulties,
+        members,
+        reportCount,
+        source,
+        reports: reportsFacet,
+        encounters: encountersFacet,
+        fights: fightsFacet,
+        deaths: deathList,
+      };
+    }),
+
+  /**
+   * Death Context — on-demand, verbose context for ONE clicked death in the
+   * cooldown_usage widget. Fetches a small WCL event window around the death
+   * (boss damage taken, the player's casts, healing received) and reads the
+   * defensives that were active at the fatal hit straight off that damage row's
+   * buffs list. Cached in Redis keyed on the death identity (a frozen report's
+   * window is immutable). Costs ~3 small WCL calls per click; the client's
+   * points-budget guard refuses gracefully if the hour is exhausted.
+   */
+  deathContext: publicProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        reportCode: z.string().min(1).max(64),
+        fightId: z.number().int().nonnegative(),
+        targetActorId: z.number().int(),
+        deathAtMs: z.number().int().nonnegative(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { guildId } = await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const report = await ctx.db.wclReport.findUnique({
+        where: { code: input.reportCode },
+        select: { startTime: true, guildId: true, frozen: true },
+      });
+      // Only let a team read a report that belongs to its own guild.
+      if (!report || report.guildId !== guildId) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+
+      const death = await ctx.db.wclFightDeath.findFirst({
+        where: {
+          reportCode: input.reportCode,
+          fightId: input.fightId,
+          targetActorId: input.targetActorId,
+        },
+        select: { killingAbilityGameId: true, killingAbilityName: true },
+      });
+
+      const WINDOW_MS = 10_000;
+      const relMs = input.deathAtMs - report.startTime.getTime();
+      const startTime = Math.max(0, relMs - WINDOW_MS);
+      const endTime = relMs + 250;
+
+      const cacheKey = `death-ctx:${input.reportCode}:${input.fightId}:${input.targetActorId}:${input.deathAtMs}`;
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) return JSON.parse(cached) as DeathContextResult;
+      } catch {
+        /* cache miss/outage — fall through to fetch */
+      }
+
+      const wcl = warcraftLogsClient();
+      const vars = {
+        code: input.reportCode,
+        fightIDs: [input.fightId],
+        startTime,
+        endTime,
+      };
+
+      // Report master-data dictionary (ability id→name + actor id→name) — one
+      // call per report, cached, reused across every death in that report. It
+      // resolves EVERY ability in the window (the windowed damage table leaves
+      // gaps) and names the healers/bosses behind each event.
+      const abilityNames = new Map<number, string>();
+      const actorNames = new Map<number, string>();
+      const mdKey = `wcl-md:${input.reportCode}`;
+      let mdJson: { a: [number, string][]; n: [number, string][] } | null = null;
+      try {
+        const cachedMd = await redis.get(mdKey);
+        if (cachedMd) mdJson = JSON.parse(cachedMd);
+      } catch {
+        /* fall through to fetch */
+      }
+      if (!mdJson) {
+        const mdRes = await wcl.query({
+          query: REPORT_MASTERDATA_QUERY,
+          variables: { code: input.reportCode },
+          schema: reportMasterDataResponseSchema,
+          estimatedPoints: 4,
+        });
+        const md = mdRes.reportData?.report?.masterData;
+        mdJson = {
+          a: (md?.abilities ?? [])
+            .filter((x) => x.gameID != null && x.name != null)
+            .map((x) => [x.gameID as number, x.name as string]),
+          n: (md?.actors ?? [])
+            .filter((x) => x.id != null && x.name != null)
+            .map((x) => [x.id as number, x.name as string]),
+        };
+        try {
+          await redis.set(
+            mdKey,
+            JSON.stringify(mdJson),
+            "EX",
+            report.frozen ? 7 * 24 * 60 * 60 : 3600,
+          );
+        } catch {
+          /* best-effort */
+        }
+      }
+      for (const [id, name] of mdJson.a) abilityNames.set(id, name);
+      for (const [id, name] of mdJson.n) actorNames.set(id, name);
+
+      // Three small windowed calls (one fight, ~10s, one actor).
+      const [dmgRes, castRes, healRes] = await Promise.all([
+        wcl.query({
+          query: DEATH_DAMAGE_TAKEN_QUERY,
+          variables: { ...vars, playerID: input.targetActorId },
+          schema: reportDeathsResponseSchema,
+          estimatedPoints: 6,
+        }),
+        wcl.query({
+          query: DEATH_PLAYER_CASTS_QUERY,
+          variables: { ...vars, sourceID: input.targetActorId },
+          schema: reportDeathsResponseSchema,
+          estimatedPoints: 4,
+        }),
+        wcl
+          .query({
+            query: DEATH_HEALING_TAKEN_QUERY,
+            variables: { ...vars, targetID: input.targetActorId },
+            schema: reportDeathsResponseSchema,
+            estimatedPoints: 4,
+          })
+          .catch(() => null), // healing is best-effort
+      ]);
+
+      const result = buildDeathContext(
+        relMs,
+        parseDamageTakenEvents(dmgRes.reportData?.report?.events?.data),
+        parseCastWindow(castRes.reportData?.report?.events?.data),
+        parseHealWindow(healRes?.reportData?.report?.events?.data),
+        abilityNames,
+        {
+          windowMs: WINDOW_MS,
+          killingAbilityId: death?.killingAbilityGameId ?? null,
+          killingAbilityName: death?.killingAbilityName ?? null,
+          actorNames,
+        },
+      );
+
+      try {
+        // A frozen report's window never changes → cache a week; live → 10 min.
+        await redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          report.frozen ? 7 * 24 * 60 * 60 : 600,
+        );
+      } catch {
+        /* cache write best-effort */
+      }
+      return result;
+    }),
+
+  /**
+   * Attendance Ledger — OBSERVED raid presence (RaidNightObservation, fed by
+   * the in-game addon) merged with first-party calendar SIGNUPS (EventSignup).
+   * Observers are unioned and observations clustered into nights (8h gap); a
+   * night is matched to a calendar event (for its scheduled start + signups)
+   * when one starts within 4h. Only OBSERVED nights count toward the
+   * denominators. Scoring lives in @/lib/attendance-ledger; presence names are
+   * resolved to the team roster by normalized name.
+   */
+  attendanceLedger: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const { guildId } = await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: {
+                select: { name: true, classId: true, realmSlug: true },
+              },
+            },
+          },
+        },
+      });
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+      // Resolve observed raid names → characterId. GetRaidRosterInfo gives
+      // "Name" same-realm or "Name-Realm" cross-realm, so key on BOTH name and
+      // name+realm; a name shared by two team members on different realms is
+      // marked ambiguous (null) so it's never mis-attributed.
+      const byNameRealm = new Map<string, string>();
+      const byNameOnly = new Map<string, string | null>();
+      for (const m of team?.memberships ?? []) {
+        const nk = normalizeKey(m.character.name);
+        byNameRealm.set(`${nk}|${normalizeKey(m.character.realmSlug)}`, m.characterId);
+        byNameOnly.set(nk, byNameOnly.has(nk) ? null : m.characterId);
+      }
+      const resolveName = (rawName: string): string | null => {
+        const dash = rawName.indexOf("-");
+        const nk = normalizeKey(dash >= 0 ? rawName.slice(0, dash) : rawName);
+        if (dash >= 0) {
+          const rk = normalizeKey(rawName.slice(dash + 1));
+          const exact = byNameRealm.get(`${nk}|${rk}`);
+          if (exact) return exact;
+        }
+        return byNameOnly.get(nk) ?? null; // null = absent OR ambiguous
+      };
+
+      type NightMeta = {
+        key: string;
+        startedAt: number; // ms
+        endedAt: number; // ms
+        instanceName: string | null;
+        difficulty: string | null;
+        eventId: string | null;
+        scheduled: boolean;
+      };
+      const memberMetaObj: Record<
+        string,
+        { name: string; classId: number | null }
+      > = {};
+      for (const [cid, meta] of memberMeta) memberMetaObj[cid] = meta;
+
+      const empty = {
+        nights: [] as NightMeta[],
+        members: [] as Array<{
+          characterId: string;
+          states: NightState[];
+          observedNights: number;
+          present: number;
+          late: number;
+          leftEarly: number;
+          absent: number;
+          attendancePct: number | null;
+        }>,
+        memberMeta: memberMetaObj,
+        signupsByNight: {} as Record<string, Record<string, string>>,
+        observerCount: 0,
+        hasObservations: false,
+      };
+      if (teamCharacterIds.length === 0) return empty;
+
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const obs = await ctx.db.raidNightObservation.findMany({
+        where: { guildId, startedAt: { gte: since } },
+        orderBy: { startedAt: "asc" },
+        select: {
+          observerCharacterId: true,
+          startedAt: true,
+          endedAt: true,
+          instanceName: true,
+          difficulty: true,
+          members: true,
+        },
+      });
+      if (obs.length === 0) return empty;
+      const observerCount = new Set(obs.map((o) => o.observerCharacterId)).size;
+
+      // Resolve an observation's members JSON to team presence rows.
+      const resolvePresent = (
+        raw: unknown,
+      ): Array<{ characterId: string; firstSeen: number; lastSeen: number }> => {
+        const arr = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
+        const out: Array<{
+          characterId: string;
+          firstSeen: number;
+          lastSeen: number;
+        }> = [];
+        for (const m of arr) {
+          const name = typeof m.name === "string" ? m.name : null;
+          if (!name) continue;
+          const cid = resolveName(name);
+          if (!cid) continue;
+          const fs = typeof m.firstSeen === "number" ? m.firstSeen : null;
+          const ls = typeof m.lastSeen === "number" ? m.lastSeen : fs;
+          if (fs == null || ls == null) continue;
+          out.push({ characterId: cid, firstSeen: fs, lastSeen: ls });
+        }
+        return out;
+      };
+
+      // Cluster observations into nights by time proximity, sharing one key
+      // across observers so mergeObservers unions their presence.
+      const GAP_MS = 8 * 60 * 60 * 1000;
+      const nightInfo = new Map<
+        string,
+        { instanceName: string | null; difficulty: string | null }
+      >();
+      const observerInputs: Array<{
+        key: string;
+        startedAt: number;
+        endedAt: number;
+        present: Array<{ characterId: string; firstSeen: number; lastSeen: number }>;
+      }> = [];
+      let currentKey: string | null = null;
+      let clusterEnd = 0;
+      for (const o of obs) {
+        const st = o.startedAt.getTime();
+        if (currentKey == null || st - clusterEnd > GAP_MS) {
+          currentKey = String(st);
+        }
+        clusterEnd = Math.max(clusterEnd, o.endedAt.getTime());
+        if (!nightInfo.has(currentKey)) {
+          nightInfo.set(currentKey, {
+            instanceName: o.instanceName,
+            difficulty: o.difficulty,
+          });
+        }
+        observerInputs.push({
+          key: currentKey,
+          startedAt: Math.floor(st / 1000),
+          endedAt: Math.floor(o.endedAt.getTime() / 1000),
+          present: resolvePresent(o.members),
+        });
+      }
+
+      const nights = mergeObservers(observerInputs);
+
+      // Match each night to a calendar event (scheduled start + signups).
+      const events = await ctx.db.raidEvent.findMany({
+        where: {
+          raidTeamId: input.raidTeamId,
+          startsAt: {
+            gte: new Date(since.getTime() - 6 * 60 * 60 * 1000),
+            lte: new Date(),
+          },
+        },
+        select: {
+          id: true,
+          startsAt: true,
+          signups: {
+            where: { characterId: { in: teamCharacterIds } },
+            select: { characterId: true, state: true },
+          },
+        },
+      });
+      const MATCH_MS = 4 * 60 * 60 * 1000;
+      const signupsByNight: Record<string, Record<string, string>> = {};
+      const nightMeta: NightMeta[] = nights.map((n) => {
+        const startMs = n.startedAt * 1000;
+        let best: (typeof events)[number] | null = null;
+        let bestDelta = MATCH_MS + 1;
+        for (const e of events) {
+          const d = Math.abs(e.startsAt.getTime() - startMs);
+          if (d < bestDelta) {
+            best = e;
+            bestDelta = d;
+          }
+        }
+        const info = nightInfo.get(n.key);
+        if (best) {
+          // Use the SCHEDULED start as the late-threshold anchor.
+          n.startedAt = Math.floor(best.startsAt.getTime() / 1000);
+          const sm: Record<string, string> = {};
+          for (const s of best.signups) sm[s.characterId] = s.state;
+          signupsByNight[n.key] = sm;
+        }
+        return {
+          key: n.key,
+          startedAt: n.startedAt * 1000,
+          endedAt: n.endedAt * 1000,
+          instanceName: info?.instanceName ?? null,
+          difficulty: info?.difficulty ?? null,
+          eventId: best?.id ?? null,
+          scheduled: best != null,
+        };
+      });
+
+      const attendance = computeAttendance(nights, teamCharacterIds).map((a) => ({
+        characterId: a.characterId,
+        states: a.states,
+        observedNights: a.observedNights,
+        present: a.present,
+        late: a.late,
+        leftEarly: a.leftEarly,
+        absent: a.absent,
+        attendancePct: a.attendancePct,
+      }));
+      // Surface the most-attended members first; absentees sink.
+      attendance.sort(
+        (x, y) => (y.attendancePct ?? -1) - (x.attendancePct ?? -1),
+      );
+
+      return {
+        nights: nightMeta,
+        members: attendance,
+        memberMeta: memberMetaObj,
+        signupsByNight,
+        observerCount,
+        hasObservations: true,
+      };
+    }),
+
+  /**
+   * Learning Curve — per-player mechanic learning rate on a boss, from the
+   * verified WCL deaths layer: across a boss's chronological wipe pulls, does
+   * each player STOP dying to it? Early-vs-late-half death rate + survival
+   * time, TEAM-RELATIVE (cancels the progression-depth confounder). Reuses
+   * firstDeathLedger's source resolution + ≥2-roster gate + observed gate. The
+   * avoidable-damage enrichment (addon C_DamageMeter / WCL DamageTaken) plugs
+   * into the per-pull `avoidableDamage` slot when present. Math lives in
+   * @/lib/learning-curve.
+   */
+  learningCurve: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { id: true, wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: { select: { name: true, classId: true } },
+            },
+          },
+        },
+      });
+      const guildId = team?.guild.id ?? null;
+      const effectiveSource = team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+      const members: Record<string, { name: string; classId: number | null }> =
+        {};
+      for (const [cid, meta] of memberMeta) members[cid] = meta;
+
+      type LearnEncounter = {
+        encounterId: number;
+        difficulty: number;
+        wipePulls: number;
+        members: MemberLearning[];
+      };
+      const empty = {
+        encounters: [] as LearnEncounter[],
+        encounterNames: {} as Record<number, string>,
+        members,
+        source,
+      };
+      if (!guildId || teamCharacterIds.length === 0) return empty;
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) {
+        sourceClauses.push({ wclGuildId: effectiveSource });
+      }
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
+        select: { code: true, wclGuildId: true },
+      });
+      if (reports.length === 0) return empty;
+      const reportCodes = reports.map((r) => r.code);
+      const sourcedCodes = new Set(
+        reports.filter((r) => r.wclGuildId != null).map((r) => r.code),
+      );
+
+      const [fightRows, deathRows, actorRows, observedReports] =
+        await Promise.all([
+          ctx.db.wclFight.findMany({
+            where: { reportCode: { in: reportCodes }, kill: false },
+            select: {
+              reportCode: true,
+              fightId: true,
+              encounterId: true,
+              difficulty: true,
+              startAt: true,
+              friendlyPlayerIds: true,
+            },
+          }),
+          ctx.db.wclFightDeath.findMany({
+            where: {
+              reportCode: { in: reportCodes },
+              kill: false,
+              characterId: { in: teamCharacterIds },
+            },
+            select: {
+              reportCode: true,
+              fightId: true,
+              characterId: true,
+              deathAt: true,
+              deathOrder: true,
+            },
+          }),
+          ctx.db.wclReportActor.findMany({
+            where: {
+              reportCode: { in: reportCodes },
+              characterId: { in: teamCharacterIds },
+            },
+            select: { reportCode: true, actorId: true, characterId: true },
+          }),
+          ctx.db.wclFightDeath.findMany({
+            where: { reportCode: { in: reportCodes } },
+            distinct: ["reportCode"],
+            select: { reportCode: true },
+          }),
+        ]);
+      const observedReportCodes = new Set(
+        observedReports.map((r) => r.reportCode),
+      );
+
+      const actorMapByReport = new Map<string, Map<number, string>>();
+      for (const a of actorRows) {
+        if (!a.characterId) continue;
+        let m = actorMapByReport.get(a.reportCode);
+        if (!m) {
+          m = new Map();
+          actorMapByReport.set(a.reportCode, m);
+        }
+        m.set(a.actorId, a.characterId);
+      }
+      // Per (report|fight|character): their first death TIME (survival depth)
+      // + their best (lowest) death ORDER (were they among the first to fall).
+      const firstDeath = new Map<string, { at: number; order: number }>();
+      for (const d of deathRows) {
+        if (!d.characterId) continue;
+        const key = `${d.reportCode}|${d.fightId}|${d.characterId}`;
+        const at = d.deathAt.getTime();
+        const prev = firstDeath.get(key);
+        if (prev == null) {
+          firstDeath.set(key, { at, order: d.deathOrder });
+        } else {
+          if (at < prev.at) prev.at = at;
+          if (d.deathOrder < prev.order) prev.order = d.deathOrder;
+        }
+      }
+
+      // Gated, observed wipe fights grouped per encounter|difficulty, ordered.
+      type GFight = {
+        reportCode: string;
+        fightId: number;
+        startMs: number;
+        present: string[];
+      };
+      const byEnc = new Map<string, GFight[]>();
+      for (const f of fightRows) {
+        if (!observedReportCodes.has(f.reportCode)) continue; // need death data
+        const actorMap = actorMapByReport.get(f.reportCode);
+        const present = new Set<string>();
+        if (actorMap) {
+          for (const aid of f.friendlyPlayerIds) {
+            const cid = actorMap.get(aid);
+            if (cid) present.add(cid);
+          }
+        }
+        if (!sourcedCodes.has(f.reportCode) && present.size < 2) continue;
+        const k = `${f.encounterId}|${f.difficulty}`;
+        (byEnc.get(k) ?? byEnc.set(k, []).get(k)!).push({
+          reportCode: f.reportCode,
+          fightId: f.fightId,
+          startMs: f.startAt.getTime(),
+          present: [...present],
+        });
+      }
+
+      // Avoidable-damage enrichment (ingested per early/late bucket by the GRS
+      // sweep): the team's per-(encounter,difficulty,character) early/late
+      // totals from the boss's killing abilities. Null until the sweep runs.
+      const avoidRows = await ctx.db.wclAvoidableDamage.findMany({
+        where: { guildId, characterId: { in: teamCharacterIds } },
+        select: {
+          encounterId: true,
+          difficulty: true,
+          bucket: true,
+          characterId: true,
+          total: true,
+        },
+      });
+      const avoidMap = new Map<string, { early: number; late: number }>();
+      for (const a of avoidRows) {
+        const key = `${a.encounterId}|${a.difficulty}|${a.characterId}`;
+        const e = avoidMap.get(key) ?? { early: 0, late: 0 };
+        const v = Number(a.total);
+        if (a.bucket === 0) e.early += v;
+        else e.late += v;
+        avoidMap.set(key, e);
+      }
+
+      const encounters: LearnEncounter[] = [];
+      for (const [k, gfights] of byEnc) {
+        gfights.sort((a, b) => a.startMs - b.startMs); // chronological
+        const [encStr, diffStr] = k.split("|");
+        const encounterId = Number(encStr);
+        const difficulty = Number(diffStr);
+        // Per member: their pull sequence over the wipes they were present for.
+        const pullsByMember = new Map<string, LearnPull[]>();
+        for (const f of gfights) {
+          for (const cid of f.present) {
+            const fd = firstDeath.get(`${f.reportCode}|${f.fightId}|${cid}`);
+            (pullsByMember.get(cid) ?? pullsByMember.set(cid, []).get(cid)!).push({
+              // "died" = died EARLY (order ≤ 2): not saturated like raw deaths.
+              died: fd != null && fd.order <= 2,
+              msIntoPull: fd != null ? Math.max(0, fd.at - f.startMs) : null,
+            });
+          }
+        }
+        const learned = computeLearning(pullsByMember);
+        if (learned.length === 0) continue;
+        // Inject the avoidable-damage enrichment (early/late bucket totals).
+        for (const m of learned) {
+          const a = avoidMap.get(`${encounterId}|${difficulty}|${m.characterId}`);
+          if (a) {
+            m.earlyAvoidable = a.early;
+            m.lateAvoidable = a.late;
+          }
+        }
+        // Coaching candidates first: flagged, then slowest learners.
+        learned.sort(
+          (a, b) =>
+            Number(b.flagged) - Number(a.flagged) ||
+            (b.relativeRatio ?? 0) - (a.relativeRatio ?? 0),
+        );
+        encounters.push({
+          encounterId,
+          difficulty,
+          wipePulls: gfights.length,
+          members: learned,
+        });
+      }
+      encounters.sort((a, b) => b.wipePulls - a.wipePulls);
+
+      const encIds = [...new Set(encounters.map((e) => e.encounterId))];
+      const nameRows = encIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: {
+              encounterId: { in: encIds },
+              encounterName: { not: null },
+            },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encounterNames: Record<number, string> = {};
+      for (const n of nameRows) {
+        if (n.encounterName) encounterNames[n.encounterId] = n.encounterName;
+      }
+
+      return { encounters, encounterNames, members, source };
+    }),
+
+  /**
+   * Heatmap fight drill-in — one character's per-kill history on one boss
+   * (date, percentile, WCL log link), from the stored parse rawPayload.ranks.
+   * Lazily fetched when a parses-heatmap cell is clicked, so the heatmap's
+   * own payload stays lean. Team-scoped read access.
+   */
+  encounterKills: publicProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        characterId: z.string().cuid(),
+        encounterId: z.number().int(),
+        difficulty: z.number().int(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+      const empty = {
+        kills: [] as Array<{ t: number; pct: number; reportCode: string | null }>,
+        encounterName: null as string | null,
+      };
+      // The character must be on this team (don't leak arbitrary characters).
+      const membership = await ctx.db.raidTeamMembership.findFirst({
+        where: { raidTeamId: input.raidTeamId, characterId: input.characterId },
+        select: { id: true },
+      });
+      if (!membership) return empty;
+      const snap = await ctx.db.wclParseSnapshot.findFirst({
+        where: {
+          characterId: input.characterId,
+          encounterId: input.encounterId,
+          difficulty: input.difficulty,
+        },
+        orderBy: { capturedAt: "desc" },
+        select: { rawPayload: true, encounterName: true },
+      });
+      if (!snap) return empty;
+      return {
+        kills: extractKillDetail(snap.rawPayload),
+        encounterName: snap.encounterName ?? null,
+      };
+    }),
+
+  /**
+   * Bench Equity — per-boss pull participation: who pulls vs who sits. Reads
+   * the GRS fight rows (friendlyPlayers per pull) + the same source resolution
+   * and ≥2-roster participation gate as firstDeathLedger. Per (encounter,
+   * difficulty): total pulls + each member's pulls-present + kill presence,
+   * plus an overall participation rate. Zero WCL spend at request time.
+   */
+  benchEquity: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { id: true, wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: { select: { name: true, classId: true } },
+            },
+          },
+        },
+      });
+      const guildId = team?.guild.id ?? null;
+      const effectiveSource = team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+      const memberMetaObj: Record<
+        string,
+        { name: string; classId: number | null }
+      > = {};
+      for (const [cid, meta] of memberMeta) memberMetaObj[cid] = meta;
+
+      type BenchEnc = {
+        encounterId: number;
+        difficulty: number;
+        totalPulls: number;
+        killPulls: number;
+      };
+      type BenchMember = {
+        characterId: string;
+        pullsPresent: number;
+        pullPct: number;
+        byEnc: Record<string, { pullsIn: number; killPresent: boolean }>;
+      };
+      const empty = {
+        totalPulls: 0,
+        encounters: [] as BenchEnc[],
+        members: [] as BenchMember[],
+        memberMeta: memberMetaObj,
+        encounterNames: {} as Record<number, string>,
+        source,
+      };
+      if (!guildId || teamCharacterIds.length === 0) return empty;
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) {
+        sourceClauses.push({ wclGuildId: effectiveSource });
+      }
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
+        select: { code: true, wclGuildId: true },
+      });
+      if (reports.length === 0) return empty;
+      const reportCodes = reports.map((r) => r.code);
+      const sourcedCodes = new Set(
+        reports.filter((r) => r.wclGuildId != null).map((r) => r.code),
+      );
+
+      const [fightRows, actorRows] = await Promise.all([
+        ctx.db.wclFight.findMany({
+          where: { reportCode: { in: reportCodes } },
+          select: {
+            reportCode: true,
+            encounterId: true,
+            difficulty: true,
+            kill: true,
+            friendlyPlayerIds: true,
+          },
+        }),
+        ctx.db.wclReportActor.findMany({
+          where: {
+            reportCode: { in: reportCodes },
+            characterId: { in: teamCharacterIds },
+          },
+          select: { reportCode: true, actorId: true, characterId: true },
+        }),
+      ]);
+      const actorMapByReport = new Map<string, Map<number, string>>();
+      for (const a of actorRows) {
+        if (!a.characterId) continue;
+        let m = actorMapByReport.get(a.reportCode);
+        if (!m) {
+          m = new Map();
+          actorMapByReport.set(a.reportCode, m);
+        }
+        m.set(a.actorId, a.characterId);
+      }
+
+      const encTotals = new Map<string, BenchEnc>();
+      const partByEncChar = new Map<
+        string,
+        { pullsIn: number; killPresent: boolean }
+      >();
+      const pullsPresent = new Map<string, number>();
+      let totalPulls = 0;
+      for (const f of fightRows) {
+        const actorMap = actorMapByReport.get(f.reportCode);
+        const present = new Set<string>();
+        if (actorMap) {
+          for (const aid of f.friendlyPlayerIds) {
+            const cid = actorMap.get(aid);
+            if (cid) present.add(cid);
+          }
+        }
+        if (!sourcedCodes.has(f.reportCode) && present.size < 2) continue; // gate
+        const key = `${f.encounterId}|${f.difficulty}`;
+        const enc = encTotals.get(key) ?? {
+          encounterId: f.encounterId,
+          difficulty: f.difficulty,
+          totalPulls: 0,
+          killPulls: 0,
+        };
+        enc.totalPulls++;
+        if (f.kill) enc.killPulls++;
+        encTotals.set(key, enc);
+        totalPulls++;
+        for (const cid of present) {
+          pullsPresent.set(cid, (pullsPresent.get(cid) ?? 0) + 1);
+          const ek = `${key}|${cid}`;
+          const p = partByEncChar.get(ek) ?? { pullsIn: 0, killPresent: false };
+          p.pullsIn++;
+          if (f.kill) p.killPresent = true;
+          partByEncChar.set(ek, p);
+        }
+      }
+      if (totalPulls === 0) return empty;
+
+      const encounters = [...encTotals.values()].sort(
+        (a, b) => b.totalPulls - a.totalPulls,
+      );
+      const members: BenchMember[] = teamCharacterIds
+        .map((cid) => {
+          const present = pullsPresent.get(cid) ?? 0;
+          const byEnc: Record<
+            string,
+            { pullsIn: number; killPresent: boolean }
+          > = {};
+          for (const e of encounters) {
+            const ek = `${e.encounterId}|${e.difficulty}`;
+            const p = partByEncChar.get(`${ek}|${cid}`);
+            if (p) byEnc[ek] = p;
+          }
+          return {
+            characterId: cid,
+            pullsPresent: present,
+            pullPct: (present / totalPulls) * 100,
+            byEnc,
+          };
+        })
+        // Only members who appear in at least one pull (drop never-seen alts).
+        .filter((m) => m.pullsPresent > 0)
+        .sort((a, b) => b.pullPct - a.pullPct);
+
+      const encIds = [...new Set(encounters.map((e) => e.encounterId))];
+      const nameRows = encIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: { encounterId: { in: encIds }, encounterName: { not: null } },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encounterNames: Record<number, string> = {};
+      for (const n of nameRows) {
+        if (n.encounterName) encounterNames[n.encounterId] = n.encounterName;
+      }
+
+      return {
+        totalPulls,
+        encounters,
+        members,
+        memberMeta: memberMetaObj,
+        encounterNames,
+        source,
+      };
+    }),
+
+  /**
+   * Brez Economy — battle-rez (combat-resurrection) usage from the deaths
+   * layer's rez fields (set by the GRS rez pass). Per boss: rezzes spent on
+   * wipes + rezzes/pull, a "success" rate (rezzed and didn't re-die in the
+   * pull vs wasted on a doomed pull), who PROVIDES the brezzes (rezzer
+   * leaderboard), and who needs them most. Same source + ≥2-roster gate as
+   * firstDeathLedger. Zero WCL spend at request time.
+   */
+  brezEconomy: publicProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: {
+          wclGuildId: true,
+          wclGuildName: true,
+          guild: { select: { id: true, wclGuildId: true, name: true } },
+          memberships: {
+            where: { isActive: true },
+            select: {
+              characterId: true,
+              character: { select: { name: true, classId: true } },
+            },
+          },
+        },
+      });
+      const guildId = team?.guild.id ?? null;
+      const effectiveSource = team?.wclGuildId ?? team?.guild.wclGuildId ?? null;
+      const source = {
+        wclGuildId: effectiveSource,
+        name:
+          team?.wclGuildId != null
+            ? (team.wclGuildName ?? `WCL guild #${team.wclGuildId}`)
+            : (team?.guild.name ?? "Guild logs"),
+        isOverride: team?.wclGuildId != null,
+      };
+      const memberMeta = new Map(
+        (team?.memberships ?? []).map((m) => [
+          m.characterId,
+          { name: m.character.name, classId: m.character.classId },
+        ]),
+      );
+      const teamCharacterIds = [...memberMeta.keys()];
+      const memberMetaObj: Record<
+        string,
+        { name: string; classId: number | null }
+      > = {};
+      for (const [cid, meta] of memberMeta) memberMetaObj[cid] = meta;
+
+      type BrezEnc = {
+        encounterId: number;
+        difficulty: number;
+        wipePulls: number;
+        rezzes: number;
+        successful: number;
+        rezzesPerPull: number;
+      };
+      const empty = {
+        encounters: [] as BrezEnc[],
+        rezzers: [] as Array<{ characterId: string; count: number }>,
+        rezzed: [] as Array<{ characterId: string; count: number }>,
+        totalRezzes: 0,
+        successRate: null as number | null,
+        memberMeta: memberMetaObj,
+        encounterNames: {} as Record<number, string>,
+        source,
+      };
+      if (!guildId || teamCharacterIds.length === 0) return empty;
+
+      const sourceClauses: Array<{ wclGuildId: number | null }> = [
+        { wclGuildId: null },
+      ];
+      if (effectiveSource != null) {
+        sourceClauses.push({ wclGuildId: effectiveSource });
+      }
+      const since = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+      const reports = await ctx.db.wclReport.findMany({
+        where: {
+          guildId,
+          startTime: { gte: since },
+          revision: { gte: 0 },
+          OR: sourceClauses,
+        },
+        select: { code: true, wclGuildId: true },
+      });
+      if (reports.length === 0) return empty;
+      const reportCodes = reports.map((r) => r.code);
+      const sourcedCodes = new Set(
+        reports.filter((r) => r.wclGuildId != null).map((r) => r.code),
+      );
+
+      const [fightRows, deathRows, actorRows] = await Promise.all([
+        ctx.db.wclFight.findMany({
+          where: { reportCode: { in: reportCodes }, kill: false },
+          select: {
+            reportCode: true,
+            fightId: true,
+            friendlyPlayerIds: true,
+          },
+        }),
+        ctx.db.wclFightDeath.findMany({
+          where: { reportCode: { in: reportCodes }, kill: false },
+          select: {
+            reportCode: true,
+            fightId: true,
+            encounterId: true,
+            difficulty: true,
+            characterId: true,
+            targetActorId: true,
+            deathAt: true,
+            rezzedAt: true,
+            rezzerActorId: true,
+          },
+        }),
+        ctx.db.wclReportActor.findMany({
+          where: {
+            reportCode: { in: reportCodes },
+            characterId: { in: teamCharacterIds },
+          },
+          select: { reportCode: true, actorId: true, characterId: true },
+        }),
+      ]);
+      const actorMapByReport = new Map<string, Map<number, string>>();
+      for (const a of actorRows) {
+        if (!a.characterId) continue;
+        (actorMapByReport.get(a.reportCode) ??
+          actorMapByReport
+            .set(a.reportCode, new Map())
+            .get(a.reportCode)!).set(a.actorId, a.characterId);
+      }
+
+      // Gate: which wipe fights count for this team (sourced, or ≥2 roster).
+      const gated = new Set<string>();
+      for (const f of fightRows) {
+        if (sourcedCodes.has(f.reportCode)) {
+          gated.add(`${f.reportCode}|${f.fightId}`);
+          continue;
+        }
+        const amap = actorMapByReport.get(f.reportCode);
+        if (!amap) continue;
+        let n = 0;
+        for (const aid of f.friendlyPlayerIds) {
+          if (amap.has(aid)) {
+            n++;
+            if (n >= 2) {
+              gated.add(`${f.reportCode}|${f.fightId}`);
+              break;
+            }
+          }
+        }
+      }
+
+      // Group deaths per (report|fight|target) to find the LAST death — a
+      // rez on a non-last death means the target re-died (wasted); a rez on
+      // the last death means they were brought back and survived (success).
+      const seq = new Map<string, typeof deathRows>();
+      for (const d of deathRows) {
+        if (!gated.has(`${d.reportCode}|${d.fightId}`)) continue;
+        const k = `${d.reportCode}|${d.fightId}|${d.targetActorId}`;
+        (seq.get(k) ?? seq.set(k, []).get(k)!).push(d);
+      }
+
+      const encMap = new Map<string, BrezEnc>();
+      const wipeFightSet = new Map<string, Set<string>>(); // encKey → fight keys
+      const rezzerCount = new Map<string, number>();
+      const rezzedCount = new Map<string, number>();
+      let totalRezzes = 0;
+      let successful = 0;
+      for (const [, ds] of seq) {
+        ds.sort((a, b) => a.deathAt.getTime() - b.deathAt.getTime());
+        ds.forEach((d, i) => {
+          const encKey = `${d.encounterId}|${d.difficulty}`;
+          const enc = encMap.get(encKey) ?? {
+            encounterId: d.encounterId,
+            difficulty: d.difficulty,
+            wipePulls: 0,
+            rezzes: 0,
+            successful: 0,
+            rezzesPerPull: 0,
+          };
+          // track distinct wipe fights per encounter
+          const wf = wipeFightSet.get(encKey) ?? new Set<string>();
+          wf.add(`${d.reportCode}|${d.fightId}`);
+          wipeFightSet.set(encKey, wf);
+          if (d.rezzedAt != null) {
+            enc.rezzes++;
+            totalRezzes++;
+            const isLast = i === ds.length - 1; // no later death → survived
+            if (isLast) {
+              enc.successful++;
+              successful++;
+            }
+            // who provided + who received
+            if (d.rezzerActorId != null) {
+              const cid = actorMapByReport
+                .get(d.reportCode)
+                ?.get(d.rezzerActorId);
+              if (cid) rezzerCount.set(cid, (rezzerCount.get(cid) ?? 0) + 1);
+            }
+            if (d.characterId)
+              rezzedCount.set(
+                d.characterId,
+                (rezzedCount.get(d.characterId) ?? 0) + 1,
+              );
+          }
+          encMap.set(encKey, enc);
+        });
+      }
+      for (const [k, enc] of encMap) {
+        enc.wipePulls = wipeFightSet.get(k)?.size ?? 0;
+        enc.rezzesPerPull = enc.wipePulls > 0 ? enc.rezzes / enc.wipePulls : 0;
+      }
+
+      const encounters = [...encMap.values()]
+        .filter((e) => e.rezzes > 0)
+        .sort((a, b) => b.rezzes - a.rezzes);
+      const rezzers = [...rezzerCount.entries()]
+        .map(([characterId, count]) => ({ characterId, count }))
+        .sort((a, b) => b.count - a.count);
+      const rezzed = [...rezzedCount.entries()]
+        .map(([characterId, count]) => ({ characterId, count }))
+        .sort((a, b) => b.count - a.count);
+
+      const encIds = [...new Set(encounters.map((e) => e.encounterId))];
+      const nameRows = encIds.length
+        ? await ctx.db.wclParseSnapshot.findMany({
+            where: { encounterId: { in: encIds }, encounterName: { not: null } },
+            distinct: ["encounterId"],
+            select: { encounterId: true, encounterName: true },
+          })
+        : [];
+      const encounterNames: Record<number, string> = {};
+      for (const n of nameRows) {
+        if (n.encounterName) encounterNames[n.encounterId] = n.encounterName;
+      }
+
+      return {
+        encounters,
+        rezzers,
+        rezzed,
+        totalRezzes,
+        successRate: totalRezzes > 0 ? (successful / totalRezzes) * 100 : null,
+        memberMeta: memberMetaObj,
+        encounterNames,
+        source,
+      };
+    }),
+
+  /**
    * Engagement Pulse — characters × raid-weeks activity heatmap read from
    * the VaultSnapshot weekly ledger (one row per character per raid week,
    * written by Tier A but never read longitudinally until now), plus a
@@ -1289,6 +3156,27 @@ export const snapshotRouter = router({
 
         const decay = decayFlag(closedScores);
 
+        // Activity FREQUENCY (not hours — no public API exposes /played time):
+        // the mean weekly activity score (0–6 = raid + M+ vault slots) over the
+        // OBSERVED closed weeks, plus how many of those weeks the player was
+        // active at all + their average M+ runs/week. An honest "how often do
+        // they show up" measure; never call it playtime.
+        const observedScores = closedScores.filter(
+          (s): s is number => s != null,
+        );
+        const avgActivity =
+          observedScores.length > 0
+            ? observedScores.reduce((a, b) => a + b, 0) / observedScores.length
+            : null;
+        const activeWeeks = observedScores.filter((s) => s > 0).length;
+        const observedRuns = closed
+          .map((c) => c.mplusRuns)
+          .filter((r): r is number => r != null);
+        const avgMplusRuns =
+          observedRuns.length > 0
+            ? observedRuns.reduce((a, b) => a + b, 0) / observedRuns.length
+            : null;
+
         const rawLogin = loginByChar.get(id);
         const loginMs = rawLogin != null ? Number(rawLogin) : NaN;
         const daysSinceLogin = Number.isFinite(loginMs)
@@ -1325,6 +3213,10 @@ export const snapshotRouter = router({
           baseline: decay.baseline,
           decayFlagged: decay.flagged,
           knownWeeks: decay.knownWeeks,
+          avgActivity,
+          activeWeeks,
+          observedWeeks: observedScores.length,
+          avgMplusRuns,
           signals,
           risk: riskScore(signals),
           watchlisted: watchlisted(signals),
@@ -1359,11 +3251,21 @@ export const snapshotRouter = router({
           .filter((s): s is number => s != null),
       );
 
+      // Roster-wide average activity frequency (mean of members' own averages).
+      const memberAvgs = members
+        .map((mm) => mm.avgActivity)
+        .filter((a): a is number => a != null);
+      const rosterAvgActivity =
+        memberAvgs.length > 0
+          ? memberAvgs.reduce((a, b) => a + b, 0) / memberAvgs.length
+          : null;
+
       return {
         currentWeekStart: currentWeek,
         closedWeeks,
         rosterMedian,
         rosterMedianCurrent,
+        rosterAvgActivity,
         members,
       };
     }),

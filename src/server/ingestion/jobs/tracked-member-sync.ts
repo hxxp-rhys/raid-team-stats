@@ -10,16 +10,20 @@ import {
   mythicKeystoneIndexResponseSchema,
   mythicKeystoneSeasonResponseSchema,
   raidEncountersResponseSchema,
+  characterProfessionsResponseSchema,
 } from "@/server/ingestion/blizzard/schemas";
 import {
   writeCharacterSnapshot,
   writeEquipmentSnapshot,
   writeMplusSnapshot,
+  writeProfessionSnapshot,
   writeRaidSnapshot,
   writeVaultSnapshot,
   writeWclParseSnapshot,
   logSnapshotError,
 } from "@/server/ingestion/snapshots";
+import { deriveProfessions } from "@/lib/widgets/professions-logic";
+import { trackForItemLevel } from "@/lib/gear-tracks";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import {
   CHARACTER_ZONE_RANKINGS_QUERY,
@@ -336,17 +340,9 @@ export async function handleTrackedMemberSync(
     const TIER_SLOTS = ["HEAD", "SHOULDER", "CHEST", "HANDS", "LEGS"] as const;
     type TierSlot = (typeof TIER_SLOTS)[number];
 
-    // ilvl → reward track band (TWW retail bands). Lower/squished test data
-    // buckets to veteran; production ilvls map correctly.
-    const ilvlTrack = (
-      ilvl: number | null | undefined,
-    ): "veteran" | "champion" | "hero" | "myth" | null => {
-      if (typeof ilvl !== "number" || ilvl <= 0) return null;
-      if (ilvl >= 707) return "myth";
-      if (ilvl >= 694) return "hero";
-      if (ilvl >= 681) return "champion";
-      return "veteran";
-    };
+    // ilvl → reward track band. Midnight bands live in @/lib/gear-tracks
+    // (the single source of truth shared with the tier-set tracker + Great
+    // Vault palette); see trackForItemLevel for the verified anchors.
 
     // Tally tier-set pieces per set id, but only across the five tier slots.
     const tierPiecesBySet = new Map<number, number>();
@@ -386,7 +382,7 @@ export async function handleTrackedMemberSync(
         slot,
         filled: isTier,
         itemLevel,
-        track: isTier ? ilvlTrack(itemLevel) : null,
+        track: isTier ? trackForItemLevel(itemLevel) : null,
       };
     });
 
@@ -884,6 +880,30 @@ export async function handleTrackedMemberSync(
     }
   } catch (err) {
     logSnapshotError(err, { stage: "wcl", characterId: character.id });
+  }
+
+  // 7. Professions — primaries + secondaries → compact derived list (current-
+  // expansion tier skill + per-tier known-recipe count). Own try/catch so a
+  // professions failure never aborts the rest of the character's sync.
+  try {
+    const professionsRaw = await client.request(
+      endpoints.characterProfessions(region, character.realmSlug, character.name),
+      {
+        region,
+        schema: characterProfessionsResponseSchema,
+        auth: { kind: "app" },
+        minFloor: 5,
+      },
+    );
+    await writeProfessionSnapshot({
+      characterId: character.id,
+      source: "BLIZZARD",
+      capturedAt,
+      professions: deriveProfessions(professionsRaw),
+      rawPayload: professionsRaw,
+    });
+  } catch (err) {
+    logSnapshotError(err, { stage: "professions", characterId: character.id });
   }
 
   // Still deferred: Raider.IO (mostly duplicates Blizzard data — defer until

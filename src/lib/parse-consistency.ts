@@ -35,6 +35,86 @@ export function theilSen(values: number[]): number | null {
     : (slopes[mid - 1]! + slopes[mid]!) / 2;
 }
 
+export type KillRank = { t: number; pct: number };
+
+/**
+ * Each public kill's {startTime ms, percentile} from a stored WCL parse
+ * rawPayload's `ranks` array — the FULL kill history (rankings aggregate every
+ * kill), not just the current lockout. This is what lets the week-over-week
+ * Trend tab be rebuilt from real kill timestamps instead of the sparse
+ * current-lockout `weekPercentile` column. Tolerates `startTime` either at the
+ * top level or under `report.startTime`, and `rankPercent`/`percentile`.
+ */
+export function extractKillRanks(raw: unknown): KillRank[] {
+  const obj =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>)
+      : {};
+  const ranks = Array.isArray(obj.ranks)
+    ? (obj.ranks as Record<string, unknown>[])
+    : [];
+  const out: KillRank[] = [];
+  for (const rk of ranks) {
+    const report = rk.report as Record<string, unknown> | undefined;
+    const t =
+      typeof rk.startTime === "number"
+        ? rk.startTime
+        : typeof report?.startTime === "number"
+          ? (report.startTime as number)
+          : null;
+    const pct =
+      typeof rk.rankPercent === "number"
+        ? rk.rankPercent
+        : typeof rk.percentile === "number"
+          ? (rk.percentile as number)
+          : null;
+    if (t != null && pct != null) out.push({ t, pct });
+  }
+  return out;
+}
+
+export type KillDetail = {
+  t: number;
+  pct: number;
+  /** WCL report code for a deep link, when present on the rank. */
+  reportCode: string | null;
+};
+
+/**
+ * Like extractKillRanks but also carries each kill's WCL report code, for the
+ * parses-heatmap "fight drill-in": click a cell → that character+boss's
+ * per-kill history with a link to each log. Newest kill first.
+ */
+export function extractKillDetail(raw: unknown): KillDetail[] {
+  const obj =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>)
+      : {};
+  const ranks = Array.isArray(obj.ranks)
+    ? (obj.ranks as Record<string, unknown>[])
+    : [];
+  const out: KillDetail[] = [];
+  for (const rk of ranks) {
+    const report = rk.report as Record<string, unknown> | undefined;
+    const t =
+      typeof rk.startTime === "number"
+        ? rk.startTime
+        : typeof report?.startTime === "number"
+          ? (report.startTime as number)
+          : null;
+    const pct =
+      typeof rk.rankPercent === "number"
+        ? rk.rankPercent
+        : typeof rk.percentile === "number"
+          ? (rk.percentile as number)
+          : null;
+    const reportCode =
+      typeof report?.code === "string" ? (report.code as string) : null;
+    if (t != null && pct != null) out.push({ t, pct, reportCode });
+  }
+  return out.sort((a, b) => b.t - a.t);
+}
+
 export type Role = "tank" | "healer" | "dps";
 
 // Spec NAME → role. Names that exist on two classes (Restoration,

@@ -367,6 +367,39 @@ export async function writeWclParseSnapshot(args: WclParseArgs): Promise<Result>
   return { inserted: true };
 }
 
+type ProfessionArgs = {
+  characterId: string;
+  source: SnapshotSource;
+  capturedAt: Date;
+  /** Compact derived list (see professions-logic.deriveProfessions). */
+  professions: unknown;
+  rawPayload: unknown;
+};
+export async function writeProfessionSnapshot(args: ProfessionArgs): Promise<Result> {
+  // Hash the DERIVED list (not the 65 KB raw) — that's what readers consume, so
+  // a new row is written exactly when a displayed value changes (level a tier,
+  // learn a recipe, gain a profession).
+  const sourceHash = canonicalHash({ s: args.source, p: args.professions });
+  const recent = await db.professionSnapshot.findFirst({
+    where: { characterId: args.characterId, source: args.source },
+    orderBy: { capturedAt: "desc" },
+    select: { sourceHash: true },
+  });
+  if (recent?.sourceHash === sourceHash) return { inserted: false, reason: "dedup" };
+
+  await db.professionSnapshot.create({
+    data: {
+      characterId: args.characterId,
+      capturedAt: args.capturedAt,
+      source: args.source,
+      sourceHash,
+      professions: toJsonValue(args.professions) as Prisma.InputJsonValue,
+      rawPayload: toJsonValue(args.rawPayload) as Prisma.InputJsonValue,
+    },
+  });
+  return { inserted: true };
+}
+
 /**
  * Convenience: log a write error without bubbling — used by Tier A workers
  * that should keep going across a per-character partial failure.

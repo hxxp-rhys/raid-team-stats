@@ -36,7 +36,7 @@ function roleField(label: string, members: RosterMember[]) {
   if (members.length === 0) return null;
   const present = members.filter((m) => countsAsPresent(m.state)).length;
   const lines = members.map((m) => {
-    const glyph = STATE_GLYPH[m.state] ?? "⬜";
+    const glyph = STATE_GLYPH[m.state] ?? "◽";
     const eta = m.state === "LATE" && m.etaMinutes != null ? ` ~${m.etaMinutes}m` : "";
     return `${glyph} ${m.name}${eta}`;
   });

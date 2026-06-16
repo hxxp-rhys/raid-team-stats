@@ -117,6 +117,46 @@ export function nightsOf(pulls: Pull[], gapMs = 6 * 60 * 60 * 1000): Pull[][] {
   return nights;
 }
 
+/**
+ * Per-night "buckets" for the curve's date brackets + separators: the FIRST and
+ * LAST pull index of each night (chronological), the night's start/end time, and
+ * its pull count. The indexes align with the displayed pull order (the widget
+ * sorts pulls chronologically, same as nightsOf), so `firstIndex`/`lastIndex`
+ * give the x-span of the night's date bracket and `startAt`/`endAt` its date
+ * range (a night that crosses local midnight spans two dates).
+ */
+export function nightBuckets(
+  pulls: Pull[],
+  gapMs = 6 * 60 * 60 * 1000,
+): Array<{
+  firstIndex: number;
+  lastIndex: number;
+  startAt: number;
+  endAt: number;
+  count: number;
+}> {
+  const nights = nightsOf(pulls, gapMs);
+  const out: Array<{
+    firstIndex: number;
+    lastIndex: number;
+    startAt: number;
+    endAt: number;
+    count: number;
+  }> = [];
+  let idx = 0;
+  for (const n of nights) {
+    out.push({
+      firstIndex: idx,
+      lastIndex: idx + n.length - 1,
+      startAt: n[0]!.startAt,
+      endAt: n[n.length - 1]!.endAt,
+      count: n.length,
+    });
+    idx += n.length;
+  }
+  return out;
+}
+
 /** Running maximum — the "best progress so far" line. */
 export function rollingBest(values: number[]): number[] {
   let best = -Infinity;

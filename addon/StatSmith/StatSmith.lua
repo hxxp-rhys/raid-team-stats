@@ -49,8 +49,18 @@ local AddonName, ns = ...
 -- Completeness now also requires lockout encounter data to have actually
 -- loaded (or zero saved instances), so a sparse capture can't be stamped
 -- complete by the vault/season fast-path proxy.
-local SCHEMA_VERSION = 2
-local ADDON_VERSION = "1.1.7"
+-- SCHEMA 3 / 1.2.0: raidObserver — OBSERVED raid presence for the
+-- attendance_ledger widget. No public API exposes who was actually in a raid
+-- group, so an in-game observer (any officer running the addon) accumulates,
+-- per raid SESSION, each raid member's first/last-seen + sample count +
+-- online/subgroup/role/class, sampled on the existing 60s ticker and at every
+-- ENCOUNTER_START/END. This is APPEND/accumulating data kept in a SEPARATE
+-- persistent StatSmithDB.raidObserver table (NOT regenerated each collect),
+-- and rides the normal export. The server upserts each session to
+-- RaidNightObservation and unions observers at read time. Signups stay
+-- first-party (the website calendar) — never inferred from presence.
+local SCHEMA_VERSION = 3
+local ADDON_VERSION = "1.2.0"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -599,6 +609,114 @@ local function collectConsumables()
   return { items = items }
 end
 
+-- ─── observed raid presence (attendance_ledger, SCHEMA 3) ───────────────
+-- Accumulates, per raid SESSION, who was in the raid group and when. Unlike
+-- every collector above (which snapshot the CURRENT state and are rebuilt
+-- each collect), this APPENDS into a persistent StatSmithDB.raidObserver so a
+-- whole night of presence survives across collect() calls and /reload. Each
+-- 60s tick / ENCOUNTER event updates each present member's first/last-seen.
+local SESSION_GAP = 2 * 60 * 60 -- >2h since the last sample starts a new night
+local MAX_SESSIONS = 12 -- bound the payload — keep the most recent nights
+
+local function pruneSessions(ro)
+  local keys = {}
+  for k, s in pairs(ro.sessions) do
+    keys[#keys + 1] = { k = k, t = (s and s.startedAt) or 0 }
+  end
+  if #keys <= MAX_SESSIONS then return end
+  table.sort(keys, function(a, b) return a.t > b.t end) -- newest first
+  for i = MAX_SESSIONS + 1, #keys do
+    ro.sessions[keys[i].k] = nil
+  end
+end
+
+local function collectRaidPresence()
+  if not (IsInRaid and IsInRaid()) then return end
+  local now = time()
+  StatSmithDB = StatSmithDB or {}
+  StatSmithDB.raidObserver = StatSmithDB.raidObserver or { sessions = {} }
+  local ro = StatSmithDB.raidObserver
+  ro.sessions = ro.sessions or {}
+  -- Session boundary: a >2h gap (or first ever sample) opens a new night.
+  if not ro.currentSession or (now - (ro.lastSampleAt or 0)) > SESSION_GAP then
+    ro.currentSession = now
+  end
+  ro.lastSampleAt = now
+  local sid = tostring(ro.currentSession)
+  local sess = ro.sessions[sid]
+  if not sess then
+    sess = { startedAt = ro.currentSession, endedAt = now, members = {} }
+    ro.sessions[sid] = sess
+    pruneSessions(ro)
+  end
+  sess.endedAt = now
+  -- Instance context (best-effort): name + difficulty for the night label.
+  if GetInstanceInfo then
+    local ok, name, _itype, _diffId, diffName = pcall(GetInstanceInfo)
+    if ok and name and name ~= "" then
+      sess.instanceName = name
+      if diffName and diffName ~= "" then sess.difficulty = diffName end
+    end
+  end
+  -- Roster snapshot. GetRaidRosterInfo: name, rank, subgroup, level, class,
+  -- fileName, zone, online, isDead, role, isML, combatRole.
+  local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+  for i = 1, n do
+    local name, _, subgroup, _, _, fileName, _, online, _, _, _, combatRole =
+      GetRaidRosterInfo(i)
+    if name and name ~= "" then
+      local m = sess.members[name]
+      if not m then
+        m = { name = name, firstSeen = now, samples = 0 }
+        sess.members[name] = m
+      end
+      m.lastSeen = now
+      m.samples = m.samples + 1
+      m.online = online and true or false
+      m.subgroup = subgroup
+      m.role = combatRole
+      m.class = fileName
+    end
+  end
+end
+
+-- Convert the persistent keyed accumulation into the array shape the server
+-- expects (luaArray-friendly). Returns nil when nothing has been observed.
+local function buildRaidObserver()
+  local ro = StatSmithDB and StatSmithDB.raidObserver
+  if type(ro) ~= "table" or type(ro.sessions) ~= "table" then return nil end
+  local sessions = {}
+  for sid, s in pairs(ro.sessions) do
+    if type(s) == "table" and type(s.members) == "table" then
+      local members = {}
+      for _, m in pairs(s.members) do
+        members[#members + 1] = {
+          name = m.name,
+          firstSeen = m.firstSeen,
+          lastSeen = m.lastSeen,
+          samples = m.samples,
+          online = m.online,
+          subgroup = m.subgroup,
+          role = m.role,
+          class = m.class,
+        }
+      end
+      if #members > 0 then
+        sessions[#sessions + 1] = {
+          sessionId = sid,
+          startedAt = s.startedAt,
+          endedAt = s.endedAt,
+          instanceName = s.instanceName,
+          difficulty = s.difficulty,
+          members = members,
+        }
+      end
+    end
+  end
+  if #sessions == 0 then return nil end
+  return { sessions = sessions }
+end
+
 -- ─── assemble + persist ─────────────────────────────────────────────────
 local function safe(fn, fallback)
   local ok, res = pcall(fn)
@@ -607,6 +725,10 @@ local function safe(fn, fallback)
 end
 
 local function collect()
+  -- Accumulate an observed-presence sample BEFORE assembling the payload, so
+  -- the export carries the latest raid roster. Side-effects StatSmithDB
+  -- .raidObserver (persistent); never throws (pcall-guarded).
+  safe(collectRaidPresence)
   local payload = {
     schema = SCHEMA_VERSION,
     addonVersion = ADDON_VERSION,
@@ -622,6 +744,9 @@ local function collect()
     lockouts = safe(collectLockouts),
     consumables = safe(collectConsumables),
   }
+  -- Observed raid presence (omitted entirely when nothing's been seen).
+  local ro = safe(buildRaidObserver, nil)
+  if type(ro) == "table" then payload.raidObserver = ro end
   -- "Complete" = the data that needs a Blizzard server round-trip has had
   -- its chance to land THIS session: UPDATE_INSTANCE_INFO has fired (raid
   -- lockouts settled — fires even with zero lockouts) AND the Great Vault
@@ -772,6 +897,10 @@ ev:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 ev:RegisterEvent("UPDATE_INSTANCE_INFO")
 ev:RegisterEvent("TRAIT_CONFIG_UPDATED")
 ev:RegisterEvent("PLAYER_TALENT_UPDATE")
+-- Pull boundaries — sample observed presence at the start/end of every
+-- encounter (the 60s ticker covers the rest of the night).
+ev:RegisterEvent("ENCOUNTER_START")
+ev:RegisterEvent("ENCOUNTER_END")
 ev:SetScript("OnEvent", function(self, event, arg1)
   if event == "ADDON_LOADED" and arg1 == AddonName then
     StatSmithDB = StatSmithDB or {}

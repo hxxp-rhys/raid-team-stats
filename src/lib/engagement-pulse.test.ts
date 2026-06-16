@@ -4,14 +4,111 @@ import {
   absenceSignal,
   activitySignal,
   closedWeekStarts,
+  concerningStreak,
   decayFlag,
+  engagementComponents,
+  engagementTrend,
   loginSignal,
   medianOf,
   mplusSignal,
   riskScore,
   watchlisted,
+  weeklyEngagementScore,
   weekStartUtc,
+  type EngagementCell,
 } from "./engagement-pulse";
+
+const cell = (o: Partial<EngagementCell>): EngagementCell => ({
+  score: 0,
+  raidUnlocked: 0,
+  mplusUnlocked: 0,
+  mplusRuns: 0,
+  raided: false,
+  ...o,
+});
+
+describe("weeklyEngagementScore", () => {
+  it("returns null for an unobserved week (gap, not zero)", () => {
+    expect(weeklyEngagementScore(cell({ score: null }))).toBeNull();
+  });
+
+  it("is 0 for an observed-but-inactive week", () => {
+    expect(weeklyEngagementScore(cell({ score: 0 }))).toBe(0);
+  });
+
+  it("plots a point for a raid-kill or M+ week with no vault row", () => {
+    expect(weeklyEngagementScore(cell({ score: null, raided: true }))).toBe(25);
+    expect(weeklyEngagementScore(cell({ score: null, mplusRuns: 8 }))).toBe(15);
+    expect(weeklyEngagementScore(cell({ score: null }))).toBeNull();
+  });
+
+  it("maxes at 100 with full raid + kill + full M+ + capped runs", () => {
+    expect(
+      weeklyEngagementScore(
+        cell({ score: 6, raidUnlocked: 3, mplusUnlocked: 3, mplusRuns: 8, raided: true }),
+      ),
+    ).toBe(100);
+  });
+
+  it("weights raiding above M+ for equal vault progress", () => {
+    const raidOnly = weeklyEngagementScore(
+      cell({ score: 3, raidUnlocked: 3, raided: true }),
+    )!;
+    const mplusOnly = weeklyEngagementScore(
+      cell({ score: 3, mplusUnlocked: 3, mplusRuns: 8 }),
+    )!;
+    expect(raidOnly).toBeGreaterThan(mplusOnly); // 0.35+0.25 vs 0.25+0.15
+  });
+});
+
+describe("engagementComponents", () => {
+  it("normalises each metric to 0–100, null on a gap", () => {
+    expect(engagementComponents(cell({ score: null }))).toBeNull();
+    const c = engagementComponents(
+      cell({ score: 4, raidUnlocked: 3, mplusUnlocked: 1, mplusRuns: 4, raided: true }),
+    )!;
+    expect(c.raidVault).toBe(100);
+    expect(c.raided).toBe(100);
+    expect(c.mplusVault).toBeCloseTo(33.33, 1);
+    expect(c.mplusRuns).toBe(50);
+  });
+});
+
+describe("engagementTrend", () => {
+  it("flat with too few observed weeks", () => {
+    expect(engagementTrend([null, 50]).dir).toBe("flat");
+  });
+  it("detects a rising trend", () => {
+    expect(engagementTrend([10, 20, 60, 70]).dir).toBe("up");
+  });
+  it("detects a falling trend and ignores gaps", () => {
+    expect(engagementTrend([80, null, 70, 20, 10]).dir).toBe("down");
+  });
+  it("flat inside the deadband", () => {
+    expect(engagementTrend([50, 52, 48, 51]).dir).toBe("flat");
+  });
+});
+
+describe("concerningStreak", () => {
+  it("counts trailing weeks at or below half the median", () => {
+    // median of [80,70,75,20,15] = 70; half = 35; trailing 20,15 are ≤35
+    expect(concerningStreak([80, 70, 75, 20, 15])).toBe(2);
+  });
+  it("escalates to 3+ for a sustained slump", () => {
+    // median([80,70,30,20,15]) = 30; half=15 → only 15 qualifies → 1
+    // median([90,80,30,20,10]) = 30; half=15 → 10 only → 1; use clearer set:
+    expect(concerningStreak([90, 80, 70, 20, 15, 10])).toBe(3); // median 45, half 22.5
+  });
+  it("skips gaps without breaking the run", () => {
+    expect(concerningStreak([80, 70, 75, 20, null, 15])).toBe(2);
+  });
+  it("returns 0 when the median is too low to call a slump", () => {
+    expect(concerningStreak([5, 0, 0, 0])).toBe(0);
+  });
+  it("returns 0 with too little history", () => {
+    expect(concerningStreak([null, 50])).toBe(0);
+  });
+});
 
 describe("weekStartUtc", () => {
   it("pins a mid-week date to the previous Tuesday 15:00 UTC", () => {

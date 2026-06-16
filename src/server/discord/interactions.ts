@@ -13,6 +13,11 @@ import {
 import { intentKey } from "@/server/calendar/sync";
 import { applySignupIntent, type SignupState } from "@/server/calendar/signup-intent";
 import { consumeLinkCode, resolveDiscordUserId } from "@/server/discord/link";
+import {
+  passesButtonGate,
+  passesCommandGate,
+  type GateMember,
+} from "@/lib/discord/gate";
 
 /**
  * Pure-ish interaction dispatcher. Takes the already-verified interaction
@@ -27,7 +32,7 @@ type Interaction = {
   id: string;
   type: number;
   token?: string;
-  member?: { user?: DiscordUser };
+  member?: { user?: DiscordUser; roles?: string[]; permissions?: string };
   user?: DiscordUser;
   guild_id?: string;
   channel_id?: string;
@@ -59,6 +64,46 @@ async function resolveMemberCharacter(
     orderBy: { id: "asc" },
   });
   return m?.characterId ?? null;
+}
+
+/** The member's roles/permissions from the interaction (empty in a DM). */
+function gateMemberOf(interaction: Interaction): GateMember {
+  return {
+    roles: interaction.member?.roles,
+    permissions: interaction.member?.permissions,
+  };
+}
+
+const ROLE_GATE_MSG =
+  "You don't have the role required to sign up from Discord here. Ask a raid leader.";
+
+/**
+ * Is the signup-button role gate active for this event's team AND failed by
+ * `member`? Loads the team's `buttonRoleId` (+ link role) via the event. Returns
+ * false (allow) when there's no integration or the gate is off/satisfied.
+ */
+async function buttonGateBlocks(
+  eventId: string,
+  member: GateMember,
+): Promise<boolean> {
+  const ev = await db.raidEvent.findUnique({
+    where: { id: eventId },
+    select: {
+      raidTeam: {
+        select: {
+          discordIntegration: {
+            select: { requiredRoleId: true, buttonRoleId: true },
+          },
+        },
+      },
+    },
+  });
+  const gate = ev?.raidTeam?.discordIntegration;
+  if (!gate) return false;
+  return !passesButtonGate(
+    { requiredRoleId: gate.requiredRoleId, buttonRoleId: gate.buttonRoleId },
+    member,
+  );
 }
 
 /** Apply an attendance state from a Discord interaction and build the ack. */
@@ -120,6 +165,10 @@ async function handleComponent(interaction: Interaction, snowflake: string) {
   const route = decodeRoute(interaction.data?.custom_id ?? "");
   if (!route) return ephemeral("Sorry, that button is no longer valid.");
   if (route.kind === "att") {
+    // Opt-in role gate: block ungated users at the tap, before any modal opens.
+    if (await buttonGateBlocks(route.eventId, gateMemberOf(interaction))) {
+      return ephemeral(ROLE_GATE_MSG);
+    }
     if (route.state === "LATE") return etaModal(route.eventId);
     if (route.state === "ABSENT") return reasonModal(route.eventId);
     return applyAndAck(snowflake, interaction.id, route.eventId, route.state, {});
@@ -136,6 +185,15 @@ async function handleModal(interaction: Interaction, snowflake: string) {
   if (!route) return ephemeral("That form is no longer valid.");
   const value =
     interaction.data?.components?.[0]?.components?.[0]?.value?.trim() ?? "";
+
+  // Re-check the gate on submit (the role could have been removed since the
+  // modal opened, or the submit forged) — cheap defense in depth.
+  if (
+    (route.kind === "eta" || route.kind === "reason") &&
+    (await buttonGateBlocks(route.eventId, gateMemberOf(interaction)))
+  ) {
+    return ephemeral(ROLE_GATE_MSG);
+  }
 
   if (route.kind === "eta") {
     const digits = value.match(/\d+/)?.[0];
@@ -157,6 +215,18 @@ async function handleCommand(interaction: Interaction, snowflake: string) {
     if (sub?.name === "link") {
       const code = sub.options?.find((o) => o.name === "code")?.value ?? "";
       if (!code) return ephemeral("Provide the code from your account page.");
+      // Role gate (if any team in this guild requires a role to link).
+      if (interaction.guild_id) {
+        const gates = await db.discordIntegration.findMany({
+          where: { guildId: interaction.guild_id, requiredRoleId: { not: null } },
+          select: { requiredRoleId: true },
+        });
+        if (!passesCommandGate(gates.map((g) => g.requiredRoleId), gateMemberOf(interaction))) {
+          return ephemeral(
+            "You don't have the role required to link your account in this server. Ask a raid leader.",
+          );
+        }
+      }
       const res = await consumeLinkCode(db, code, snowflake);
       if (res.ok) {
         return ephemeral(

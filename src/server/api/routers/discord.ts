@@ -61,6 +61,8 @@ export const discordRouter = router({
           channelId: true,
           autoPostEnabled: true,
           autoPostLeadDays: true,
+          requiredRoleId: true,
+          buttonRoleId: true,
         },
       });
       return { enabled: isDiscordEnabled(), integration };
@@ -75,6 +77,10 @@ export const discordRouter = router({
         channelId: snowflake,
         autoPostEnabled: z.boolean().optional(),
         autoPostLeadDays: z.number().int().min(1).max(60).optional(),
+        // "" clears a gate (open). requiredRoleId gates /statsmith link;
+        // buttonRoleId independently gates the signup buttons.
+        requiredRoleId: z.union([snowflake, z.literal("")]).optional(),
+        buttonRoleId: z.union([snowflake, z.literal("")]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -91,6 +97,17 @@ export const discordRouter = router({
         ...(input.autoPostEnabled !== undefined ? { autoPostEnabled: input.autoPostEnabled } : {}),
         ...(input.autoPostLeadDays !== undefined ? { autoPostLeadDays: input.autoPostLeadDays } : {}),
       };
+      // Role gates: each is independent and "" clears it (null = open). Only
+      // write a field when it was provided, so a partial update can't wipe the
+      // other gate.
+      const gateFields = {
+        ...(input.requiredRoleId !== undefined
+          ? { requiredRoleId: input.requiredRoleId || null }
+          : {}),
+        ...(input.buttonRoleId !== undefined
+          ? { buttonRoleId: input.buttonRoleId || null }
+          : {}),
+      };
       await ctx.db.discordIntegration.upsert({
         where: { raidTeamId: input.raidTeamId },
         create: {
@@ -99,8 +116,9 @@ export const discordRouter = router({
           channelId: input.channelId,
           installedByUserId: ctx.session.user.id,
           ...autoFields,
+          ...gateFields,
         },
-        update: { guildId: input.guildId, channelId: input.channelId, ...autoFields },
+        update: { guildId: input.guildId, channelId: input.channelId, ...autoFields, ...gateFields },
       });
       // ALWAYS reset the relay cursor to the current outbox tip on bind. This
       // both prevents backfilling past/history events on first bind AND avoids a

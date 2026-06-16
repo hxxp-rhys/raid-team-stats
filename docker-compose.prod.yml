@@ -74,6 +74,10 @@ services:
       start_period: 30s
       retries: 4
 
+  # NOTE: the public recruitment form (/apply/<guildId>/<slug>) is served by the
+  # main `web` container at a PATH on {$APP_HOST} — no separate container or
+  # apply.* subdomain (no extra Cloudflare DNS record / cert needed).
+
   worker:
     build:
       context: .

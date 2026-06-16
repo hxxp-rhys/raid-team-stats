@@ -36,3 +36,6 @@
 		level INFO
 	}
 }
+
+# The public recruitment form is served by `web` at /apply/<guildId>/<slug> on
+# {$APP_HOST} above — no separate apply.* subdomain.

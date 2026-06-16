@@ -11,6 +11,7 @@ import { normalizeRaidTeamSlug } from "@/lib/realm";
 import { audit } from "@/server/security/audit";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import { createShareToken, verifyShareToken } from "@/server/security/share-token";
+import { parseLayout } from "@/lib/widgets/types";
 import { env } from "@/env";
 
 /**
@@ -177,20 +178,34 @@ export const dashboardRouter = router({
       z.object({
         dashboardId: z.string().cuid(),
         ttlDays: z.number().int().min(1).max(30).optional(),
+        // When set, the link only exposes these tab ids (a presentation
+        // boundary — see getByShareToken). Omitted/empty = share every tab.
+        allowedTabIds: z.array(z.string()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const dashboard = await ctx.db.dashboardConfig.findUnique({
         where: { id: input.dashboardId },
-        select: { raidTeamId: true, name: true, slug: true },
+        select: { raidTeamId: true, name: true, slug: true, layout: true },
       });
       if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, dashboard.raidTeamId, "CO_LEADER");
+
+      // Clamp the requested tabs to ones that actually exist on the dashboard,
+      // so a stale/garbage id can't poison the token. An empty result (or no
+      // selection) means "share all tabs".
+      let allowedTabIds: string[] | undefined;
+      if (input.allowedTabIds && input.allowedTabIds.length > 0) {
+        const ids = new Set(parseLayout(dashboard.layout).tabs.map((t) => t.id));
+        const kept = input.allowedTabIds.filter((id) => ids.has(id));
+        if (kept.length > 0) allowedTabIds = kept;
+      }
 
       const { token, expiresAt } = createShareToken({
         dashboardId: input.dashboardId,
         raidTeamId: dashboard.raidTeamId,
         ttlDays: input.ttlDays,
+        allowedTabIds,
       });
       const baseUrl = env.APP_URL.replace(/\/$/, "");
       const url = `${baseUrl}/share/${encodeURIComponent(token)}`;
@@ -239,6 +254,28 @@ export const dashboardRouter = router({
       });
       if (!dashboard || dashboard.raidTeamId !== verified.raidTeamId) {
         throw new TRPCError({ code: "NOT_FOUND" });
+      }
+
+      // Tab-scoped link: drop every non-allowed tab from the layout BEFORE it
+      // leaves the server, so the share page can only ever render/query the
+      // shared tabs. (A presentation boundary — the per-widget data queries are
+      // still team-scoped; this hides tabs through the link, not per-widget.)
+      if (verified.allowedTabIds && verified.allowedTabIds.length > 0) {
+        const allowed = new Set(verified.allowedTabIds);
+        const layout = parseLayout(dashboard.layout);
+        const tabs = layout.tabs.filter((t) => allowed.has(t.id));
+        const mobileTabs = layout.mobileTabs?.filter((t) => allowed.has(t.id));
+        const survivingIds = new Set(tabs.map((t) => t.id));
+        const defaultTabId =
+          layout.defaultTabId && survivingIds.has(layout.defaultTabId)
+            ? layout.defaultTabId
+            : tabs[0]?.id;
+        dashboard.layout = {
+          ...layout,
+          tabs,
+          ...(mobileTabs ? { mobileTabs } : {}),
+          ...(defaultTabId ? { defaultTabId } : {}),
+        } as typeof dashboard.layout;
       }
 
       if (!dashboard.shareIsPublic) {
@@ -302,11 +339,15 @@ export const dashboardRouter = router({
     .query(async ({ ctx, input }) => {
       const dashboard = await ctx.db.dashboardConfig.findUnique({
         where: { id: input.dashboardId },
-        select: { raidTeamId: true, shareIsPublic: true },
+        select: { raidTeamId: true, shareIsPublic: true, layout: true },
       });
       if (!dashboard) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, dashboard.raidTeamId, "CO_LEADER");
-      return { shareIsPublic: dashboard.shareIsPublic };
+      const tabs = parseLayout(dashboard.layout).tabs.map((t) => ({
+        id: t.id,
+        name: t.name,
+      }));
+      return { shareIsPublic: dashboard.shareIsPublic, tabs };
     }),
 
   /**

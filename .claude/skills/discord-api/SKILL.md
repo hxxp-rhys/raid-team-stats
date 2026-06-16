@@ -98,6 +98,34 @@ Base `https://discord.com/api/v10`. Header `Authorization: Bot <DISCORD_BOT_TOKE
 - OAuth2 (`identify`) via Auth.js is the optional convenience path (new public
   callback → CF-404-prone until purged).
 
+## Role gate (optional Discord-side pre-filter — NOT authz)
+TWO INDEPENDENT roles on `DiscordIntegration`, each null=open. Pure logic in
+[src/lib/discord/gate.ts](../../../src/lib/discord/gate.ts).
+- `requiredRoleId` gates `/statsmith link`: caller must **hold that role**
+  (`interaction.member.roles` includes it) **or** be a Discord **admin**
+  (`member.permissions` has the `ADMINISTRATOR` 0x8 bit). Admins always bypass so
+  a leader can't lock themselves/the owner out.
+- `buttonRoleId` gates the signup BUTTONS: when set, a member may tap if they
+  hold the **buttonRole OR the link role (`requiredRoleId`) OR are an admin**.
+  Null buttonRole = buttons **open**. Enforced at the tap (before any modal
+  opens) AND re-checked on modal submit. The two roles are independent — a button
+  role can be set with no link role, and vice-versa.
+- The command gate is **guild-wide** (a guild may bind >1 team): pass if the
+  member holds ANY bound team's link role, or is admin, or no team gates.
+- **This is layered ON TOP of — never replaces — the real checks.** Discord
+  `member.roles` is convenient surface-gating only; site authz still flows through
+  `Account(provider="discord")` linkage + `RaidTeamMembership` (the signup-intent
+  service rejects non-members regardless of Discord role). Consistent with "NEVER
+  trust Discord guild roles for authz" above: the role here can only *remove*
+  access from the Discord surface, never *grant* DB access.
+- **Developer-Mode help link** (shown in the settings UI so leaders can find role
+  IDs): `https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID`.
+  Defined as `DISCORD_DEV_MODE_HELP` in
+  [discord-settings.tsx](../../../src/app/(app)/guild/[guildId]/team/[teamId]/calendar/discord-settings.tsx).
+  **VERIFY-QUARTERLY** (Discord reorganizes its help center): re-check the URL
+  still 200s and still covers enabling Developer Mode; update both spots if it
+  moved. Last verified 2026-06-14; **next check due 2026-09-14**.
+
 ## Install (per Discord guild, by an admin)
 `oauth2/authorize?client_id=…&scope=bot+applications.commands&permissions=<INT>`.
 Permissions: View Channel + Send Messages + Embed Links + Read Message History +
