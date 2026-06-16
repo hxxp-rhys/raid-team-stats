@@ -124,6 +124,13 @@ export function AddonUploaderCard() {
                 displayed again — if you&apos;ve lost it, regenerate a new one
                 (you&apos;ll need to reconfigure the installer / companion).
               </p>
+              <p className="text-muted-foreground text-xs">
+                {q.data?.tokenLastUsedAt
+                  ? `Last upload ${new Date(q.data.tokenLastUsedAt).toLocaleString()}.`
+                  : "No uploads received yet."}{" "}
+                The companion rotates this token automatically on every upload —
+                a leaked token stops working after your next sync.
+              </p>
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"

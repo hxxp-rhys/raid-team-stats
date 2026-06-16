@@ -35,6 +35,13 @@ model User {
   // authenticate without a browser session. Null until the user generates
   // one on the setup page; regenerable (invalidates the old one).
   uploadToken   String?   @unique
+  // Rolling token rotation for the companion uploader: on each successful
+  // upload the server mints a new token, demotes the old one to `Prev` (honored
+  // once as a grace window so a dropped response self-heals), and records when
+  // it last rotated / was last used (surfaced on the Account page).
+  uploadTokenPrev       String?   @unique
+  uploadTokenRotatedAt  DateTime?
+  uploadTokenLastUsedAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings or the `#!/bin/sh` shebang breaks
+# inside the Linux container (a trailing CR makes the interpreter "not found").
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

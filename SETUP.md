@@ -107,9 +107,16 @@ Run these and paste each result into the matching `.env` key:
 
 ```bash
 openssl rand -base64 48     # -> AUTH_SECRET           (session signing)
-openssl rand -base64 32     # -> TOKEN_ENCRYPTION_KEY  (encrypts stored OAuth tokens; must be 32 bytes)
-openssl rand -hex 32        # -> METRICS_TOKEN         (optional; only if you scrape /api/metrics)
+openssl rand -base64 48     # -> SHARE_TOKEN_SECRET    (signs dashboard share links — recommended)
+openssl rand -base64 32     # -> TOKEN_ENCRYPTION_KEY  (encrypts stored OAuth tokens; must decode to 32 bytes)
+openssl rand -hex 32        # -> METRICS_TOKEN         (REQUIRED in production)
 ```
+
+`SHARE_TOKEN_SECRET` is optional: if you skip it, share links are signed with
+`AUTH_SECRET` instead — which means revoking a leaked link would force everyone
+to log in again. Setting a separate value lets you revoke **all** share links on
+their own (by rotating just this key). `METRICS_TOKEN` is optional in local dev
+but **required in production** — the app refuses to boot without it.
 
 Also make yourself a platform admin so you can manage everything from the UI —
 set this to the email you'll sign in with:
@@ -196,8 +203,12 @@ TLS + a non-root, read-only web container + a background worker).
    ```
    APP_HOST=your-domain.example
    POSTGRES_PASSWORD=<a long random password>
+   REDIS_PASSWORD=<a long random password>   # required — Redis won't start without it
+   METRICS_TOKEN=<openssl rand -hex 32>      # required — the app won't boot without it
    ```
-   …plus the same secrets/keys from your `.env`. See `.env.example` for the full list.
+   …plus the rest of the secrets/keys from your `.env` (`AUTH_SECRET`,
+   `SHARE_TOKEN_SECRET`, `TOKEN_ENCRYPTION_KEY`, the provider keys, etc.). See
+   `.env.example` for the full list.
 5. Bring it up:
    ```bash
    docker compose -f docker-compose.prod.yml up -d
@@ -205,6 +216,41 @@ TLS + a non-root, read-only web container + a background worker).
    Caddy auto-acquires a certificate for `APP_HOST`. (Tip: set `APP_HOST=localhost`
    for a first smoke test to skip the public-DNS requirement — Caddy issues a
    self-signed cert.)
+
+---
+
+## Running from a pre-built image (skip the build)
+
+Every push to `main` (and every `vX.Y.Z` release tag) publishes a ready-to-run
+image via GitHub Actions, so you don't have to build it yourself:
+
+```bash
+# GitHub Container Registry — no account needed:
+docker pull ghcr.io/hxxp-rhys/raid-stats:latest
+
+# …or Docker Hub, if the maintainer enabled it:
+docker pull hxxp-rhys/raid-stats:latest
+```
+
+To run the production stack from the published image instead of building locally,
+replace the `web` service's `build:` block in `docker-compose.prod.yml` with:
+
+```yaml
+    image: ghcr.io/hxxp-rhys/raid-stats:latest
+```
+
+Then bring it up as in §8. On a **fresh database**, apply the schema once — the
+image bundles the Prisma CLI + migrations (run this against Postgres directly,
+not through PgBouncer):
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm web npx prisma migrate deploy
+```
+
+> **Heads-up:** the published image runs the web app (dashboards, calendar,
+> recruitment). The background **sync worker** (Battle.net / WCL / Raider.IO data
+> refresh) isn't bundled in this image yet, so keep building the `worker` service
+> locally for now. See the repo's deploy notes / issues for status.
 
 ---
 
@@ -216,8 +262,38 @@ docker compose up -d --build                     # local
 # docker compose -f docker-compose.prod.yml up -d --build   # production
 ```
 
-Database migrations run automatically on container start, so an update is just a
-pull + rebuild.
+Database migrations run automatically on container start, so a routine update is
+just a pull + rebuild.
+
+### One-time steps for the PII-encryption release
+
+This release encrypts all non-email PII (display names, avatars, recruitment
+answers) at rest and rotates the companion upload token automatically. When you
+upgrade an **existing** deployment to it, do these once (a brand-new install on
+an empty database needs neither):
+
+1. **Encrypt rows that predate encryption.** *After* `up -d --build` has deployed
+   the new image (so the running app can read what the backfill writes), run the
+   idempotent backfill once:
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm -e RUN_MIGRATIONS=false \
+     web node_modules/.bin/tsx scripts/backfill-pii-encryption.ts
+   ```
+   (Or set `RUN_PII_BACKFILL=true` on the `web` service for a single deploy — the
+   entrypoint runs it right after migrations — then remove it.) It's safe to
+   re-run; already-encrypted rows are skipped. `TOKEN_ENCRYPTION_KEY` must be set
+   and stable.
+
+2. **Rebuild + redeploy the companion installer** so existing users pick up token
+   rotation (the installer version is bumped to **1.0.19.0**):
+   ```powershell
+   pwsh installer/build.ps1        # → installer/dist/raid-team-stats-uploader.msi (+ .exe)
+   ```
+   Then copy `installer/dist/raid-team-stats-uploader.msi` **and**
+   `installer/Package.wxs` to the path the `web` container serves the installer
+   from — it's deployed out-of-band (a ~28 MB git-ignored artifact). Companions
+   that aren't updated keep working unchanged; they just don't rotate their token
+   until upgraded.
 
 ---
 

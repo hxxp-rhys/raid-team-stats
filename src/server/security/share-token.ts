@@ -9,12 +9,13 @@ import { env } from "@/env";
  *   v1.<payload-b64url>.<signature-b64url>
  *
  *   payload    = JSON.stringify({d:dashboardId,e:expiresAtMs,r:raidTeamId})
- *   signature  = HMAC-SHA256(AUTH_SECRET, "v1." + payload-b64url)
+ *   signature  = HMAC-SHA256(SHARE_TOKEN_SECRET, "v1." + payload-b64url)
  *
  * All bytes are base64url (no padding). Signature comparison is
- * timing-safe. Tokens are stateless — there's no database row — so
- * revoking a single share link means rotating AUTH_SECRET (which would
- * invalidate every existing token and signed session). Per-dashboard
+ * timing-safe. Tokens are stateless — there's no database row. The signing
+ * key is SHARE_TOKEN_SECRET (falling back to AUTH_SECRET when unset), kept
+ * separate from AUTH_SECRET so that rotating it to revoke ALL outstanding
+ * share links does NOT also invalidate every signed-in session. Per-dashboard
  * revocation exists via DashboardConfig.shareIsPublic (and link expiry).
  *
  * TWO-MODE AUTHORIZATION (checked fresh on every request, never cached):
@@ -48,10 +49,12 @@ function b64urlDecode(s: string): Buffer {
   return Buffer.from(s, "base64url");
 }
 
+// Dedicated key, decoupled from the session secret so share links can be
+// revoked en masse (rotate SHARE_TOKEN_SECRET) without forcing a global logout.
+const shareKey = env.SHARE_TOKEN_SECRET ?? env.AUTH_SECRET;
+
 function sign(message: string): string {
-  return b64urlEncode(
-    createHmac("sha256", env.AUTH_SECRET).update(message).digest(),
-  );
+  return b64urlEncode(createHmac("sha256", shareKey).update(message).digest());
 }
 
 export type CreateShareTokenInput = {

@@ -18,6 +18,7 @@ const {
   mkdirSync,
   statSync,
   writeFileSync,
+  renameSync,
 } = require("node:fs");
 const { join, dirname } = require("node:path");
 const { homedir } = require("node:os");
@@ -107,6 +108,31 @@ function loadConfig() {
   return { api, token, wowPath };
 }
 
+// Persist a rotated upload token back to config.json (atomic temp+rename, with
+// a non-atomic fallback), preserving the other keys.
+function persistToken(newToken) {
+  const p = configPath();
+  let cfg = {};
+  try {
+    cfg = JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    /* missing/corrupt — recreate */
+  }
+  cfg.token = newToken;
+  const data = JSON.stringify(cfg, null, 2) + "\n";
+  try {
+    const tmp = `${p}.tmp`;
+    writeFileSync(tmp, data);
+    renameSync(tmp, p);
+  } catch {
+    try {
+      writeFileSync(p, data);
+    } catch (e) {
+      log(`warning: could not save rotated token: ${(e && e.message) || e}`);
+    }
+  }
+}
+
 function findSavedVarFiles(wowPath) {
   const found = [];
   const accountRoot = join(wowPath, "_retail_", "WTF", "Account");
@@ -160,6 +186,8 @@ async function uploadOne(cfg, file) {
       headers: {
         "Content-Type": "text/plain",
         Authorization: `Bearer ${cfg.token}`,
+        // Opt in to rolling token rotation: we persist the next token below.
+        "X-RTS-Rotate": "1",
       },
       body: exp,
     });
@@ -173,6 +201,17 @@ async function uploadOne(cfg, file) {
     body = JSON.parse(bodyText);
   } catch {
     body = { raw: bodyText.slice(0, 200) };
+  }
+  // Rolling token rotation: adopt + persist the next token the server issued.
+  if (
+    res.ok &&
+    body.ok &&
+    typeof body.nextToken === "string" &&
+    body.nextToken.length >= 16 &&
+    body.nextToken !== cfg.token
+  ) {
+    cfg.token = body.nextToken;
+    persistToken(body.nextToken);
   }
   if (res.ok && body.ok && body.skipped) {
     log(`skipped: ${body.skipped}`);

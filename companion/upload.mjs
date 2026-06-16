@@ -22,6 +22,7 @@ import {
   mkdirSync,
   statSync,
   writeFileSync,
+  renameSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,6 +114,33 @@ function loadConfig() {
   return { api, token, wowPath };
 }
 
+// Persist a rotated upload token back to config.json (atomic temp+rename, with
+// a non-atomic fallback), preserving the other keys. The server hands us a new
+// token on each accepted upload; saving it means a leaked token is invalidated
+// by your normal use within ~one upload cycle.
+function persistToken(newToken) {
+  const p = configPath();
+  let cfg = {};
+  try {
+    cfg = JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    /* missing/corrupt — recreate */
+  }
+  cfg.token = newToken;
+  const data = JSON.stringify(cfg, null, 2) + "\n";
+  try {
+    const tmp = `${p}.tmp`;
+    writeFileSync(tmp, data);
+    renameSync(tmp, p);
+  } catch {
+    try {
+      writeFileSync(p, data);
+    } catch (e) {
+      log(`warning: could not save rotated token: ${e?.message ?? e}`);
+    }
+  }
+}
+
 // One SavedVariables file per WoW account folder (retail).
 function findSavedVarFiles(wowPath) {
   const found = [];
@@ -171,6 +199,8 @@ async function uploadOne(cfg, file) {
       headers: {
         "Content-Type": "text/plain",
         Authorization: `Bearer ${cfg.token}`,
+        // Opt in to rolling token rotation: we persist the next token below.
+        "X-RTS-Rotate": "1",
       },
       body: exp,
     });
@@ -184,6 +214,17 @@ async function uploadOne(cfg, file) {
     body = JSON.parse(bodyText);
   } catch {
     body = { raw: bodyText.slice(0, 200) };
+  }
+  // Rolling token rotation: adopt + persist the next token the server issued.
+  if (
+    res.ok &&
+    body.ok &&
+    typeof body.nextToken === "string" &&
+    body.nextToken.length >= 16 &&
+    body.nextToken !== cfg.token
+  ) {
+    cfg.token = body.nextToken;
+    persistToken(body.nextToken);
   }
   if (res.ok && body.ok && body.skipped) {
     log(`skipped: ${body.skipped}`);

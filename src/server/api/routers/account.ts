@@ -26,7 +26,11 @@ export const accountRouter = router({
   uploadStatus: protectedProcedure.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session.user.id },
-      select: { uploadToken: true },
+      select: {
+        uploadToken: true,
+        uploadTokenRotatedAt: true,
+        uploadTokenLastUsedAt: true,
+      },
     });
     const uploads = await ctx.db.addonUpload.findMany({
       where: { userId: ctx.session.user.id },
@@ -42,7 +46,12 @@ export const accountRouter = router({
         character: { select: { name: true, realmSlug: true } },
       },
     });
-    return { hasToken: Boolean(user?.uploadToken), uploads };
+    return {
+      hasToken: Boolean(user?.uploadToken),
+      tokenRotatedAt: user?.uploadTokenRotatedAt ?? null,
+      tokenLastUsedAt: user?.uploadTokenLastUsedAt ?? null,
+      uploads,
+    };
   }),
 
   /**
@@ -55,7 +64,12 @@ export const accountRouter = router({
     const token = newUploadToken();
     await ctx.db.user.update({
       where: { id: ctx.session.user.id },
-      data: { uploadToken: hashUploadToken(token) },
+      data: {
+        uploadToken: hashUploadToken(token),
+        uploadTokenPrev: null, // a manual regen kills any outstanding grace token
+        uploadTokenRotatedAt: new Date(),
+        uploadTokenLastUsedAt: null,
+      },
     });
     return { token };
   }),
@@ -64,7 +78,12 @@ export const accountRouter = router({
   revokeToken: protectedProcedure.mutation(async ({ ctx }) => {
     await ctx.db.user.update({
       where: { id: ctx.session.user.id },
-      data: { uploadToken: null },
+      data: {
+        uploadToken: null,
+        uploadTokenPrev: null,
+        uploadTokenRotatedAt: null,
+        uploadTokenLastUsedAt: null,
+      },
     });
     return { ok: true };
   }),
