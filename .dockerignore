@@ -1,0 +1,39 @@
+# Build-context excludes for the production image (Dockerfile).
+# Conservative on purpose: only paths the build never reads, plus local
+# state/secrets that must not enter build layers. Everything the build DOES
+# need — src/, public/, prisma/ + prisma.config.ts, and the root configs
+# (package*.json, next.config.ts, tsconfig.json, postcss.config.mjs,
+# eslint.config.mjs, components.json) — is intentionally left in the context.
+
+# Version control
+.git
+.gitignore
+
+# Dependencies & build output (the deps stage supplies node_modules; .next is rebuilt)
+node_modules
+**/node_modules
+.next
+out
+coverage
+*.tsbuildinfo
+
+# Local runtime state & data — must NEVER enter the build context
+persistent_data
+
+# Secrets / local env (the build runs with SKIP_ENV_VALIDATION; the real
+# environment is injected at runtime, so .env is never needed here)
+.env
+.env.*
+!.env.example
+
+# Editor / scanner / local tooling
+.vscode
+.zap
+
+# AI-assistant working files & internal notes (not build inputs)
+.claude
+AGENTS.md
+CLAUDE.md
+OVERNIGHT_STATUS.md
+NEXT_STEPS.md
+docs
