@@ -157,6 +157,18 @@ export const env = createEnv({
     // admin-session-only fallback by accident; optional in dev, where an empty
     // value falls back to the admin-session path.
     METRICS_TOKEN: requiredInProd(z.string().min(1)),
+
+    // ── Self-hoster branding / homepage customization (ALL OPTIONAL) ──
+    // Read at RUNTIME on the server, so they rebrand the pre-built Docker image
+    // with NO rebuild (unlike NEXT_PUBLIC_*, which Next inlines at build time).
+    // Consumed via src/lib/site-config.ts. Leave unset to keep the defaults.
+    APP_NAME: z.string().optional(), // site/product name (overrides NEXT_PUBLIC_APP_NAME)
+    APP_TAGLINE: z.string().optional(), // short tagline under the logo
+    APP_DESCRIPTION: z.string().optional(), // <meta name="description"> + OG
+    BRAND_LOGO_URL: z.string().optional(), // path/URL to the header + homepage logo
+    HOMEPAGE_HEADLINE: z.string().optional(), // hero H1 on the landing page
+    HOMEPAGE_SUBHEADING: z.string().optional(), // hero paragraph
+    HOMEPAGE_FOOTER_NOTE: z.string().optional(), // small note in the homepage footer
   },
 
   client: {
@@ -196,6 +208,13 @@ export const env = createEnv({
     ADMIN_MFA_EXEMPT: process.env.ADMIN_MFA_EXEMPT,
     RATE_LIMIT_TRUST_PROXY: process.env.RATE_LIMIT_TRUST_PROXY,
     METRICS_TOKEN: process.env.METRICS_TOKEN,
+    APP_NAME: process.env.APP_NAME,
+    APP_TAGLINE: process.env.APP_TAGLINE,
+    APP_DESCRIPTION: process.env.APP_DESCRIPTION,
+    BRAND_LOGO_URL: process.env.BRAND_LOGO_URL,
+    HOMEPAGE_HEADLINE: process.env.HOMEPAGE_HEADLINE,
+    HOMEPAGE_SUBHEADING: process.env.HOMEPAGE_SUBHEADING,
+    HOMEPAGE_FOOTER_NOTE: process.env.HOMEPAGE_FOOTER_NOTE,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
   },
 

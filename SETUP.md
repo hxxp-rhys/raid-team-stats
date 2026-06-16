@@ -310,6 +310,45 @@ an empty database needs neither):
 
 ---
 
+## 11. Customizing &amp; rebranding (optional)
+
+Rebrand the site and tailor the landing page **without editing code or
+rebuilding the image** — every setting is an optional **server** environment
+variable, read at runtime. Set any of them in your `.env` (dev) or `.env.prod`
+(production); unset values fall back to sensible defaults.
+
+| Variable | What it changes |
+|---|---|
+| `APP_NAME` | Site/product name everywhere (header, page titles, emails, MFA issuer). |
+| `APP_TAGLINE` | Short tagline under the logo. |
+| `APP_DESCRIPTION` | `<meta name="description">` for search engines + social cards. |
+| `BRAND_LOGO_URL` | Logo in the header + on the homepage. |
+| `HOMEPAGE_HEADLINE` | Landing-page hero headline. |
+| `HOMEPAGE_SUBHEADING` | Landing-page hero paragraph. |
+| `HOMEPAGE_FOOTER_NOTE` | Small note in the landing-page footer. |
+
+**Using your own logo.** Put your image where the web container can read it and
+point `BRAND_LOGO_URL` at it. The simplest way is a read-only bind mount into the
+container's `public/` directory — add to the `web` service in
+`docker-compose.prod.yml`:
+
+```yaml
+    volumes:
+      - ./branding:/app/public/branding:ro
+```
+
+then in `.env.prod` set `BRAND_LOGO_URL=/branding/logo.png` and drop `logo.png`
+into a `./branding/` folder next to the compose file. (A square PNG ~128×128
+looks best.) Per-user theme colors are separately customizable from
+**Settings → Theme**.
+
+**What can't be removed.** The subtle **About** and **Security** footer links,
+the project credit, and the GitHub Sponsors link on the About page are a fixed
+part of the open-source project's attribution and are intentionally not
+configurable. Everything in the table above is yours to change.
+
+---
+
 ## Getting help & supporting the project
 
 - Open an issue on the GitHub repository for setup problems or bugs.

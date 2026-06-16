@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { cookies, headers } from "next/headers";
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
-import { env } from "@/env";
+import { siteConfig } from "@/lib/site-config";
 import { cn } from "@/lib/utils";
 import { Providers } from "@/app/providers";
 import { CSP_NONCE_HEADER } from "@/server/security/csp";
@@ -25,11 +25,10 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: {
-    default: `${env.NEXT_PUBLIC_APP_NAME} — forging numbers into insight`,
-    template: `%s — ${env.NEXT_PUBLIC_APP_NAME}`,
+    default: `${siteConfig.appName} — ${siteConfig.tagline}`,
+    template: `%s — ${siteConfig.appName}`,
   },
-  description:
-    "Stat Smith — forging numbers into insight. Customizable, auto-synced raid-team stat dashboards for World of Warcraft guilds.",
+  description: siteConfig.description,
   robots: { index: false, follow: false },
   referrer: "strict-origin-when-cross-origin",
 };
