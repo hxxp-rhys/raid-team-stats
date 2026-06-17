@@ -1,3 +1,4 @@
+import type { Prisma } from "@/generated/prisma/client";
 import { redis } from "@/lib/redis";
 import { audit } from "@/server/security/audit";
 
@@ -15,7 +16,7 @@ export async function auditAuthzDenied(opts: {
   subjectId: string;
   ip?: string | null;
   userAgent?: string | null;
-  metadata?: Record<string, unknown>;
+  metadata?: Prisma.InputJsonValue;
 }): Promise<void> {
   try {
     const first = await redis.set(
