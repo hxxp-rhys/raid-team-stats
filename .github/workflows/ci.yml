@@ -153,6 +153,10 @@ jobs:
       SMTP_FROM: ci@example.invalid
       RATE_LIMIT_TRUST_PROXY: "false"
       NEXT_PUBLIC_APP_NAME: Raid Team Stats
+      # Required by env.ts at runtime (gates /api/metrics). The started app
+      # validates env (no SKIP_ENV_VALIDATION), so it must be present or
+      # middleware throws "Invalid environment variables" and every route 5xx's.
+      METRICS_TOKEN: ci-metrics-token-not-secret
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
