@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { env } from "@/env";
+import { siteConfig } from "@/lib/site-config";
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   // Top-anchored (NOT vertically centred) so the card position stays stable
@@ -15,7 +15,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
         href="/"
         className="text-muted-foreground hover:text-foreground mb-6 self-center text-sm transition-colors"
       >
-        ← {env.NEXT_PUBLIC_APP_NAME}
+        ← {siteConfig.appName}
       </Link>
       {children}
     </main>

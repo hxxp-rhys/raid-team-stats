@@ -2,11 +2,10 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import type { Route } from "next";
 
 import { api, type RouterOutputs } from "@/lib/trpc-client";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -41,24 +40,6 @@ export function GuildManageSections({
   return (
     <>
       <CreateTeamCard guildId={guildId} />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Recruitment</CardTitle>
-          <CardDescription>
-            Build a branded application form, share its public link, and review
-            applicants with your officers. (Officer access.)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Link
-            href={`/guild/${guildId}/recruitment`}
-            className={buttonVariants({ size: "sm" })}
-          >
-            Manage recruitment →
-          </Link>
-        </CardContent>
-      </Card>
 
       {guild.raidTeams.length > 0 && (
         <Card>

@@ -1,0 +1,143 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    { "title": "RTS — Overview", "type": "link", "url": "/d/rts-overview", "icon": "external link" }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "CPU rate (cores)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "stacking": { "mode": "normal", "group": "A" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(rts_process_cpu_user_seconds_total[5m])", "legendFormat": "user", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(rts_process_cpu_system_seconds_total[5m])", "legendFormat": "system", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(rts_process_cpu_seconds_total[5m])", "legendFormat": "total", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory: RSS & virtual",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_process_resident_memory_bytes", "legendFormat": "RSS", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_process_virtual_memory_bytes", "legendFormat": "virtual", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Heap used vs total",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_heap_size_used_bytes", "legendFormat": "heap used", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_heap_size_total_bytes", "legendFormat": "heap total", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_external_memory_bytes", "legendFormat": "external", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Event-loop lag (p50 / p90 / p99)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 }, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.2 } ] } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_eventloop_lag_p50_seconds", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_eventloop_lag_p90_seconds", "legendFormat": "p90", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_eventloop_lag_p99_seconds", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GC duration rate by kind (s/s)",
+      "description": "rate(sum) of GC time spent per second, split by GC kind.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(rts_nodejs_gc_duration_seconds_sum[5m])) by (kind)", "legendFormat": "{{kind}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GC runs per second by kind",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(rts_nodejs_gc_duration_seconds_count[5m])) by (kind)", "legendFormat": "{{kind}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "File descriptors: open vs max",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "max fds" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_process_open_fds", "legendFormat": "open fds", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_process_max_fds", "legendFormat": "max fds", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active handles & resources",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_active_handles_total", "legendFormat": "handles total", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_active_resources_total", "legendFormat": "resources total", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_active_requests_total", "legendFormat": "requests total", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active handles by type",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "id": 9,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rts_nodejs_active_handles", "legendFormat": "{{type}}", "refId": "A" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["raid-team-stats", "rts", "runtime"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "RTS — System Runtime",
+  "uid": "rts-system-runtime",
+  "version": 1,
+  "weekStart": ""
+}

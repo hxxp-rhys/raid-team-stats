@@ -1,7 +1,7 @@
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { TOTP, Secret } from "otpauth";
 
-import { env } from "@/env";
+import { siteConfig } from "@/lib/site-config";
 import { db } from "@/lib/db";
 import { encryptToken, decryptToken } from "@/server/crypto/token-cipher";
 import { hashPassword, verifyPassword } from "@/server/crypto/kdf";
@@ -23,7 +23,7 @@ const RECOVERY_CODE_COUNT = 10;
 
 function buildTotp(secretBase32: string, label: string): TOTP {
   return new TOTP({
-    issuer: env.NEXT_PUBLIC_APP_NAME,
+    issuer: siteConfig.appName,
     label,
     algorithm: TOTP_ALGORITHM,
     digits: TOTP_DIGITS,

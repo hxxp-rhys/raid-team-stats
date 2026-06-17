@@ -470,11 +470,24 @@ export const snapshotRouter = router({
       // to the current Midnight raid → no network call). Widgets filter
       // parses to exactly this zone so stale past-expansion rows (e.g. The
       // War Within) can never leak into the current-tier views.
+      // The CURRENT RELEASE's full raid-zone set (e.g. Midnight 12.0.7 →
+      // [46, 50]) — patches add raids to a release, so the current tier is
+      // normally MORE than one zone. `currentRaidZoneId` stays the primary
+      // (newest) for back-compat. `currentZoneEncounters` is the merged boss
+      // list across ALL release zones, each tagged with `zoneId`, so the matrix
+      // widgets render a column for every boss in the release — incl. brand-new
+      // ones nobody has parsed yet. Resolved/cached server-side (~free).
+      const wcl = warcraftLogsClient();
+      const currentRaidZoneIds = await wcl.currentRaidZoneIds();
       const currentRaidZoneId =
-        (await warcraftLogsClient().currentRaidZoneId()) ?? null;
+        currentRaidZoneIds.length > 0 ? Math.max(...currentRaidZoneIds) : null;
+      const currentZoneEncounters =
+        await wcl.currentReleaseEncounters(currentRaidZoneIds);
 
       return {
         currentRaidZoneId,
+        currentRaidZoneIds,
+        currentZoneEncounters,
         members: memberships.map((m, i) => {
           const eq = latest[i]![1];
           // Recompute the gear audit from the stored equipped items with
@@ -772,7 +785,12 @@ export const snapshotRouter = router({
         },
       });
       const characterIds = memberships.map((m) => m.character.id);
-      const zoneId = (await warcraftLogsClient().currentRaidZoneId()) ?? 46;
+      // The current RELEASE's whole raid-zone set (patches are additive), so
+      // consistency spans every current raid, not just the newest. `zoneId`
+      // (primary) is still returned for back-compat.
+      const resolvedZoneIds = await warcraftLogsClient().currentRaidZoneIds();
+      const zoneIds = resolvedZoneIds.length > 0 ? resolvedZoneIds : [50];
+      const zoneId = Math.max(...zoneIds);
 
       if (characterIds.length === 0) {
         return {
@@ -788,7 +806,7 @@ export const snapshotRouter = router({
       const availRows = await ctx.db.wclParseSnapshot.findMany({
         where: {
           characterId: { in: characterIds },
-          zoneId,
+          zoneId: { in: zoneIds },
           percentile: { not: null },
           // Recency bound so this distinct scan doesn't grow all season
           // (Prisma applies distinct in memory over the fetched rows).
@@ -821,7 +839,11 @@ export const snapshotRouter = router({
         Promise.all(
           characterIds.map((id) =>
             ctx.db.wclParseSnapshot.findMany({
-              where: { characterId: id, zoneId, difficulty: selectedDifficulty },
+              where: {
+                characterId: id,
+                zoneId: { in: zoneIds },
+                difficulty: selectedDifficulty,
+              },
               orderBy: { capturedAt: "desc" },
               take: 60,
               select: {
@@ -979,14 +1001,40 @@ export const snapshotRouter = router({
               volatility: raw.ranks.length >= 4 ? stdevOf(raw.ranks) : null,
             };
           })
-          // The sync writes a row for EVERY zone boss incl. never-killed
-          // ones (all-null) — drop those so the boss dropdown stays clean
-          // and the "no Mythic parses" empty state can actually trigger
-          // for Heroic-only teams.
-          .filter((e) => e.best != null || e.median != null);
+          // Keep a boss if WCL rated it (best/median present) OR the team has a
+          // logged KILL on it — so a brand-new boss WCL hasn't scored yet (e.g.
+          // Rotmire) stays selectable and the widget can flag "logged, not rated
+          // yet". Never-killed all-null rows (kills 0) are still dropped so the
+          // dropdown stays clean + the empty state can trigger.
+          .filter(
+            (e) => e.best != null || e.median != null || (e.kills ?? 0) > 0,
+          );
+        // WCL returns 0 (NOT null) for a logged-but-UNRATED boss — verified live:
+        // a fresh boss like Rotmire stores kills=1 with pct/med/bestAvg/medAvg
+        // all 0. Treat 0 as "no score" everywhere via `hasScore`, so an unrated
+        // boss can never mask real data.
+        const hasScore = (v: number | null | undefined): v is number =>
+          v != null && v > 0;
+        // The newest stored row may BE the unrated boss (bestAvg 0). Require
+        // BOTH aggregates to be real so we never pair a real WCL best with a
+        // computed-fallback median — WCL emits bestPerformanceAverage +
+        // medianPerformance together (both real, or both 0/absent), so the `&&`
+        // never drops a usable row in practice while keeping the pair coherent.
         const latestWithAvg = rows.find(
-          (r) => r.bestAvg != null || r.medianAvg != null,
+          (r) => hasScore(r.bestAvg) && hasScore(r.medianAvg),
         );
+        const avgOf = (xs: number[]): number | null =>
+          xs.length === 0 ? null : xs.reduce((s, x) => s + x, 0) / xs.length;
+        // Fallback when no real whole-zone aggregate exists (e.g. a multi-raid
+        // release where WCL only aggregates per zone): average the per-boss
+        // scores that actually exist (>0), so the "All" row reflects the scored
+        // bosses instead of blanking. Taken as a coherent pair (both computed).
+        const zoneBestAvg = latestWithAvg
+          ? latestWithAvg.bestAvg
+          : avgOf(encounters.map((e) => e.best).filter(hasScore));
+        const zoneMedianAvg = latestWithAvg
+          ? latestWithAvg.medianAvg
+          : avgOf(encounters.map((e) => e.median).filter(hasScore));
 
         // Trend: rel_w over closed weeks where BOTH the member qualifies
         // and a roster median exists; benched weeks are simply absent.
@@ -1011,8 +1059,8 @@ export const snapshotRouter = router({
           character: m.character,
           specName: specByChar.get(m.character.id) ?? null,
           role: roleOf(specByChar.get(m.character.id)),
-          bestAvg: latestWithAvg?.bestAvg ?? null,
-          medianAvg: latestWithAvg?.medianAvg ?? null,
+          bestAvg: zoneBestAvg,
+          medianAvg: zoneMedianAvg,
           encounters,
           trend,
           slope,

@@ -7,6 +7,7 @@ import {
   isPlatformAdmin,
 } from "@/server/api/trpc";
 import { audit } from "@/server/security/audit";
+import { emailBlindIndex } from "@/server/auth/email-index";
 
 /**
  * Platform-admin-only inspection + management surface.
@@ -200,9 +201,13 @@ export const adminRouter = router({
 
       const where: import("@/generated/prisma/client").Prisma.UserWhereInput = {};
       if (input.search) {
+        // Email is encrypted at rest, so substring matching on it is impossible.
+        // Support an EXACT email match via the blind index, plus the usual
+        // case-insensitive substring search on display name.
+        const emailIdx = emailBlindIndex(input.search);
         where.OR = [
-          { email: { contains: input.search, mode: "insensitive" } },
           { displayName: { contains: input.search, mode: "insensitive" } },
+          ...(emailIdx ? [{ emailIndex: emailIdx }] : []),
         ];
       }
       if (input.adminOnly) {
@@ -303,6 +308,53 @@ export const adminRouter = router({
       });
 
       return { ok: true, unchanged: false };
+    }),
+
+  /**
+   * Permanently delete a user (admin-only). High blast radius, but the schema's
+   * FK rules make it safe + non-blocking: Account / Session / Credential / MFA /
+   * Character (→ all snapshots) / GuildMembership / EventSignup / AddonUpload /
+   * recruitment rows CASCADE away; owned raid teams + dashboards become
+   * leaderless / ownerless and claimed guilds revert to UNCLAIMED (SetNull);
+   * AuditLog rows the user authored de-identify (actorUserId SetNull). No
+   * Restrict FK exists, so the delete never throws.
+   *
+   * Only guard: an admin can't delete the account they're SIGNED IN with — that
+   * guarantees ≥1 admin always remains, and self-deletion belongs on the
+   * profile page (behind a password). Deleting ANY other user — including
+   * another admin — is allowed.
+   */
+  deleteUser: protectedProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertAdmin(ctx.session.user.id);
+
+      if (input.userId === ctx.session.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "You can't delete your own account here — use “Delete account” on your profile.",
+        });
+      }
+
+      const target = await ctx.db.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, displayName: true, isAdmin: true },
+      });
+      if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Audit BEFORE the delete so the actor (admin) + subject still resolve.
+      await audit({
+        event: "USER_DELETED",
+        actorUserId: ctx.session.user.id,
+        subjectType: "user",
+        subjectId: input.userId,
+        metadata: { deletedBy: "admin", wasAdmin: target.isAdmin },
+      });
+
+      await ctx.db.user.delete({ where: { id: input.userId } });
+
+      return { ok: true };
     }),
 
   // ────────────────────────────────────────────────────────────────────────

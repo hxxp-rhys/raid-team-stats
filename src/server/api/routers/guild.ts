@@ -20,6 +20,7 @@ import {
   candidateKey,
 } from "@/server/guild-auth/observe-battlenet";
 import { normalizeRealmSlug, normalizeGuildSlug } from "@/lib/realm";
+import { logger } from "@/lib/logger";
 
 const memberRoleSchema = z.enum(["MEMBER", "OFFICER", "OWNER"]);
 
@@ -594,6 +595,7 @@ export const guildRouter = router({
           added: 0,
           guildsMatched: 0,
           autoClaims: 0,
+          syncs: [] as Array<{ guildId: string; name: string; jobId: string }>,
         };
       }
 
@@ -605,6 +607,74 @@ export const guildRouter = router({
         // CRITICAL: filtered subset — never run the absence sweep here.
         skipAbsenceSweep: true,
       });
+
+      // Kick off a FULL roster + data sync for each freshly-added guild so it
+      // populates immediately (same job "Refresh Roster" runs). bypassRateLimit
+      // because this is a system-initiated first sync on a brand-new guild —
+      // not user spam — and adding several at once must not trip the per-user
+      // limit on the 2nd+ guild. Each job id is returned so the Add-Guild
+      // lightbox can show a live progress bar. Best-effort: a failed enqueue
+      // never fails the add itself.
+      const addedGuildMeta = new Map<
+        string,
+        { region: Region; realmSlug: string; guildSlug: string; name: string }
+      >();
+      for (const o of filtered) {
+        if (!o.guild) continue;
+        const gRealm = normalizeRealmSlug(o.guild.realmSlug);
+        const gSlug = normalizeGuildSlug(o.guild.name);
+        if (!gRealm || !gSlug) continue;
+        const key = candidateKey(o.region, gRealm, gSlug);
+        if (!addedGuildMeta.has(key)) {
+          addedGuildMeta.set(key, {
+            region: o.region as Region,
+            realmSlug: gRealm,
+            guildSlug: gSlug,
+            name: o.guild.name,
+          });
+        }
+      }
+
+      const syncs: Array<{ guildId: string; name: string; jobId: string }> = [];
+      if (addedGuildMeta.size > 0) {
+        const { enqueueManualRosterRefresh } = await import(
+          "@/server/ingestion/jobs/manual-roster-refresh"
+        );
+        for (const meta of addedGuildMeta.values()) {
+          const guildRow = await ctx.db.guild.findUnique({
+            where: {
+              region_realmSlug_guildSlug: {
+                region: meta.region,
+                realmSlug: meta.realmSlug,
+                guildSlug: meta.guildSlug,
+              },
+            },
+            select: { id: true },
+          });
+          if (!guildRow) continue;
+          try {
+            const enq = await enqueueManualRosterRefresh(
+              {
+                guildId: guildRow.id,
+                triggeredByUserId: ctx.session.user.id,
+              },
+              { bypassRateLimit: true },
+            );
+            if (enq.ok) {
+              syncs.push({
+                guildId: guildRow.id,
+                name: meta.name,
+                jobId: enq.jobId,
+              });
+            }
+          } catch (err) {
+            logger.warn(
+              { err, guildId: guildRow.id },
+              "addDiscoveredGuilds: auto-sync enqueue failed (continuing)",
+            );
+          }
+        }
+      }
 
       await audit({
         event: "SYNC_TRIGGERED",
@@ -623,6 +693,7 @@ export const guildRouter = router({
         added: addedKeys.size,
         guildsMatched: result.guildMatches,
         autoClaims: result.autoClaims,
+        syncs,
       };
     }),
 

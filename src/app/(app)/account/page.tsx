@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ProfileActions } from "@/app/(app)/profile/actions";
+import { ProfileActions, SignOutButton } from "@/app/(app)/profile/actions";
 import { MfaCard } from "@/app/(app)/profile/mfa-card";
 import { DeleteAccountCard } from "@/app/(app)/profile/delete-account-card";
 import { OwnerMfaWarning } from "@/app/(app)/profile/owner-mfa-warning";
@@ -57,24 +57,24 @@ export default async function AccountPage() {
             Manage your sign-in details, linked Battle.net account, and 2FA.
           </p>
         </div>
-        <AccountRefreshButton />
+        {/* Sign out — right-hand side of the header. */}
+        <SignOutButton />
       </header>
-
-      {/* Primary actions as a horizontal toolbar directly under the
-          title/subtitle (Link/Refresh Battle.net / Sign out — "My guilds"
-          lives in the top bar). Discovery progress + result render just
-          below it. */}
-      <div className="border-border mb-8 border-b pb-6">
-        <ProfileActions battlenetLinked={battlenetLinked} />
-      </div>
 
       <div className="space-y-6">
         <OwnerMfaWarning />
 
         <Card>
           <CardHeader>
-            <CardTitle>Account</CardTitle>
-            <CardDescription>Your sign-in details.</CardDescription>
+            {/* Resync (re-sync THIS account's characters) sits top-right of
+                the Account card. */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1.5">
+                <CardTitle>Account</CardTitle>
+                <CardDescription>Your sign-in details.</CardDescription>
+              </div>
+              <AccountRefreshButton />
+            </div>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <Row label="Display name" value={user.displayName ?? "—"} />
@@ -102,16 +102,7 @@ export default async function AccountPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm">
-              Status:{" "}
-              <span
-                className={
-                  battlenetLinked ? "text-green-500" : "text-muted-foreground"
-                }
-              >
-                {battlenetLinked ? "Linked" : "Not linked"}
-              </span>
-            </p>
+            <ProfileActions battlenetLinked={battlenetLinked} />
           </CardContent>
         </Card>
 

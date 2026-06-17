@@ -2,6 +2,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { Adapter, AdapterUser } from "next-auth/adapters";
 
 import { db } from "@/lib/db";
+import { emailBlindIndex } from "@/server/auth/email-index";
 
 /**
  * Auth.js adapter wrapper.
@@ -93,9 +94,11 @@ export function buildAuthAdapter(): Adapter {
     },
 
     getUserByEmail: async (email) => {
-      if (!email) return null;
+      // Email is encrypted at rest; look up by its blind index.
+      const idx = emailBlindIndex(email);
+      if (!idx) return null;
       const u = await db.user.findUnique({
-        where: { email },
+        where: { emailIndex: idx },
         select: USER_SELECT,
       });
       return u ? toAdapterUser(u) : null;

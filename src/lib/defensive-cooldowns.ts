@@ -5,8 +5,9 @@
  * cooldown **durations** drift with talent reworks — re-verify the durations on
  * each content patch. This table is registered in the `wow-patch-upgrade`
  * skill (§4 — Ability ids) as a per-patch reference. Baseline values are WoW
- * Midnight 12.0.5; the eight `probed` entries were observed in real WCL report
- * data on 2026-06-15.
+ * Midnight 12.0.7 (durations unchanged — 12.0.7 is a raid point-patch with no
+ * class cooldown reworks); the eight `probed` entries were observed in real WCL
+ * report data on 2026-06-15.
  *
  * `kind`:
  *  - "personal" — a self-cast survival CD; the widget's headline filter uses
@@ -25,7 +26,7 @@ export interface DefensiveAbility {
   name: string;
   /** Class (and spec where the CD is spec-specific) for display/grouping. */
   className: string;
-  /** Baseline cooldown in seconds (12.0.5; talent-reduced in many cases). */
+  /** Baseline cooldown in seconds (12.0.7; talent-reduced in many cases). */
   cooldownSec: number;
   kind: DefensiveKind;
 }

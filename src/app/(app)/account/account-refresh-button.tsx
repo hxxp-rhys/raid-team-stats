@@ -70,7 +70,7 @@ export function AccountRefreshButton() {
           refresh.mutate();
         }}
       >
-        {refresh.isPending ? "Refreshing…" : "Refresh"}
+        {refresh.isPending ? "Resyncing…" : "Resync"}
       </Button>
 
       {progress ? (

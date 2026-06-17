@@ -57,12 +57,16 @@ export function PublicForm({ guildId, slug }: { guildId: string; slug: string })
     );
   }
 
+  const bgOverlay = theme.background?.overlayOpacity ?? 0.45;
   const bg =
-    theme.background?.kind === "color"
-      ? theme.background.color
-      : theme.background?.kind === "gradient" && theme.background.gradient
-        ? `linear-gradient(${theme.background.gradient.angle}deg, ${theme.background.gradient.from}, ${theme.background.gradient.to})`
-        : undefined;
+    theme.background?.kind === "image" && theme.background.imageUrl
+      ? // dark overlay layered over the cover image so form text stays legible
+        `linear-gradient(rgba(0,0,0,${bgOverlay}), rgba(0,0,0,${bgOverlay})), url("${theme.background.imageUrl}") center/cover no-repeat`
+      : theme.background?.kind === "color"
+        ? theme.background.color
+        : theme.background?.kind === "gradient" && theme.background.gradient
+          ? `linear-gradient(${theme.background.gradient.angle}deg, ${theme.background.gradient.from}, ${theme.background.gradient.to})`
+          : undefined;
   const primary = theme.colors?.primary ?? "#c8a04f";
   const fontFamily = theme.font?.family;
 

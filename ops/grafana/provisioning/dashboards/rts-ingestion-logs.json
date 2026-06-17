@@ -1,0 +1,169 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    { "title": "RTS — Overview", "type": "link", "url": "/d/rts-overview", "icon": "external link" }
+  ],
+  "liveNow": false,
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "custom",
+        "query": "rts-worker,rts-web,rts-caddy",
+        "current": { "selected": true, "text": "rts-worker", "value": "rts-worker" },
+        "options": [
+          { "selected": true, "text": "rts-worker", "value": "rts-worker" },
+          { "selected": false, "text": "rts-web", "value": "rts-web" },
+          { "selected": false, "text": "rts-caddy", "value": "rts-caddy" }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "search",
+        "label": "Line filter (regex)",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "About this dashboard",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "mode": "markdown", "content": "Ingestion/worker and web application logs from Loki. The worker and web emit **pino-pretty** colorized output (`[HH:MM:SS.mmm] LEVEL: msg`), so log levels are matched by the ANSI-anchored regex `LEVEL\\x1b` (the level token is always immediately followed by an ANSI reset).\n\n**Known follow-up:** richer job/queue **metrics** (job counts, durations, queue depth) require the worker to expose a `/metrics` endpoint that Prometheus can scrape. The `rts_jobs_total`, `rts_job_duration_seconds`, and `rts_queue_depth` series are declared but never reach Prometheus today (no worker scrape target), so those panels are intentionally built from logs instead." }
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by level — worker (lines/min)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 2,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "ERROR" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] }, { "matcher": { "id": "byName", "options": "INFO" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"ERROR\\\\x1b\" [1m]))", "legendFormat": "ERROR", "refId": "A" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"WARN\\\\x1b\" [1m]))", "legendFormat": "WARN", "refId": "B" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"INFO\\\\x1b\" [1m]))", "legendFormat": "INFO", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by level — web (lines/min)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 3,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1 } }, "overrides": [ { "matcher": { "id": "byName", "options": "ERROR" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }, { "matcher": { "id": "byName", "options": "WARN" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] }, { "matcher": { "id": "byName", "options": "INFO" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"ERROR\\\\x1b\" [1m]))", "legendFormat": "ERROR", "refId": "A" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"WARN\\\\x1b\" [1m]))", "legendFormat": "WARN", "refId": "B" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"INFO\\\\x1b\" [1m]))", "legendFormat": "INFO", "refId": "C" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Worker errors (1h)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 12 },
+      "id": 4,
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 20 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"ERROR\\\\x1b\" [1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Worker warns (1h)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 12 },
+      "id": 5,
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 5 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"WARN\\\\x1b\" [1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Web errors (1h)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 12 },
+      "id": 6,
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 20 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"ERROR\\\\x1b\" [1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total log lines (1h)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 12 },
+      "id": 7,
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "value_and_name" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=~\"rts-worker|rts-web\"} [1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error + warn rate (worker + web, per min)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "id": 8,
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1 } } },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"ERROR\\\\x1b\" [1m]))", "legendFormat": "worker ERROR", "refId": "A" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-worker\"} |~ \"WARN\\\\x1b\" [1m]))", "legendFormat": "worker WARN", "refId": "B" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"ERROR\\\\x1b\" [1m]))", "legendFormat": "web ERROR", "refId": "C" },
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({container=\"rts-web\"} |~ \"WARN\\\\x1b\" [1m]))", "legendFormat": "web WARN", "refId": "D" }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Live error log (worker + web)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 25 },
+      "id": 9,
+      "options": { "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "{container=~\"rts-worker|rts-web\"} |~ \"ERROR\\\\x1b\"", "refId": "A" }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "All logs — $container (filter: $search)",
+      "description": "Pick a container and optionally type a regex into the Line filter variable at the top.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 35 },
+      "id": 10,
+      "options": { "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "loki" }, "expr": "{container=\"$container\"} |~ \"$search\"", "refId": "A" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["raid-team-stats", "rts", "logs", "ingestion"],
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "RTS — Ingestion & Logs",
+  "uid": "rts-ingestion-logs",
+  "version": 1,
+  "weekStart": ""
+}

@@ -4,6 +4,7 @@ import type { Session } from "next-auth";
 import { auth } from "@/server/auth";
 import { db } from "@/lib/db";
 import { env } from "@/env";
+import { siteConfig } from "@/lib/site-config";
 import { UserMenu } from "./user-menu";
 
 /**
@@ -39,22 +40,22 @@ export async function AppHeader() {
         <Link
           href="/"
           className="group flex min-w-0 items-center gap-2.5"
-          title={`${env.NEXT_PUBLIC_APP_NAME} — forging numbers into insight`}
+          title={`${siteConfig.appName} — ${siteConfig.tagline}`}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/stat-smith-logo.png"
-            alt={`${env.NEXT_PUBLIC_APP_NAME} logo`}
+            src={siteConfig.logoUrl}
+            alt={`${siteConfig.appName} logo`}
             width={28}
             height={28}
             className="border-border/60 h-7 w-7 shrink-0 rounded"
           />
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="text-foreground group-hover:text-primary truncate text-sm font-semibold tracking-tight">
-              {env.NEXT_PUBLIC_APP_NAME}
+              {siteConfig.appName}
             </span>
             <span className="text-muted-foreground hidden truncate text-[10px] sm:block">
-              forging numbers into insight
+              {siteConfig.tagline}
             </span>
           </span>
         </Link>

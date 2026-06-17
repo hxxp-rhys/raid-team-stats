@@ -207,9 +207,11 @@ export async function handleGuildReportSync(
   }
 
   const wcl = warcraftLogsClient();
-  // Zone scoping is an optimization, not a correctness requirement — when
-  // resolution fails we discover without a zone filter (window-limited).
-  const zoneId = await wcl.currentRaidZoneId();
+  // Zone scoping is an optimization, not a correctness requirement. We discover
+  // once per CURRENT-RELEASE raid zone (patches ADD raids to a release, so a
+  // guild may log an older release raid on a separate night), deduped by report
+  // code. With none resolved we discover unfiltered (window-limited).
+  const zoneIds = await wcl.currentRaidZoneIds();
 
   // One discovery pass per distinct log SOURCE: each team's effective
   // source is its override or the guild's resolved default. Teams that log
@@ -258,31 +260,44 @@ export async function handleGuildReportSync(
         ? latest.startTime.getTime() - WATERMARK_OVERLAP_MS
         : Date.now() - BACKFILL_MS;
 
-    const discovery = await wcl.query({
-      query: GUILD_REPORTS_QUERY,
-      variables: {
-        guildID: source,
-        zoneID: zoneId ?? undefined,
-        startTime,
-        limit: 25,
-      },
-      schema: guildReportsResponseSchema,
-      estimatedPoints: 2,
-    });
-
-    const found = (discovery.reportData?.reports?.data ?? []).filter(
-      (r): r is NonNullable<typeof r> => r != null,
-    );
-    totalDiscovered += found.length;
-    if (found.length === 25) {
-      // Limit hit. WCL returns newest-first, so anything older than the
-      // 25th report is PERMANENTLY missed once the watermark advances past
-      // it. Loud, not silent; the verified `page` arg is the v2 fix.
-      logger.warn(
-        { guild: guild.name, source, startTime },
-        "grs: discovery page full (25) — older reports in this window are permanently skipped",
+    // One discovery query per current-release zone (≥1; unfiltered when the
+    // set is empty), deduped by report code. A report covering multiple current
+    // raids is found under each zone but fetched once.
+    const discoveryZones: Array<number | undefined> =
+      zoneIds.length > 0 ? zoneIds : [undefined];
+    const rawRows = (
+      await Promise.all(
+        discoveryZones.map((zid) =>
+          wcl.query({
+            query: GUILD_REPORTS_QUERY,
+            variables: { guildID: source, zoneID: zid, startTime, limit: 25 },
+            schema: guildReportsResponseSchema,
+            estimatedPoints: 2,
+          }),
+        ),
+      )
+    ).flatMap((discovery, i) => {
+      const rows = (discovery.reportData?.reports?.data ?? []).filter(
+        (r): r is NonNullable<typeof r> => r != null,
       );
-    }
+      if (rows.length === 25) {
+        // Limit hit. WCL returns newest-first, so anything older than the 25th
+        // report is PERMANENTLY missed once the watermark advances past it.
+        // Loud, not silent; the verified `page` arg is the v2 fix.
+        logger.warn(
+          { guild: guild.name, source, zoneId: discoveryZones[i], startTime },
+          "grs: discovery page full (25) — older reports in this window are permanently skipped",
+        );
+      }
+      return rows;
+    });
+    const seenCodes = new Set<string>();
+    const found = rawRows.filter((r) => {
+      if (seenCodes.has(r.code)) return false;
+      seenCodes.add(r.code);
+      return true;
+    });
+    totalDiscovered += found.length;
     if (found.length === 0) continue;
 
     const known = await db.wclReport.findMany({

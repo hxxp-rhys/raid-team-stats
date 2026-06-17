@@ -35,6 +35,11 @@ export const CURRENT_TIER_INSTANCES: Record<string, number> = {
   "The Voidspire": 1307,
   "March on Quel'Danas": 1308,
   "The Dreamrift": 1314,
+  // 12.0.7 "Sporefall" — single boss "Rotmire" (WCL zone 50, journal-instance
+  // 1305, published shortly after patch day). Per patch: add the new tier's
+  // raid name → journal-instance id here (find ids via GET
+  // /data/wow/journal-instance/index or scripts probe).
+  Sporefall: 1305,
 };
 
 /**

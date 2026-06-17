@@ -4,10 +4,13 @@ import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
 /**
- * Delve progression — season / tier / Brann (companion) level per member.
- * Entirely absent from the public APIs. C_DelvesUI function names shift
- * across 12.0.x, so the addon captures whatever the live client exposes;
- * this widget shows what came through and a hint when nothing did.
+ * Delve progression — season / tier / Valeera (companion) level per member.
+ * PATCH(expansion): the delve-companion NAME is expansion-coupled (Brann in
+ * The War Within → Valeera in Midnight) — update the label in the description
+ * below each expansion. Delve data is entirely absent from the public APIs;
+ * C_DelvesUI function names shift across 12.0.x, so the addon captures whatever
+ * the live client exposes; this widget shows what came through, with a hint
+ * when nothing did.
  */
 export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
@@ -26,8 +29,8 @@ export function DelveProgressWidget({ raidTeamId }: { raidTeamId: string }) {
         <WidgetEmpty>No tracked members yet.</WidgetEmpty>
       ) : q.data.members.every((m) => m.latest.addon?.delves == null) ? (
         <WidgetEmpty>
-          No delve data yet — uploads from the in-game addon (12.0.5) populate
-          this once members run a delve and reload.
+          No delve data yet — uploads from the in-game addon populate this once
+          members run a delve and reload.
         </WidgetEmpty>
       ) : (
         <table className="w-full text-sm">

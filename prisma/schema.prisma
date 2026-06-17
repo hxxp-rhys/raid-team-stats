@@ -23,7 +23,13 @@ model User {
   // OAuth exposes only `sub` + `battle_tag`). They can add + verify an email
   // later for password login. Postgres permits multiple NULLs under a unique
   // index, so email-less Battle.net users don't collide.
-  email         String?   @unique
+  // Encrypted at rest (AES-256-GCM via the @/lib/db extension). Random IV per
+  // write means you can't look up by `email` directly — use `emailIndex`.
+  email         String?
+  // Blind index for exact-match email lookups: a keyed HMAC of the normalized
+  // email (server/auth/email-index.ts), auto-derived on every write by the db
+  // extension. The UNIQUE here replaces the old @unique on `email`.
+  emailIndex    String?   @unique
   emailVerified DateTime?
   displayName   String?
   avatarUrl     String?
@@ -169,6 +175,7 @@ enum AuditEvent {
   RAID_TEAM_WCL_SOURCE_DATA_CLEARED
   ADMIN_USER_PROMOTED
   ADMIN_USER_DEMOTED
+  ADMIN_SETTINGS_UPDATED
   DASHBOARD_EXPORTED
   SYNC_TRIGGERED
   SYNC_FAILED
@@ -1466,4 +1473,55 @@ model RecruitmentNotificationOutbox {
 
   @@index([processedAt])
   @@index([submissionId])
+}
+
+// Persisted WCL `worldData` snapshot — one row per WCL zone (raids, M+ seasons,
+// delves). Refreshed on a schedule by runWorldDataRefresh() so the app holds a
+// LOCAL, durable source of truth for the live raid tier + every zone's boss
+// list, instead of a hand-maintained WCL_RAID_ZONE_ID env pin that silently
+// goes stale each content patch. The single row with isCurrentRaid=true is the
+// live raid tier the zone resolver reads (env pin, if set, still overrides).
+model WclZone {
+  id            Int      @id // WCL zone id (natural key — stable external id)
+  name          String
+  frozen        Boolean  @default(false) // true once WCL retires the tier
+  expansionId   Int?
+  expansionName String?
+  isRaid        Boolean  @default(false) // difficulties include a raid id (3/4/5)
+  isCurrentRaid Boolean  @default(false) // the ONE live raid tier (job-maintained)
+  difficulties  Json // [{ id, name }] — WCL difficulty ids (raid 3/4/5, M+ 10, …)
+  encounters    Json // [{ id, name }] — WCL encounter ids (matches parse rows)
+  refreshedAt   DateTime // last refresh of this row from WCL worldData
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([frozen])
+  @@index([isCurrentRaid])
+}
+
+// Singleton admin-configurable policy/customization settings (id pinned to
+// "singleton" — there is exactly one row, auto-created on first read). Only the
+// admin-gated `settings` router reads/writes it. Retention values are in DAYS;
+// null = keep forever (no auto-prune). Defaults follow audit-log best practice
+// (short-lived ops logs, longer-lived security/audit trail).
+model AdminSettings {
+  id String @id @default("singleton")
+
+  // Retention — DB-enforced by the runRetentionPrune() worker sweep:
+  auditLogRetentionDays Int? @default(90) // AuditLog (security/audit trail)
+  syncRunRetentionDays  Int? @default(14) // SyncRun (ingestion job history)
+  // Retention — Loki Caddy access/traffic logs: enforced immediately via Loki's
+  // delete API + written into the Loki config so the compactor takes over on
+  // next restart (then the API call is skipped):
+  accessLogRetentionDays Int? @default(30)
+  // Retention — Prometheus metrics: written to config for next deploy (startup
+  // flag; no runtime API):
+  metricsRetentionDays Int? @default(15)
+
+  // Security-tab thresholds (what counts as a concerning spike to highlight):
+  loginFailureAlertThreshold Int @default(20) // failures within the window
+  loginFailureWindowMinutes  Int @default(5)
+
+  updatedAt       DateTime @updatedAt
+  updatedByUserId String?
 }

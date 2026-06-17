@@ -692,6 +692,10 @@ export async function handleTrackedMemberSync(
     //   M+ : key level → veteran(<2) / champion(2–5) / hero(6–9) / myth(10+)
     //   Raid: difficulty → LFR=veteran, Normal=champion, Heroic=hero,
     //         Mythic=myth
+    // PATCH(season): the M+ key-level → track breakpoints below are M+-season-
+    // coupled (Blizzard reshuffles them when a season changes the key→reward
+    // mapping). Re-verify against the season's vault rules each new M+ season;
+    // the raid difficulty → track mapping is stable.
     type Track = "veteran" | "champion" | "hero" | "myth";
     const mplusTrack = (level: number): Track =>
       level >= 10 ? "myth" : level >= 6 ? "hero" : level >= 2 ? "champion" : "veteran";
@@ -817,11 +821,13 @@ export async function handleTrackedMemberSync(
   //    and a single batched encounterRankings call → `weekPercentile` +
   //    `reportStartTime` (current-week best, the parses widget).
   //
-  //    Zone resolves via `currentRaidZoneId()` (env WCL_RAID_ZONE_ID pin →
-  //    Redis cache → live worldData.zones). Prod pins 46 (live Midnight).
+  //    Zones resolve via `currentRaidZoneIds()` — the WHOLE current RELEASE's
+  //    raid set (e.g. Midnight 12.0.7 → [46, 50]), since patches ADD raids to a
+  //    release. We sync parses for EACH so every current raid's bosses populate.
   try {
     const wcl = warcraftLogsClient();
-    const zoneID = (await wcl.currentRaidZoneId()) ?? 46;
+    const resolvedZoneIDs = await wcl.currentRaidZoneIds();
+    const zoneIDs = resolvedZoneIDs.length > 0 ? resolvedZoneIDs : [50];
 
     // Current raid lockout window: US weekly reset is Tuesday 15:00 UTC
     // (= "Tuesday 11:00" US Eastern, what the user specified). Matches the
@@ -866,17 +872,19 @@ export async function handleTrackedMemberSync(
     if (killsOn("normal") > 0) difficulties.push(3);
     if (difficulties.length === 0) difficulties.push(5);
 
-    for (const difficulty of difficulties) {
-      await syncWclParsesForDifficulty({
-        wcl,
-        character,
-        capturedAt,
-        zoneID,
-        difficulty,
-        wclRegion,
-        weekStartMs,
-        weekEndMs,
-      });
+    for (const zoneID of zoneIDs) {
+      for (const difficulty of difficulties) {
+        await syncWclParsesForDifficulty({
+          wcl,
+          character,
+          capturedAt,
+          zoneID,
+          difficulty,
+          wclRegion,
+          weekStartMs,
+          weekEndMs,
+        });
+      }
     }
   } catch (err) {
     logSnapshotError(err, { stage: "wcl", characterId: character.id });

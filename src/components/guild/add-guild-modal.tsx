@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
 import type { RouterOutputs } from "@/lib/trpc-client";
+import { cn } from "@/lib/utils";
+
+type GuildSync = { guildId: string; name: string; jobId: string };
 
 type Candidate = RouterOutputs["guild"]["discoverGuildCandidates"]["candidates"][number];
 
@@ -38,7 +41,10 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [done, setDone] = useState<{ added: number } | null>(null);
+  const [done, setDone] = useState<{
+    added: number;
+    syncs: GuildSync[];
+  } | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
 
   const discover = api.guild.discoverGuildCandidates.useMutation({
@@ -61,7 +67,7 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
   const add = api.guild.addDiscoveredGuilds.useMutation({
     onSuccess: async (res) => {
       await utils.guild.myGuilds.invalidate();
-      setDone({ added: res.added });
+      setDone({ added: res.added, syncs: res.syncs ?? [] });
     },
   });
 
@@ -100,14 +106,31 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       title="Add a guild"
       description="We look up the guilds your Battle.net characters belong to. Tick the ones you want to track — nothing is added unless you select it."
+      hideDefaultFooter
     >
       {done ? (
-        <div className="space-y-3 text-sm">
+        <div className="space-y-4 text-sm">
           <p className="text-foreground">
             {done.added === 0
               ? "No new guilds were added."
               : `Added ${done.added} guild${done.added === 1 ? "" : "s"}. They now appear in your guild list.`}
           </p>
+          {done.syncs.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-muted-foreground text-xs">
+                Syncing roster + data from Battle.net and Warcraft Logs. You can
+                close this — it keeps running in the background.
+              </p>
+              {done.syncs.map((sy) => (
+                <GuildSyncProgress
+                  key={sy.jobId}
+                  guildId={sy.guildId}
+                  jobId={sy.jobId}
+                  name={sy.name}
+                />
+              ))}
+            </div>
+          )}
           <Button type="button" onClick={onClose}>
             Done
           </Button>
@@ -235,5 +258,107 @@ export function AddGuildModal({ onClose }: { onClose: () => void }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// Phase labels mirror the guild-settings "Refresh Roster" progress UI so the
+// two surfaces read identically.
+const SYNC_PHASE_LABEL: Record<string, string> = {
+  roster: "Fetching roster from Battle.net…",
+  members: "Syncing characters…",
+  verifying: "Matching + verifying characters…",
+  done: "Finishing up…",
+};
+
+/**
+ * Live progress bar for one freshly-added guild's auto-sync. Polls
+ * `manualSyncStatus` every 2s until the job reaches a terminal state, then
+ * stops. Same determinate bar + phase labels as the "Refresh Roster" button.
+ */
+function GuildSyncProgress({
+  guildId,
+  jobId,
+  name,
+}: {
+  guildId: string;
+  jobId: string;
+  name: string;
+}) {
+  const status = api.guild.manualSyncStatus.useQuery(
+    { guildId, jobId },
+    {
+      refetchInterval: (q) => {
+        const s = q.state.data?.state;
+        if (!s) return 2000;
+        return s === "completed" || s === "failed" || s === "unknown"
+          ? false
+          : 2000;
+      },
+      refetchOnWindowFocus: false,
+    },
+  );
+
+  // `status.data` is a discriminated union: the full job shape OR
+  // `{ state: "unknown" }` (foreign/expired jobId). Read `progress` /
+  // `failedReason` only inside a state-narrowed branch — the `const s` alias
+  // lets TS narrow `data` to the full variant (same pattern as the guild-
+  // settings "Refresh Roster" button).
+  const data = status.data;
+  let pct: number | null = null;
+  let label = "Queued…";
+  if (data) {
+    const s = data.state;
+    if (s === "active") {
+      const prog = data.progress;
+      if (prog && prog.total > 0) {
+        pct = Math.min(100, Math.round((prog.processed / prog.total) * 100));
+        const ph = SYNC_PHASE_LABEL[prog.phase] ?? "Syncing…";
+        label =
+          prog.phase === "members"
+            ? `${ph} ${prog.processed}/${prog.total}`
+            : ph;
+      } else {
+        label = "Fetching roster + matching characters…";
+      }
+    } else if (s === "waiting" || s === "delayed" || s === "paused") {
+      label = "Waiting for the worker to pick it up…";
+    } else if (s === "completed") {
+      pct = 100;
+      label = "Done ✓";
+    } else if (s === "failed") {
+      label = `Failed: ${data.failedReason ?? "unknown error"}`;
+    }
+  }
+  const done = data?.state === "completed";
+  const failed = data?.state === "failed";
+  // Indeterminate sliver while we have no percentage yet, so the bar reads as
+  // "working" rather than empty.
+  const width = pct ?? (data?.state === "active" ? 10 : 5);
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-medium">{name}</span>
+        <span className={failed ? "text-destructive" : "text-muted-foreground"}>
+          {label}
+        </span>
+      </div>
+      <div
+        className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
+        role="progressbar"
+        aria-valuenow={pct ?? 0}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${name} sync progress`}
+      >
+        <div
+          className={cn(
+            "h-full rounded-full transition-[width] duration-300 ease-out",
+            done ? "bg-emerald-500" : failed ? "bg-destructive" : "bg-primary",
+          )}
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    </div>
   );
 }

@@ -2,9 +2,10 @@
 
 import { Suspense, use, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { api } from "@/lib/trpc-client";
+import { SubmissionsModal } from "@/components/recruitment/submissions-modal";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -41,9 +42,18 @@ export default function RecruitmentListPage({ params }: { params: Params }) {
 function Inner({ params }: { params: Params }) {
   const { guildId } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // When opened from a team dashboard the link carries ?team=<id>, so the back
+  // link returns there; otherwise it falls back to the guild page.
+  const team = searchParams.get("team");
   const utils = api.useUtils();
   const forms = api.recruitment.listForms.useQuery({ guildId });
   const [name, setName] = useState("");
+  const [subFor, setSubFor] = useState<{
+    id: string;
+    name: string;
+    votingEnabled: boolean;
+  } | null>(null);
 
   const create = api.recruitment.createForm.useMutation({
     onSuccess: async (f) => {
@@ -56,7 +66,13 @@ function Inner({ params }: { params: Params }) {
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold">Recruitment</h1>
+        <Link
+          href={team ? `/guild/${guildId}/team/${team}` : `/guild/${guildId}`}
+          className="text-muted-foreground hover:text-foreground text-sm transition-colors"
+        >
+          ← {team ? "Dashboard" : "Guild"}
+        </Link>
+        <h1 className="mt-1 text-2xl font-semibold">Recruitment</h1>
         <p className="text-muted-foreground mt-1 text-sm">
           Build a branded application form, share its public link, and review
           applicants with your officers.
@@ -128,15 +144,45 @@ function Inner({ params }: { params: Params }) {
                   )}
                 </div>
               </div>
-              <Link
-                href={`/guild/${guildId}/recruitment/${f.id}`}
-                className={buttonVariants({ size: "sm", variant: "outline" })}
-              >
-                Manage
-              </Link>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setSubFor({
+                      id: f.id,
+                      name: f.name,
+                      votingEnabled: f.votingEnabled,
+                    })
+                  }
+                >
+                  Submissions
+                  {f._count.submissions > 0 && (
+                    <span className="text-muted-foreground ml-1.5 text-xs">
+                      {f._count.submissions}
+                    </span>
+                  )}
+                </Button>
+                <Link
+                  href={`/guild/${guildId}/recruitment/${f.id}`}
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                >
+                  Manage
+                </Link>
+              </div>
             </li>
           ))}
         </ul>
+      )}
+
+      {subFor && (
+        <SubmissionsModal
+          open
+          formId={subFor.id}
+          formName={subFor.name}
+          votingEnabled={subFor.votingEnabled}
+          onClose={() => setSubFor(null)}
+        />
       )}
     </main>
   );

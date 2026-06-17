@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "@/env";
+import { siteConfig } from "@/lib/site-config";
 import { logger } from "@/lib/logger";
 import { redis } from "@/lib/redis";
 
@@ -126,9 +127,9 @@ export const sendVerificationEmail = async (
 ): Promise<void> => {
   await sendMail({
     to,
-    subject: `Verify your email — ${env.NEXT_PUBLIC_APP_NAME}`,
+    subject: `Verify your email — ${siteConfig.appName}`,
     text:
-      `Welcome to ${env.NEXT_PUBLIC_APP_NAME}.\n\n` +
+      `Welcome to ${siteConfig.appName}.\n\n` +
       `Open this link to verify your email address:\n\n${verifyUrl}\n\n` +
       `If you didn't sign up, ignore this email.\n`,
   });
@@ -140,7 +141,7 @@ export const sendPasswordResetEmail = async (
 ): Promise<void> => {
   await sendMail({
     to,
-    subject: `Reset your password — ${env.NEXT_PUBLIC_APP_NAME}`,
+    subject: `Reset your password — ${siteConfig.appName}`,
     text:
       `Someone requested a password reset for your account.\n\n` +
       `Open this link to choose a new password:\n\n${resetUrl}\n\n` +

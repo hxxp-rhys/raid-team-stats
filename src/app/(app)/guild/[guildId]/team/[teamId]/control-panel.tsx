@@ -31,10 +31,6 @@ import {
   useIsMobile,
 } from "@/lib/widgets/use-is-mobile";
 import { isLightTheme, isValidTheme, THEME_IDS, THEME_META } from "@/lib/theme";
-import {
-  useRefreshInterval,
-  REFRESH_OPTIONS,
-} from "@/lib/widgets/use-refresh-interval";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -92,21 +88,14 @@ export function ControlPanel({
   const team = api.raidTeam.get.useQuery({ raidTeamId: teamId });
   const dashboards = api.dashboard.list.useQuery({ raidTeamId: teamId });
 
-  // ─── Auto-refresh (live updates) ─────────────────────────────────────────
-  // A single polling observer on the SHARED snapshot query key. Every widget
-  // calls `snapshot.latestForTeam({ raidTeamId })` with the same input, so
-  // React Query dedupes them into one query; this observer's refetchInterval
-  // drives that query's refetch and ALL widgets receive the fresh data — no
-  // per-widget wiring. `refetchIntervalInBackground` stays false (default) so
-  // a hidden tab doesn't burn the WCL/Blizzard budget. Off by default.
-  const { intervalMs: refreshIntervalMs, setIntervalMs: setRefreshIntervalMs } =
-    useRefreshInterval();
+  // Warm the SHARED snapshot query key so every widget (each calls
+  // `snapshot.latestForTeam({ raidTeamId })` with the same input) reads one
+  // deduped query. Updates come from the manual "Refresh data" button and the
+  // server-side auto-refresh schedule (⏱ Auto-refresh) — there's no
+  // client-side polling interval.
   api.snapshot.latestForTeam.useQuery(
     { raidTeamId: teamId },
-    {
-      refetchInterval: refreshIntervalMs,
-      refetchOnWindowFocus: false,
-    },
+    { refetchOnWindowFocus: false },
   );
 
   // ─── Manual data-refresh + live progress ─────────────────────────────────
@@ -139,6 +128,13 @@ export function ControlPanel({
     },
     onError: () => setRefreshProgress(null),
   });
+  // "Refresh data" also kicks off a full guild ROSTER refresh (same job the
+  // guild-settings "Refresh Roster" runs), so a single click pulls both the
+  // team's character data AND the live Battle.net roster. Best-effort + fire-
+  // and-forget: it runs in the worker, is rate-limited server-side (1/5min per
+  // guild), and a rate-limit rejection here is silently ignored so it never
+  // blocks the team-data refresh.
+  const rosterRefresh = api.guild.triggerManualSync.useMutation();
   const refreshSync = api.raidTeam.syncProgress.useQuery(
     { raidTeamId: teamId, since: refreshProgress?.since ?? REFRESH_EPOCH },
     {
@@ -756,6 +752,12 @@ export function ControlPanel({
             >
               Calendar
             </Link>
+            <Link
+              href={`/guild/${guildId}/recruitment?team=${teamId}` as Route}
+              className="border-border bg-background hover:bg-muted inline-flex h-8 items-center rounded-md border px-3 font-medium"
+            >
+              Recruitment
+            </Link>
           </nav>
         </div>
         <div className="flex flex-col items-end gap-1.5 text-sm">
@@ -803,36 +805,6 @@ export function ControlPanel({
               />
               <span aria-hidden>📱</span>
               <span>Mobile View</span>
-            </label>
-            {/* Auto-refresh period — drives the shared snapshot poll. Visible
-                to viewers too (watching a live dashboard during raid). */}
-            <label
-              className={cn(
-                "border-border bg-background inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-sm",
-                refreshIntervalMs !== false && "border-primary text-primary",
-              )}
-              title="Auto-refresh the dashboard data on a timer. Pauses while the tab is in the background."
-            >
-              <span aria-hidden>🔄</span>
-              <span className="sr-only">Auto-refresh period</span>
-              <select
-                value={refreshIntervalMs === false ? "off" : String(refreshIntervalMs)}
-                onChange={(e) =>
-                  setRefreshIntervalMs(
-                    e.target.value === "off" ? false : Number(e.target.value),
-                  )
-                }
-                className="bg-background cursor-pointer text-sm focus:outline-none"
-              >
-                {REFRESH_OPTIONS.map((o) => (
-                  <option
-                    key={o.label}
-                    value={o.value === false ? "off" : String(o.value)}
-                  >
-                    {o.value === false ? "Auto-refresh: Off" : `Every ${o.label}`}
-                  </option>
-                ))}
-              </select>
             </label>
             {/* Shared-link theme — owner-only. Sets a palette that applies on
                 the public /share/[token] view, regardless of the viewer's
@@ -922,7 +894,11 @@ export function ControlPanel({
                 ? `Syncing ${refreshSynced}/${refreshTotal}…`
                 : "Refresh data"
           }
-          onClick={() => refresh.mutate({ raidTeamId: teamId })}
+          onClick={() => {
+            refresh.mutate({ raidTeamId: teamId });
+            // Also refresh the guild roster from Battle.net (best-effort).
+            rosterRefresh.mutate({ guildId });
+          }}
           disabled={refresh.isPending || refreshActive}
         />
         <ActionButton

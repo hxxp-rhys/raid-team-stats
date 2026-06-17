@@ -71,40 +71,60 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Only show the CURRENT raid tier (WoW Midnight). The zone id is resolved
-  // server-side (env-pinned to the live raid) and returned with the query —
-  // we filter strictly to it so a stale past-expansion parse (e.g. The War
-  // Within's Manaforge Omega = zone 44) can never appear, even if such rows
-  // still exist in the DB. If the server couldn't resolve it, fall back to
-  // the highest zone id present in the data.
-  const serverZone = q.data.currentRaidZoneId;
-  let currentZone = serverZone ?? -1;
-  if (serverZone == null) {
+  // Show the CURRENT RELEASE's raids — the WHOLE set the server tracks
+  // together (e.g. Midnight 12.0.7 → zones 46 + 50), because patches ADD raids
+  // to a release rather than replacing them. Filtering strictly to this set
+  // keeps stale past-expansion parses (e.g. TWW's zone 44) out. If the server
+  // couldn't resolve it, fall back to every zone present in the data.
+  const serverZoneIds = q.data.currentRaidZoneIds ?? [];
+  const currentZoneIds = new Set<number>(serverZoneIds);
+  if (currentZoneIds.size === 0) {
     for (const m of q.data.members) {
       for (const p of m.latest.wclParses ?? []) {
-        if (typeof p.zoneId === "number" && p.zoneId > currentZone)
-          currentZone = p.zoneId;
+        if (typeof p.zoneId === "number") currentZoneIds.add(p.zoneId);
       }
     }
   }
+  const inCurrent = (zoneId: number | null | undefined) =>
+    typeof zoneId === "number" && currentZoneIds.has(zoneId);
 
   // Collect distinct encounters (id + name) for the current zone only.
-  // Pull the name from whichever parse row carries it. Sorted by encounter
-  // id so the column order is stable (== pull/boss order within the raid).
-  const encMap = new Map<number, string>();
+  // SEED first with the live zone's FULL boss list from the server, so EVERY
+  // boss gets a column — including a brand-new encounter (e.g. Rotmire on a
+  // freshly-released raid) that nobody has parsed yet. Without this seed the
+  // legend was built purely from stored parses, so a boss with zero kills
+  // never appeared. Parse rows below only refine names / fill cells; they
+  // never gate which encounters show. Sorted by encounter id so the column
+  // order is stable (== pull/boss order within the raid).
+  const encMap = new Map<number, { name: string; zoneId: number }>();
+  // Seed with the live release's FULL boss list (every release zone), so EVERY
+  // boss gets a column — including brand-new ones nobody has parsed yet.
+  if (serverZoneIds.length > 0) {
+    for (const enc of q.data.currentZoneEncounters ?? []) {
+      encMap.set(enc.id, { name: enc.name ?? "", zoneId: enc.zoneId });
+    }
+  }
   for (const m of q.data.members) {
     for (const p of m.latest.wclParses ?? []) {
       if (typeof p.encounterId !== "number") continue;
-      if (p.zoneId !== currentZone) continue;
+      if (!inCurrent(p.zoneId)) continue;
       if (typeof p.difficulty === "number" && p.difficulty !== MYTHIC) continue;
-      if (!encMap.has(p.encounterId) || (p.encounterName && !encMap.get(p.encounterId))) {
-        encMap.set(p.encounterId, p.encounterName ?? "");
+      const cur = encMap.get(p.encounterId);
+      if (!cur) {
+        encMap.set(p.encounterId, {
+          name: p.encounterName ?? "",
+          zoneId: p.zoneId ?? 0,
+        });
+      } else if (p.encounterName && !cur.name) {
+        cur.name = p.encounterName;
       }
     }
   }
+  // Group by zone (release order — launch raids first), then by encounter id
+  // within each raid, so the columns read as full raids left-to-right.
   const encounterOrder = [...encMap.entries()]
-    .map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.id - b.id);
+    .map(([id, v]) => ({ id, name: v.name, zoneId: v.zoneId }))
+    .sort((a, b) => a.zoneId - b.zoneId || a.id - b.id);
 
   if (encounterOrder.length === 0) {
     return (
@@ -126,7 +146,7 @@ export function ParsesHeatmapWidget({ raidTeamId }: { raidTeamId: string }) {
       if (typeof p.encounterId !== "number") continue;
       const pct = isWeek ? p.weekPercentile : p.percentile;
       if (typeof pct !== "number") continue;
-      if (p.zoneId !== currentZone) continue; // current raid only
+      if (!inCurrent(p.zoneId)) continue; // current release only
       if (typeof p.difficulty === "number" && p.difficulty !== MYTHIC) continue;
       const prior = cellByEnc.get(p.encounterId);
       if (prior === undefined || pct > prior) {

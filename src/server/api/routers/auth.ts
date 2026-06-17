@@ -8,6 +8,7 @@ import {
   registerSchema,
 } from "@/server/auth/schemas";
 import { hashPassword, verifyPassword } from "@/server/crypto/kdf";
+import { emailBlindIndex } from "@/server/auth/email-index";
 import {
   issueToken,
   consumeToken,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/email";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import { audit } from "@/server/security/audit";
+import { auditRateLimitExceeded } from "@/server/security/rate-limit-audit";
 import { logger } from "@/lib/logger";
 
 /**
@@ -45,16 +47,25 @@ export const authRouter = router({
       // submitted email.
       const rl = await consumeLimit(policies.authSignupPerIp, ctx.ip ?? "no-ip");
       if (!rl.allowed) {
+        await auditRateLimitExceeded({
+          policy: "auth:register",
+          source: ctx.ip ?? "no-ip",
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
           message: "Too many sign-up attempts. Please try again later.",
         });
       }
 
-      const existing = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const existing = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true },
+          })
+        : null;
 
       // Account enumeration: same shape whether the email is new or taken.
       // Both branches do a dummy/real argon2id so response timing doesn't
@@ -112,15 +123,24 @@ export const authRouter = router({
     .mutation(async ({ ctx, input }) => {
       const rl = await consumeLimit(policies.authSignupPerIp, ctx.ip ?? "no-ip");
       if (!rl.allowed) {
+        await auditRateLimitExceeded({
+          policy: "auth:resend-verification",
+          source: ctx.ip ?? "no-ip",
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
         throw new TRPCError({
           code: "TOO_MANY_REQUESTS",
           message: "Too many attempts. Please try again later.",
         });
       }
-      const user = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true, email: true, emailVerified: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const user = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true, email: true, emailVerified: true },
+          })
+        : null;
       if (user && !user.emailVerified) {
         const { raw } = await issueToken("verify_email", user.id);
         // Looked up by `email: input.email`, so it equals input.email (a
@@ -173,12 +193,23 @@ export const authRouter = router({
         input.email,
       );
       // Hard rate-limit returns OK to avoid leaking timing, but skips work.
-      if (!rl.allowed) return { ok: true };
+      if (!rl.allowed) {
+        await auditRateLimitExceeded({
+          policy: "auth:password-reset",
+          source: input.email,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return { ok: true };
+      }
 
-      const user = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true, email: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const user = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true, email: true },
+          })
+        : null;
 
       if (!user) {
         // Account-enumeration defence: respond identically whether the email
