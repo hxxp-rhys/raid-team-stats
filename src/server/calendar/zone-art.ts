@@ -35,12 +35,11 @@ export const CURRENT_TIER_INSTANCES: Record<string, number> = {
   "The Voidspire": 1307,
   "March on Quel'Danas": 1308,
   "The Dreamrift": 1314,
-  // 12.0.7 "Sporefall" (WCL zone 50, single boss "Rotmire") is live, but its
-  // Blizzard journal-instance is NOT yet published in the static game-data API
-  // (verified by scanning /data/wow/journal-instance on patch day). Add
-  // `"Sporefall": <id>` here once it appears; until then the calendar just shows
-  // no custom art/boss-list for it (getZoneArtUrl/getZoneEncounters degrade to
-  // null/[] gracefully).
+  // 12.0.7 "Sporefall" — single boss "Rotmire" (WCL zone 50, journal-instance
+  // 1305, published shortly after patch day). Per patch: add the new tier's
+  // raid name → journal-instance id here (find ids via GET
+  // /data/wow/journal-instance/index or scripts probe).
+  Sporefall: 1305,
 };
 
 /**

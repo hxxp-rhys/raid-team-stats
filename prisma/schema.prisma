@@ -23,7 +23,13 @@ model User {
   // OAuth exposes only `sub` + `battle_tag`). They can add + verify an email
   // later for password login. Postgres permits multiple NULLs under a unique
   // index, so email-less Battle.net users don't collide.
-  email         String?   @unique
+  // Encrypted at rest (AES-256-GCM via the @/lib/db extension). Random IV per
+  // write means you can't look up by `email` directly — use `emailIndex`.
+  email         String?
+  // Blind index for exact-match email lookups: a keyed HMAC of the normalized
+  // email (server/auth/email-index.ts), auto-derived on every write by the db
+  // extension. The UNIQUE here replaces the old @unique on `email`.
+  emailIndex    String?   @unique
   emailVerified DateTime?
   displayName   String?
   avatarUrl     String?
@@ -1466,4 +1472,28 @@ model RecruitmentNotificationOutbox {
 
   @@index([processedAt])
   @@index([submissionId])
+}
+
+// Persisted WCL `worldData` snapshot — one row per WCL zone (raids, M+ seasons,
+// delves). Refreshed on a schedule by runWorldDataRefresh() so the app holds a
+// LOCAL, durable source of truth for the live raid tier + every zone's boss
+// list, instead of a hand-maintained WCL_RAID_ZONE_ID env pin that silently
+// goes stale each content patch. The single row with isCurrentRaid=true is the
+// live raid tier the zone resolver reads (env pin, if set, still overrides).
+model WclZone {
+  id            Int      @id // WCL zone id (natural key — stable external id)
+  name          String
+  frozen        Boolean  @default(false) // true once WCL retires the tier
+  expansionId   Int?
+  expansionName String?
+  isRaid        Boolean  @default(false) // difficulties include a raid id (3/4/5)
+  isCurrentRaid Boolean  @default(false) // the ONE live raid tier (job-maintained)
+  difficulties  Json // [{ id, name }] — WCL difficulty ids (raid 3/4/5, M+ 10, …)
+  encounters    Json // [{ id, name }] — WCL encounter ids (matches parse rows)
+  refreshedAt   DateTime // last refresh of this row from WCL worldData
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([frozen])
+  @@index([isCurrentRaid])
 }

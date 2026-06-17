@@ -101,16 +101,17 @@ export function WclParsesWidget({ raidTeamId }: { raidTeamId: string }) {
           </thead>
           <tbody className="divide-border divide-y">
             {q.data.members.map((m) => {
-              // Current raid tier (server-resolved zone) + Mythic. The
-              // active field is `weekPercentile` (this-lockout kills) when
-              // the user picks "This week" and `percentile` (season best)
-              // otherwise — both come from the same wclParse rows.
-              const zone = q.data.currentRaidZoneId;
+              // Current RELEASE raids (server-resolved zone SET — patches add
+              // raids to a release) + Mythic. The active field is
+              // `weekPercentile` (this-lockout kills) for "This week" and
+              // `percentile` (season best) otherwise — both from the same rows.
+              const zoneIds = q.data.currentRaidZoneIds ?? [];
               const pickPct = (p: { weekPercentile: number | null; percentile: number | null }) =>
                 isWeek ? p.weekPercentile : p.percentile;
               const parses = (m.latest.wclParses ?? []).filter(
                 (p) =>
-                  (zone == null || p.zoneId === zone) &&
+                  (zoneIds.length === 0 ||
+                    (typeof p.zoneId === "number" && zoneIds.includes(p.zoneId))) &&
                   p.difficulty === MYTHIC &&
                   pickPct(p) != null,
               );

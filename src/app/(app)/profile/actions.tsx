@@ -20,6 +20,31 @@ const DISCOVERY_STEPS = [
 
 const STEP_INTERVAL_MS = 2500;
 
+/**
+ * Sign out — lives on the right-hand side of the Account page header. Split
+ * out from the Battle.net actions so the two concerns sit in their own
+ * places on the page (sign-out top-right; Battle.net reconnect in its card).
+ */
+export function SignOutButton() {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="shrink-0"
+      onClick={() => signOut({ callbackUrl: "/" })}
+    >
+      Sign out
+    </Button>
+  );
+}
+
+/**
+ * Battle.net card body: connection status, the link/reconnect action pinned
+ * bottom-right, and the one-shot guild auto-discovery feedback. "Reconnect"
+ * re-runs Battle.net OAuth because its tokens expire ~24h with no refresh
+ * token — re-authing keeps the per-character sync working.
+ */
 export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }) {
   const [stepIndex, setStepIndex] = useState(0);
   // Reset the faux-progress step when a run starts — done in the mutation
@@ -65,50 +90,22 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-3">
-        {/* 1. Gateway action. When NOT linked this is the primary
-            "Link Battle.net" CTA. Once linked, there's nothing to link, so
-            we drop the CTA and show a non-prominent "Connected" chip plus a
-            subtle "Refresh" (Battle.net tokens expire ~24h with no refresh
-            token, so re-running OAuth keeps sync working). */}
-        {battlenetLinked ? (
-          <span className="inline-flex items-center gap-2">
-            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-green-500/40 bg-green-500/10 px-2.5 text-sm font-medium text-green-600 dark:text-green-400">
-              <span aria-hidden>✓</span> Battle.net connected
-            </span>
-            <button
-              type="button"
-              onClick={() =>
-                signIn("battlenet", { callbackUrl: "/account?bnet=reconnected" })
-              }
-              className="text-muted-foreground hover:text-foreground text-xs underline-offset-4 hover:underline"
-              title="Re-run Battle.net sign-in to refresh the connection (tokens expire ~24h)"
-            >
-              Refresh
-            </button>
-          </span>
-        ) : (
-          <Button
-            variant="default"
-            onClick={() =>
-              signIn("battlenet", { callbackUrl: "/account?bnet=linked" })
-            }
-          >
-            Link Battle.net
-          </Button>
-        )}
+      {/* Connection status. The link/reconnect action is pinned bottom-right
+          of the card (below), so the whole card reads: status → discovery
+          feedback → action. */}
+      <p className="text-sm">
+        Status:{" "}
+        <span
+          className={battlenetLinked ? "text-green-500" : "text-muted-foreground"}
+        >
+          {battlenetLinked ? "Linked" : "Not linked"}
+        </span>
+      </p>
 
-        {/* Guild discovery moved to the "Add Guild" lightbox on /guild,
-            which lets the user pick WHICH guilds to add. Battle.net link
-            (above) still auto-discovers once on first link via the
-            ?bnet=linked redirect handled below. "My guilds" itself lives in
-            the top bar now (left of the user menu), not on this page. */}
-
-        {/* Sign out — always available. */}
-        <Button variant="outline" onClick={() => signOut({ callbackUrl: "/" })}>
-          Sign out
-        </Button>
-      </div>
+      {/* Guild discovery moved to the "Add Guild" lightbox on /guild, which
+          lets the user pick WHICH guilds to add. Linking / reconnecting still
+          auto-discovers once via the ?bnet=linked|reconnected redirect handled
+          above. "My guilds" itself lives in the top bar, not on this page. */}
 
       {discover.isPending && (
         <div
@@ -179,6 +176,34 @@ export function ProfileActions({ battlenetLinked }: { battlenetLinked: boolean }
           )}
         </div>
       )}
+
+      {/* Primary action, pinned bottom-right of the Battle.net card. When NOT
+          linked this is the "Link Battle.net" CTA; once linked it's the
+          subtle "Reconnect" (re-runs OAuth — tokens expire ~24h). */}
+      <div className="flex justify-end pt-1">
+        {battlenetLinked ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              signIn("battlenet", { callbackUrl: "/account?bnet=reconnected" })
+            }
+            title="Re-run Battle.net sign-in to refresh the connection (tokens expire ~24h)"
+          >
+            Reconnect
+          </Button>
+        ) : (
+          <Button
+            variant="default"
+            onClick={() =>
+              signIn("battlenet", { callbackUrl: "/account?bnet=linked" })
+            }
+          >
+            Link Battle.net
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

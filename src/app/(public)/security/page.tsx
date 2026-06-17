@@ -4,33 +4,33 @@ import { siteConfig, UPSTREAM } from "@/lib/site-config";
 
 export const metadata: Metadata = {
   title: "Security",
-  description: `How ${siteConfig.appName} protects your data.`,
+  description: `How ${siteConfig.appName} safeguards data.`,
 };
 
 const sections: ReadonlyArray<{ title: string; body: string }> = [
   {
     title: "Encryption in transit",
-    body: "All traffic is served over HTTPS/TLS. The companion uploader refuses to send your data over an unencrypted connection.",
+    body: "The companion uploader refuses to send data over anything but an encrypted (HTTPS) connection, and the included production configuration serves the site over HTTPS/TLS with HSTS.",
   },
   {
     title: "Encryption at rest",
-    body: "Personal data and third-party access tokens are encrypted in the database with authenticated AES-256-GCM encryption, layered on top of disk-level encryption — so the raw data is unreadable even with direct database access.",
+    body: "Sensitive fields are encrypted in the database by the application itself using authenticated AES-256-GCM: account email addresses, third-party (OAuth) access tokens, two-factor-authentication secrets, display names and avatars, and recruitment-form answers. Each value gets a fresh random IV and an authentication tag, so it cannot be read or altered without the key. (Email uses a separate keyed blind index so you can still sign in without the address ever being stored in the clear.)",
   },
   {
     title: "Passwords & tokens",
-    body: "Passwords are never stored directly — they are hashed with the memory-hard Argon2id algorithm. Companion upload tokens are stored only as one-way hashes and rotate automatically on use, so a leaked token stops working after your next sync.",
+    body: "Account passwords are never stored — only a one-way Argon2id hash (a slow, memory-hard algorithm) is kept, so the original cannot be recovered. Companion upload tokens are stored only as SHA-256 hashes and rotate automatically on each sync, so a leaked token stops working after the next upload.",
   },
   {
     title: "Access & sessions",
-    body: "Sign-in supports Battle.net OAuth and optional time-based one-time-password (TOTP) two-factor authentication. Read-only share links are cryptographically signed and can be revoked at any time.",
+    body: "Sign-in supports Battle.net (OAuth) and email + password, with optional time-based one-time-password (TOTP) two-factor authentication. Read-only share links are signed with HMAC-SHA256 and can be switched off at any time, which immediately re-locks every outstanding link. Guild and team data is private by default and checked against your role on every request.",
   },
   {
-    title: "Hardening",
-    body: "The application enforces a strict Content-Security-Policy, rate-limits sensitive endpoints, keeps an audit log of privileged actions, and runs as a non-root, least-privilege container.",
+    title: "Hardening & logging",
+    body: "The app enforces a strict, nonce-based Content-Security-Policy, rate-limits sign-in and other sensitive endpoints, and records an append-only audit log of privileged actions. In the shipped setup it runs as a non-root container with Linux capabilities dropped and privilege-escalation disabled. Personal data and secrets — including email addresses and tokens — are stripped from the application's logs.",
   },
   {
-    title: "What we hold — and don't",
-    body: "We store the World of Warcraft character, guild, and raid data needed to power your dashboards, plus the email you sign up with. Your data is never sold, rented, or shared with advertisers. It stays private to your guild by default.",
+    title: "What's collected — and what isn't",
+    body: "To power your dashboards the app stores World of Warcraft character, guild, and raid data, plus the email address used to sign in — all on the infrastructure of whoever operates this instance, not the project's. Your email is used only as your login identifier and for any notifications you turn on; it is encrypted at rest, sent over encrypted connections, kept out of the application's logs, and access-controlled. The software ships with no advertising, third-party analytics, or data-broker integrations, and so has no means to sell, rent, or share your data.",
   },
 ];
 
@@ -40,11 +40,13 @@ export default function SecurityPage() {
       <header className="space-y-3">
         <h1 className="text-3xl font-bold tracking-tight">Security &amp; your data</h1>
         <p className="text-muted-foreground leading-relaxed">
-          {siteConfig.appName} is built to keep your guild&apos;s data private and
-          protected. Here, in broad terms, is how it is safeguarded. Because the
-          software is self-hosted, each instance is operated independently by
-          whoever runs it; this page describes the protections the software
-          itself provides.
+          {siteConfig.appName}{" "}
+          is built to keep a guild&apos;s data private and protected. Below, in
+          broad terms, are the safeguards the software provides. It is
+          self-hosted: each instance is set up and run independently by whoever
+          operates it, on infrastructure they control — so this page describes
+          what the software itself does, not any particular operator&apos;s
+          systems.
         </p>
       </header>
 
@@ -67,7 +69,8 @@ export default function SecurityPage() {
           Responsible disclosure
         </h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          Found a security issue? Please report it privately via the project&apos;s{" "}
+          Found a security vulnerability? Please report it privately through the
+          project&apos;s{" "}
           <a
             href={UPSTREAM.repoUrl}
             target="_blank"
@@ -76,8 +79,9 @@ export default function SecurityPage() {
           >
             GitHub repository
           </a>{" "}
-          rather than opening a public issue, so it can be fixed before it is
-          widely known.
+          (a private security advisory) rather than opening a public issue, so it
+          can be fixed before it is widely known. Other bugs are welcome as a
+          regular GitHub issue.
         </p>
       </section>
     </article>

@@ -224,15 +224,20 @@ function SnapshotTab({
     kills: number | null;
     lowSample: boolean;
   };
+  // WCL returns 0 (not null) for a logged-but-unrated boss, so treat 0 as "no
+  // score" — otherwise an unrated boss (e.g. a brand-new raid boss) shows a
+  // misleading "0" and drags the All-bosses average down.
+  const hasScore = (v: number | null | undefined): v is number =>
+    v != null && v > 0;
   const rows: Row[] = members
     .map((m) => {
       if (encounterSel === "all") {
-        // Zone-level official aggregates — exactly the medianPerformance
-        // numbers WCL computes, no re-derivation.
+        // WCL's whole-zone aggregates (already 0-filtered server-side); hasScore
+        // guards a stray 0 from rendering as a real score.
         return {
           member: m,
-          median: m.medianAvg,
-          best: m.bestAvg,
+          median: hasScore(m.medianAvg) ? m.medianAvg : null,
+          best: hasScore(m.bestAvg) ? m.bestAvg : null,
           volatility: null,
           kills: m.encounters.reduce<number | null>(
             (s, e) => (e.kills == null ? s : (s ?? 0) + e.kills),
@@ -244,22 +249,50 @@ function SnapshotTab({
       const e = m.encounters.find((x) => x.encounterId === encounterSel);
       return {
         member: m,
-        median: e?.median ?? null,
-        best: e?.best ?? null,
+        median: hasScore(e?.median) ? e!.median : null,
+        best: hasScore(e?.best) ? e!.best : null,
         volatility: e?.volatility ?? null,
         kills: e?.kills ?? null,
         lowSample: e != null && (e.kills ?? 0) < 4,
       };
     })
-    .filter((r) => r.median != null || r.best != null)
+    // Keep a member if they have a real score OR a logged kill — so a boss with
+    // kills-but-no-score still lists who killed it (with "—").
+    .filter((r) => r.median != null || r.best != null || (r.kills ?? 0) > 0)
     .sort((a, b) => (b.median ?? -1) - (a.median ?? -1));
 
+  // Specific boss selected, members have logged kills on it, but nobody has a
+  // real WCL score yet → notice under the dropdowns.
+  const selectedNoScore =
+    encounterSel !== "all" &&
+    (() => {
+      const sel = members
+        .map((m) => m.encounters.find((e) => e.encounterId === encounterSel))
+        .filter((e): e is NonNullable<typeof e> => e != null);
+      return (
+        sel.some((e) => (e.kills ?? 0) > 0) &&
+        !sel.some((e) => hasScore(e.best) || hasScore(e.median))
+      );
+    })();
+  const notice = selectedNoScore ? (
+    <p className="border-amber-500/30 bg-amber-500/10 mb-2 rounded border px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300">
+      This boss has logged kills but Warcraft Logs hasn&rsquo;t published parse
+      scores for it yet — percentiles will appear once WCL rates it.
+    </p>
+  ) : null;
+
   if (rows.length === 0) {
-    return <WidgetEmpty>No parses for this boss yet.</WidgetEmpty>;
+    return (
+      <div>
+        {notice}
+        <WidgetEmpty>No parses for this boss yet.</WidgetEmpty>
+      </div>
+    );
   }
 
   return (
     <div>
+      {notice}
       <table className="w-full text-xs">
         <thead>
           <tr className="text-muted-foreground text-left">

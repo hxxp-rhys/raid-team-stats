@@ -8,6 +8,7 @@ import {
   registerSchema,
 } from "@/server/auth/schemas";
 import { hashPassword, verifyPassword } from "@/server/crypto/kdf";
+import { emailBlindIndex } from "@/server/auth/email-index";
 import {
   issueToken,
   consumeToken,
@@ -51,10 +52,13 @@ export const authRouter = router({
         });
       }
 
-      const existing = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const existing = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true },
+          })
+        : null;
 
       // Account enumeration: same shape whether the email is new or taken.
       // Both branches do a dummy/real argon2id so response timing doesn't
@@ -117,10 +121,13 @@ export const authRouter = router({
           message: "Too many attempts. Please try again later.",
         });
       }
-      const user = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true, email: true, emailVerified: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const user = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true, email: true, emailVerified: true },
+          })
+        : null;
       if (user && !user.emailVerified) {
         const { raw } = await issueToken("verify_email", user.id);
         // Looked up by `email: input.email`, so it equals input.email (a
@@ -175,10 +182,13 @@ export const authRouter = router({
       // Hard rate-limit returns OK to avoid leaking timing, but skips work.
       if (!rl.allowed) return { ok: true };
 
-      const user = await ctx.db.user.findUnique({
-        where: { email: input.email },
-        select: { id: true, email: true },
-      });
+      const emailIdx = emailBlindIndex(input.email);
+      const user = emailIdx
+        ? await ctx.db.user.findUnique({
+            where: { emailIndex: emailIdx },
+            select: { id: true, email: true },
+          })
+        : null;
 
       if (!user) {
         // Account-enumeration defence: respond identically whether the email

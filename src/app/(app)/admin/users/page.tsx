@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
 
 type Region = "US" | "EU" | "KR" | "TW";
@@ -23,6 +24,12 @@ export default function AdminUsersPage() {
   const [guildId, setGuildId] = useState<string>("");
   const [adminOnly, setAdminOnly] = useState(false);
   const [page, setPage] = useState(1);
+  // Delete-confirm lightbox target (replaces window.confirm). Purely client-side
+  // UX — the real gate is the server admin check in admin.deleteUser.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
 
   const filters = api.admin.filterOptions.useQuery();
   const utils = api.useUtils();
@@ -44,6 +51,13 @@ export default function AdminUsersPage() {
 
   const setAdmin = api.admin.setUserAdmin.useMutation({
     onSuccess: () => {
+      utils.admin.listUsers.invalidate();
+      utils.admin.overview.invalidate();
+    },
+  });
+  const deleteUser = api.admin.deleteUser.useMutation({
+    onSuccess: () => {
+      setDeleteTarget(null);
       utils.admin.listUsers.invalidate();
       utils.admin.overview.invalidate();
     },
@@ -201,6 +215,7 @@ export default function AdminUsersPage() {
                     <th scope="col" className="py-1 pr-3 font-medium">Guilds</th>
                     <th scope="col" className="py-1 pr-3 font-medium">Created</th>
                     <th scope="col" className="py-1 pr-3 font-medium">Admin</th>
+                    <th scope="col" className="py-1 pr-3 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-border divide-y">
@@ -240,6 +255,20 @@ export default function AdminUsersPage() {
                           {u.isAdmin ? "Revoke admin" : "Make admin"}
                         </Button>
                       </td>
+                      <td className="py-2 pr-3">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() =>
+                            setDeleteTarget({
+                              id: u.id,
+                              label: u.displayName ?? u.email ?? "this user",
+                            })
+                          }
+                        >
+                          Delete
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -253,6 +282,48 @@ export default function AdminUsersPage() {
           )}
         </CardContent>
       </Card>
+
+      <Modal
+        open={deleteTarget != null}
+        onClose={() => {
+          if (!deleteUser.isPending) setDeleteTarget(null);
+        }}
+        title="Delete user?"
+        description="This permanently removes the account and cannot be undone."
+        hideDefaultFooter
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-foreground">
+            Permanently delete <strong>{deleteTarget?.label}</strong>? This
+            removes their account, characters, snapshots, memberships and
+            signups. Any raid teams they lead or guilds they claimed become
+            leaderless / unclaimed.
+          </p>
+          {deleteUser.error && (
+            <p className="text-destructive" role="alert">
+              {deleteUser.error.message}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteUser.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                deleteTarget && deleteUser.mutate({ userId: deleteTarget.id })
+              }
+              disabled={deleteUser.isPending}
+            >
+              {deleteUser.isPending ? "Deleting…" : "Delete permanently"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </section>
   );
 }

@@ -3,6 +3,7 @@ import { PrismaClient } from "@/generated/prisma/client";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
 import { encryptToken, decryptToken, isEncrypted } from "@/server/crypto/token-cipher";
+import { emailBlindIndex } from "@/server/auth/email-index";
 
 /**
  * Transparent, NON-OPTIONAL column-level encryption (AES-256-GCM) for tokens and
@@ -18,16 +19,17 @@ import { encryptToken, decryptToken, isEncrypted } from "@/server/crypto/token-c
  * Decrypt failures (wrong key, tampering) become null + a log line rather than
  * throwing, so one bad row never takes down a read path.
  *
- * NOTE: `email` is intentionally NOT here yet — it's the @unique login
- * identifier and needs a blind-index migration + live auth testing (tracked
- * separately). All other PII is covered.
+ * `email` is encrypted here too. Because random-IV ciphertext can't be queried
+ * or unique-constrained, exact-match lookups use a deterministic keyed blind
+ * index (`emailIndex`), auto-derived from the plaintext on every write below —
+ * see server/auth/email-index.ts.
  */
 type FieldType = "string" | "json";
 
 /** model delegate (camelCase) -> { field -> type }. */
 const ENCRYPTED: Record<string, Record<string, FieldType>> = {
   account: { access_token: "string", refresh_token: "string", id_token: "string" },
-  user: { displayName: "string", avatarUrl: "string" },
+  user: { displayName: "string", avatarUrl: "string", email: "string" },
   formSubmission: { answersJson: "json", applicantLabel: "string" },
   formAnswer: { valueText: "string", valueJson: "json" },
 };
@@ -68,6 +70,14 @@ const decField = (value: unknown, type: FieldType): unknown => {
 export const encryptRecord = (modelKey: string, data: unknown): void => {
   if (!data || typeof data !== "object") return;
   const rec = data as MutableRecord;
+  // Keep the email blind index in lockstep with the email being written. It's
+  // derived from the PLAINTEXT value here, before field-encryption runs below,
+  // so every create/update that touches `email` also (re)sets `emailIndex`.
+  if (modelKey === "user" && "email" in rec) {
+    const e = rec.email;
+    if (e == null) rec.emailIndex = null;
+    else if (typeof e === "string" && !isEncrypted(e)) rec.emailIndex = emailBlindIndex(e);
+  }
   const fields = ENCRYPTED[modelKey];
   if (fields) {
     for (const [f, t] of Object.entries(fields)) {

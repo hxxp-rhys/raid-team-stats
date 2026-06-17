@@ -6,6 +6,7 @@ import { headers } from "next/headers";
 
 import { db } from "@/lib/db";
 import { buildAuthAdapter } from "@/server/auth/adapter";
+import { emailBlindIndex } from "@/server/auth/email-index";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
 import { verifyPassword, needsRehash, hashPassword } from "@/server/crypto/kdf";
@@ -89,10 +90,13 @@ const config: NextAuthConfig = {
           throw new Error("Too many sign-in attempts. Please wait and try again.");
         }
 
-        const user = await db.user.findUnique({
-          where: { email },
-          include: { credential: true },
-        });
+        const idx = emailBlindIndex(email);
+        const user = idx
+          ? await db.user.findUnique({
+              where: { emailIndex: idx },
+              include: { credential: true },
+            })
+          : null;
         if (!user || !user.credential) {
           await audit({
             event: "AUTH_LOGIN_FAILURE",

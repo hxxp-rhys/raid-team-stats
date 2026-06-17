@@ -12,6 +12,7 @@
  */
 
 import { db } from "@/lib/db";
+import { emailBlindIndex } from "@/server/auth/email-index";
 import { issueToken, buildVerifyUrl, buildResetUrl } from "@/server/auth/tokens";
 
 async function main() {
@@ -30,10 +31,13 @@ async function main() {
     process.exit(2);
   }
 
-  const user = await db.user.findUnique({
-    where: { email: email.toLowerCase().trim() },
-    select: { id: true, email: true },
-  });
+  const idx = emailBlindIndex(email);
+  const user = idx
+    ? await db.user.findUnique({
+        where: { emailIndex: idx },
+        select: { id: true, email: true },
+      })
+    : null;
   if (!user) {
     console.error(`No user found for ${email}`);
     process.exit(1);

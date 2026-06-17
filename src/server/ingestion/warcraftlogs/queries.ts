@@ -89,6 +89,123 @@ export const wclRaidZonesResponseSchema = z
   .passthrough();
 
 /**
+ * FULL worldData snapshot — every WCL zone with the signals needed to persist
+ * the world state + auto-resolve the current raid tier WITHOUT a name regex:
+ *   - `frozen`     → past tier (locked) vs live
+ *   - `difficulties { id name }` → the STRUCTURAL raid signal: raids carry
+ *     difficulty ids 3/4/5 (Normal/Heroic/Mythic), M+ zones carry 10 (Dungeon),
+ *     Delves carry 108/109. So "is a raid" = has a raid difficulty id.
+ *   - `encounters { id name }` → the zone's boss list (WCL encounter ids, the
+ *     same ids that key parse rows) — persisted so widgets get the full list.
+ *   - `expansion { id name }` → grouping / display.
+ * All fields live-verified 2026-06-17 against the live schema. ~5 pts.
+ */
+export const WORLD_DATA_FULL_QUERY = /* GraphQL */ `
+  query WclWorldDataFull {
+    worldData {
+      zones {
+        id
+        name
+        frozen
+        expansion { id name }
+        difficulties { id name }
+        encounters { id name }
+      }
+    }
+  }
+`;
+
+export const worldDataFullResponseSchema = z
+  .object({
+    worldData: z
+      .object({
+        zones: z
+          .array(
+            z
+              .object({
+                id: z.number().int(),
+                name: z.string().optional(),
+                frozen: z.boolean().nullable().optional(),
+                expansion: z
+                  .object({
+                    id: z.number().int().nullable().optional(),
+                    name: z.string().nullable().optional(),
+                  })
+                  .passthrough()
+                  .nullable()
+                  .optional(),
+                difficulties: z
+                  .array(
+                    z
+                      .object({
+                        id: z.number().int(),
+                        name: z.string().nullable().optional(),
+                      })
+                      .passthrough(),
+                  )
+                  .nullable()
+                  .optional(),
+                encounters: z
+                  .array(
+                    z
+                      .object({ id: z.number().int(), name: z.string().optional() })
+                      .passthrough(),
+                  )
+                  .nullable()
+                  .optional(),
+              })
+              .passthrough(),
+          )
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+export type WorldDataFullResponse = z.infer<typeof worldDataFullResponseSchema>;
+
+/**
+ * Safety gate for the worldData refresh: does a zone have ANY public reports?
+ * `reportData.reports(zoneID, limit)` works WITHOUT a guildID (verified live
+ * 2026-06-17). A real live tier has thousands within days; a PTR / next-tier
+ * zone WCL may publish early has ~none — so "has ≥1 report" gates auto-advance
+ * onto a new tier. ~3 pts.
+ */
+export const ZONE_REPORTS_PROBE_QUERY = /* GraphQL */ `
+  query WclZoneReportsProbe($zoneID: Int) {
+    reportData {
+      reports(zoneID: $zoneID, limit: 1) {
+        data { code }
+      }
+    }
+  }
+`;
+
+export const zoneReportsProbeResponseSchema = z
+  .object({
+    reportData: z
+      .object({
+        reports: z
+          .object({
+            data: z
+              .array(z.object({ code: z.string() }).passthrough().nullable())
+              .nullable()
+              .optional(),
+          })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
+/**
  * Encounters (bosses) for a single zone — used to resolve the current
  * raid tier's boss list so we can request per-encounter rankings.
  */

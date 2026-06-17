@@ -80,7 +80,7 @@ function Inner({ params }: { params: Params }) {
                 : "text-muted-foreground"
             }`}
           >
-            {t === "build" ? "Build & settings" : "Submissions"}
+            {t === "build" ? "Build & settings" : "Notifications"}
           </button>
         ))}
       </div>
@@ -92,7 +92,7 @@ function Inner({ params }: { params: Params }) {
       ) : tab === "build" ? (
         <Builder guildId={guildId} formId={formId} form={form.data} />
       ) : (
-        <Inbox formId={formId} votingEnabled={form.data.votingEnabled} />
+        <NotificationsTab formId={formId} />
       )}
     </main>
   );
@@ -202,6 +202,10 @@ function Builder({
               <option value="CLOSED">Closed</option>
               <option value="ARCHIVED">Archived</option>
             </select>
+            <p className="text-muted-foreground mt-1 max-w-[15rem] text-xs">
+              The public application link appears once the status is set to{" "}
+              <span className="text-foreground font-medium">Open</span>.
+            </p>
           </div>
           <div className="flex-1">
             <label className="mb-1 block text-xs font-medium uppercase">Public link slug</label>
@@ -400,6 +404,43 @@ function OptionsEditor({
   );
 }
 
+/**
+ * Read an image File and return a downscaled JPEG data URL (longest edge capped
+ * at `maxDim`). Keeps the payload small enough to live in the form's theme JSON,
+ * so a custom background needs no object storage / writable volume.
+ */
+function fileToDownscaledDataUrl(
+  file: File,
+  maxDim = 1600,
+  quality = 0.82,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onerror = () => reject(new Error("Could not decode the image."));
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas is not supported in this browser."));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function ThemeEditor({
   formId,
   form,
@@ -414,9 +455,34 @@ function ThemeEditor({
     typeof initial.logoUrl === "string" ? initial.logoUrl : "",
   );
   const colors = (initial.colors ?? {}) as Record<string, string>;
-  const bg = (initial.background ?? {}) as Record<string, string>;
-  const [primary, setPrimary] = useState(colors.primary ?? "#c8a04f");
-  const [bgColor, setBgColor] = useState(bg.color ?? "#0b0e14");
+  const bg = (initial.background ?? {}) as Record<string, unknown>;
+  const [primary, setPrimary] = useState((colors.primary as string) ?? "#c8a04f");
+  const [bgColor, setBgColor] = useState((bg.color as string) ?? "#0b0e14");
+  const [bgImage, setBgImage] = useState(
+    bg.kind === "image" && typeof bg.imageUrl === "string" ? bg.imageUrl : "",
+  );
+  const [overlay, setOverlay] = useState(
+    typeof bg.overlayOpacity === "number" ? bg.overlayOpacity : 0.45,
+  );
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onPickImage = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Please choose an image file (PNG, JPG, WebP…).");
+      return;
+    }
+    setBusy(true);
+    try {
+      setBgImage(await fileToDownscaledDataUrl(file));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not load that image.");
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   const save = () =>
     update.mutate({
@@ -424,15 +490,18 @@ function ThemeEditor({
       theme: {
         ...(logoUrl ? { logoUrl } : {}),
         colors: { primary },
-        background: { kind: "color", color: bgColor },
+        background: bgImage
+          ? { kind: "image", imageUrl: bgImage, overlayOpacity: overlay }
+          : { kind: "color", color: bgColor },
       },
     });
 
   return (
-    <section className="border-border rounded-lg border p-4">
-      <h2 className="mb-3 text-sm font-semibold">Branding</h2>
+    <section className="border-border space-y-4 rounded-lg border p-4">
+      <h2 className="text-sm font-semibold">Branding</h2>
+
       <div className="flex flex-wrap items-end gap-4">
-        <div className="flex-1">
+        <div className="min-w-[12rem] flex-1">
           <label className="mb-1 block text-xs font-medium uppercase">Logo URL</label>
           <Input
             value={logoUrl}
@@ -451,15 +520,90 @@ function ThemeEditor({
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium uppercase">Background</label>
+          <label className="mb-1 block text-xs font-medium uppercase">
+            Background color
+          </label>
           <input
             type="color"
             value={bgColor}
             onChange={(e) => setBgColor(e.target.value)}
-            className="h-9 w-12"
+            className="h-9 w-12 disabled:opacity-40"
+            disabled={!!bgImage}
+            title={bgImage ? "Remove the background image to use a color" : undefined}
           />
         </div>
-        <Button size="sm" variant="outline" onClick={save} disabled={update.isPending}>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs font-medium uppercase">
+          Background image
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          {bgImage && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={bgImage}
+              alt="Background preview"
+              className="border-border h-12 w-20 rounded border object-cover"
+            />
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => onPickImage(e.target.files?.[0])}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || update.isPending}
+            onClick={() => fileRef.current?.click()}
+          >
+            {busy ? "Processing…" : bgImage ? "Replace image" : "Upload image"}
+          </Button>
+          {bgImage && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setBgImage("")}
+            >
+              Remove
+            </Button>
+          )}
+        </div>
+        {bgImage && (
+          <div className="mt-2 max-w-xs">
+            <div className="text-muted-foreground flex items-center justify-between text-xs">
+              <span>Darken for readability</span>
+              <span>{Math.round(overlay * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={0.8}
+              step={0.05}
+              value={overlay}
+              onChange={(e) => setOverlay(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+        )}
+        <p className="text-muted-foreground mt-1 text-xs">
+          Shown behind the public application form. Large images are scaled down
+          automatically.
+        </p>
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={save}
+          disabled={update.isPending || busy}
+        >
           Save branding
         </Button>
       </div>
@@ -467,207 +611,18 @@ function ThemeEditor({
   );
 }
 
-// ── Inbox ───────────────────────────────────────────────────────────────────
+// ── Notifications ────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS = [
-  "NEW",
-  "UNDER_REVIEW",
-  "TRIAL_OFFERED",
-  "ACCEPTED",
-  "DECLINED",
-  "WITHDRAWN",
-] as const;
-
-function Inbox({
-  formId,
-  votingEnabled,
-}: {
-  formId: string;
-  votingEnabled: boolean;
-}) {
-  const subs = api.recruitment.listSubmissions.useQuery({ formId });
-  const [selected, setSelected] = useState<string | null>(null);
-
+function NotificationsTab({ formId }: { formId: string }) {
   return (
     <div className="space-y-4">
       <NotifyOptIn formId={formId} />
-      {subs.isPending ? (
-        <p className="text-muted-foreground text-sm">Loading…</p>
-      ) : subs.error ? (
-        <p className="text-destructive text-sm">{subs.error.message}</p>
-      ) : subs.data.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No submissions yet.</p>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-[18rem_1fr]">
-          <ul className="divide-border divide-y rounded-lg border">
-            {subs.data.map((s) => (
-              <li key={s.id}>
-                <button
-                  onClick={() => setSelected(s.id)}
-                  className={`w-full px-3 py-2 text-left text-sm ${
-                    selected === s.id ? "bg-muted" : ""
-                  }`}
-                >
-                  <span className="font-medium">{s.applicantLabel ?? "Applicant"}</span>
-                  <span className="text-muted-foreground block text-xs">
-                    {s.status.toLowerCase().replace("_", " ")}
-                    {votingEnabled && s._count.votes > 0 && ` · ${s._count.votes} vote(s)`}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div>
-            {selected ? (
-              <SubmissionDetail submissionId={selected} />
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                Select a submission to review.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SubmissionDetail({ submissionId }: { submissionId: string }) {
-  const utils = api.useUtils();
-  const q = api.recruitment.getSubmission.useQuery({ submissionId });
-  const setStatus = api.recruitment.setSubmissionStatus.useMutation({
-    onSuccess: () => {
-      void utils.recruitment.getSubmission.invalidate({ submissionId });
-      void utils.recruitment.listSubmissions.invalidate();
-    },
-  });
-  const vote = api.recruitment.vote.useMutation({
-    onSuccess: () => utils.recruitment.getSubmission.invalidate({ submissionId }),
-  });
-  const comment = api.recruitment.addComment.useMutation({
-    onSuccess: () => utils.recruitment.getSubmission.invalidate({ submissionId }),
-  });
-
-  const [rationale, setRationale] = useState("");
-  const [body, setBody] = useState("");
-
-  if (q.isPending) return <p className="text-muted-foreground text-sm">Loading…</p>;
-  if (q.error) return <p className="text-destructive text-sm">{q.error.message}</p>;
-  const s = q.data;
-
-  return (
-    <div className="border-border space-y-4 rounded-lg border p-4">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="font-semibold">{s.applicantLabel ?? "Applicant"}</h3>
-        <select
-          className="border-border bg-background h-8 rounded-md border px-2 text-xs"
-          value={s.status}
-          onChange={(e) =>
-            setStatus.mutate({ submissionId, status: e.target.value as (typeof STATUS_OPTIONS)[number] })
-          }
-        >
-          {STATUS_OPTIONS.map((st) => (
-            <option key={st} value={st}>
-              {st.toLowerCase().replace("_", " ")}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <dl className="space-y-2 text-sm">
-        {s.answers.map((a) => (
-          <div key={a.fieldId}>
-            <dt className="text-muted-foreground text-xs">{a.label}</dt>
-            <dd>
-              {a.valueText ??
-                (a.valueNumber != null ? String(a.valueNumber) : "—")}
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      {s.voting.enabled && (
-        <div className="border-border border-t pt-3">
-          <p className="mb-2 text-xs font-medium uppercase">
-            Voting{" "}
-            <span className="text-muted-foreground">
-              ({s.voting.voterCount} cast)
-            </span>
-          </p>
-          {!s.voting.revealed && (
-            <p className="text-muted-foreground mb-2 text-xs">
-              Others&apos; votes are hidden until you cast yours.
-            </p>
-          )}
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {(["STRONG_NO", "NO", "YES", "STRONG_YES", "ABSTAIN"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => {
-                  if (!rationale.trim()) {
-                    alert("Add a brief rationale with your vote.");
-                    return;
-                  }
-                  vote.mutate({ submissionId, value: v, rationale: rationale.trim() });
-                }}
-                className={`rounded-md border px-2 py-1 text-xs ${
-                  s.voting.myVote?.value === v ? "bg-primary text-primary-foreground" : ""
-                }`}
-              >
-                {v.toLowerCase().replace("_", " ")}
-              </button>
-            ))}
-          </div>
-          <Input
-            value={rationale}
-            onChange={(e) => setRationale(e.target.value)}
-            placeholder="Rationale (required with a vote)"
-            className="h-8 text-xs"
-          />
-          {s.voting.revealed && s.voting.votes.length > 0 && (
-            <ul className="mt-2 space-y-1">
-              {s.voting.votes.map((v, i) => (
-                <li key={i} className="text-xs">
-                  <span className="font-medium">{v.reviewer}</span>:{" "}
-                  {v.value.toLowerCase().replace("_", " ")} — {v.rationale}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <div className="border-border border-t pt-3">
-        <p className="mb-2 text-xs font-medium uppercase">Notes</p>
-        <ul className="mb-2 space-y-1">
-          {s.comments.map((c) => (
-            <li key={c.id} className="text-xs">
-              <span className="font-medium">{c.author.displayName ?? "Officer"}</span>:{" "}
-              {c.body}
-            </li>
-          ))}
-        </ul>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (body.trim()) {
-              comment.mutate({ submissionId, body: body.trim() });
-              setBody("");
-            }
-          }}
-        >
-          <Input
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Add a note…"
-            className="h-8 text-xs"
-          />
-          <Button type="submit" size="sm" variant="outline" disabled={!body.trim()}>
-            Add
-          </Button>
-        </form>
-      </div>
+      <p className="text-muted-foreground text-sm">
+        Choose how you want to be alerted about new applications. To read and
+        review the applications themselves, use the{" "}
+        <span className="text-foreground font-medium">Submissions</span> button
+        on the Recruitment page.
+      </p>
     </div>
   );
 }

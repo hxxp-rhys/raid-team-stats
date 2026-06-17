@@ -145,55 +145,173 @@ export class WarcraftLogsClient {
   }
 
   /**
-   * Resolve the CURRENT live raid tier's WCL zone id.
+   * Resolve the CURRENT RELEASE's WCL raid zone ids — the FULL set the app
+   * tracks together. A release (e.g. 12.0) groups several raids; patches add
+   * raids to it; only a `.release` bump replaces the set. So this is normally
+   * MORE than one zone (e.g. Midnight 12.0.7 → [46, 50]).
    *
    * Priority:
-   *   1. env.WCL_RAID_ZONE_ID — explicit pin (most reliable; what prod uses).
-   *   2. Redis cache (6h) — zones change ~once per content patch.
-   *   3. Live `worldData.zones`: highest-id zone that is NOT frozen and not
-   *      a PTR / Mythic+ / Delve zone (= the live raid tier, e.g. Midnight).
+   *   1. env.WCL_RAID_ZONE_ID — OPTIONAL emergency override (normally UNSET).
+   *      If set it FORCES a single zone (reverts to single-tier tracking) and
+   *      the worldData refresh job logs a loud drift WARNING.
+   *   2. DB: the `WclZone` rows flagged `isCurrentRaid` (persisted by the job).
+   *   3. Live `worldData` fallback (structural raid-difficulty detection) — the
+   *      cold path before the job has populated the DB.
    *
-   * Returns null only when WCL is unreachable and nothing is pinned/cached;
-   * callers fall back to their own default.
+   * Returns [] only when WCL is unreachable and nothing is pinned/stored.
+   */
+  async currentRaidZoneIds(): Promise<number[]> {
+    const pinned = process.env.WCL_RAID_ZONE_ID;
+    if (pinned && Number.isFinite(Number(pinned))) return [Number(pinned)];
+
+    // Durable DB snapshot maintained by runWorldDataRefresh().
+    try {
+      const { db } = await import("@/lib/db");
+      const rows = await db.wclZone.findMany({
+        where: { isCurrentRaid: true },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      });
+      if (rows.length > 0) return rows.map((r) => r.id);
+    } catch (err) {
+      logger.warn(
+        { err },
+        "currentRaidZoneIds: DB read failed (falling back to live worldData)",
+      );
+    }
+
+    // Cold fallback: resolve live from worldData using the structural
+    // raid-difficulty signal (shared with the persistence job).
+    try {
+      const { WORLD_DATA_FULL_QUERY, worldDataFullResponseSchema } =
+        await import("@/server/ingestion/warcraftlogs/queries");
+      const { pickCurrentReleaseRaidZones } = await import(
+        "@/server/ingestion/warcraftlogs/world-data"
+      );
+      const res = await this.query({
+        query: WORLD_DATA_FULL_QUERY,
+        schema: worldDataFullResponseSchema,
+        estimatedPoints: 5,
+      });
+      const set = pickCurrentReleaseRaidZones(res.worldData?.zones ?? []);
+      if (set.length > 0) {
+        logger.info(
+          { zoneIds: set.map((z) => z.id) },
+          "resolved current WCL raid release (live fallback)",
+        );
+      }
+      return set.map((z) => z.id);
+    } catch (err) {
+      logger.warn({ err }, "currentRaidZoneIds resolution failed");
+      return [];
+    }
+  }
+
+  /**
+   * The single PRIMARY (newest) current-release raid zone id — for the few
+   * callers that genuinely need one zone (a default / seed). Most current-tier
+   * reads should use `currentRaidZoneIds()` so they cover the whole release.
    */
   async currentRaidZoneId(): Promise<number | null> {
-    const pinned = process.env.WCL_RAID_ZONE_ID;
-    if (pinned && Number.isFinite(Number(pinned))) return Number(pinned);
+    const ids = await this.currentRaidZoneIds();
+    return ids.length > 0 ? Math.max(...ids) : null;
+  }
 
-    const CACHE_KEY = "wcl:current-raid-zone";
-    const cached = await redis.get(CACHE_KEY);
-    if (cached && Number.isFinite(Number(cached))) return Number(cached);
+  /**
+   * The merged boss list across ALL current-release raid zones, each encounter
+   * tagged with its `zoneId` — so a widget can show every boss in the release
+   * (grouped by zone) and filter parses to the release set. Reads each zone's
+   * persisted `WclZone.encounters` (DB-first, via currentRaidZoneEncounters).
+   */
+  async currentReleaseEncounters(
+    zoneIds: number[],
+  ): Promise<Array<{ id: number; name: string; zoneId: number }>> {
+    const out: Array<{ id: number; name: string; zoneId: number }> = [];
+    for (const zid of zoneIds) {
+      const enc = await this.currentRaidZoneEncounters(zid);
+      for (const e of enc) out.push({ ...e, zoneId: zid });
+    }
+    return out;
+  }
 
+  /**
+   * The CURRENT raid tier's encounter (boss) list — WCL encounter id + name
+   * for the live zone. Lets widgets seed their legend with EVERY boss so a
+   * brand-new encounter (e.g. a freshly-released raid like Sporefall/Rotmire)
+   * shows as a column even before anyone in the guild has a parse on it.
+   *
+   * Static per content patch → cached in Redis keyed by zone id. A non-empty
+   * result is cached 7 days; an empty one only 5 min, so a transient WCL
+   * failure can't hide the boss list for a week. Never throws → [] on any
+   * failure (caller falls back to deriving the list from stored parses).
+   *
+   * `zoneId` may be passed by a caller that already resolved it (avoids a
+   * second `currentRaidZoneId()` call); otherwise it's resolved here.
+   */
+  async currentRaidZoneEncounters(
+    zoneId?: number | null,
+  ): Promise<Array<{ id: number; name: string }>> {
+    const zid = zoneId ?? (await this.currentRaidZoneId());
+    if (zid == null) return [];
+
+    // 1. Durable DB snapshot (the worldData refresh persists every zone's boss
+    //    list) — survives a Redis flush; no WCL call on the hot path.
     try {
-      const { WCL_RAID_ZONES_QUERY, wclRaidZonesResponseSchema } =
+      const { db } = await import("@/lib/db");
+      const row = await db.wclZone.findUnique({
+        where: { id: zid },
+        select: { encounters: true },
+      });
+      const enc = row?.encounters;
+      if (Array.isArray(enc) && enc.length > 0) {
+        return (enc as Array<{ id: number; name?: string }>).map((e) => ({
+          id: e.id,
+          name: e.name ?? `Encounter ${e.id}`,
+        }));
+      }
+    } catch (err) {
+      logger.warn(
+        { err, zid },
+        "zone-encounters: DB read failed (falling back to cache/live)",
+      );
+    }
+
+    const CACHE_KEY = `wcl:zone-encounters:${zid}`;
+    try {
+      const cached = await redis.get(CACHE_KEY);
+      if (cached) return JSON.parse(cached) as Array<{ id: number; name: string }>;
+    } catch (err) {
+      logger.warn({ err, zid }, "zone-encounters: redis get failed (continuing)");
+    }
+
+    let encounters: Array<{ id: number; name: string }> = [];
+    try {
+      const { ZONE_ENCOUNTERS_QUERY, wclZoneEncountersResponseSchema } =
         await import("@/server/ingestion/warcraftlogs/queries");
       const res = await this.query({
-        query: WCL_RAID_ZONES_QUERY,
-        schema: wclRaidZonesResponseSchema,
+        query: ZONE_ENCOUNTERS_QUERY,
+        variables: { zoneID: zid },
+        schema: wclZoneEncountersResponseSchema,
         estimatedPoints: 2,
       });
-      const zones = res.worldData?.zones ?? [];
-      // Exclude frozen (past tiers), PTR (next tier in testing), and the
-      // non-raid feature zones (Mythic+ seasons, Delves). The live raid is
-      // the highest-id zone left.
-      const isNonRaid = (n: string) =>
-        /\bPTR\b/i.test(n) ||
-        /mythic\+|m\+|season/i.test(n) ||
-        /delve/i.test(n);
-      const raid = zones
-        .filter((z) => z.frozen !== true && !isNonRaid(z.name ?? ""))
-        .sort((a, b) => b.id - a.id)[0];
-      if (!raid) return null;
-      await redis.set(CACHE_KEY, String(raid.id), "EX", 6 * 60 * 60);
-      logger.info(
-        { zoneId: raid.id, zoneName: raid.name },
-        "resolved current WCL raid zone",
-      );
-      return raid.id;
+      encounters = (res.worldData?.zone?.encounters ?? [])
+        .filter((e): e is NonNullable<typeof e> => e != null)
+        .map((e) => ({ id: e.id, name: e.name ?? `Encounter ${e.id}` }));
     } catch (err) {
-      logger.warn({ err }, "currentRaidZoneId resolution failed");
-      return null;
+      logger.warn({ err, zid }, "zone-encounters: WCL fetch failed");
     }
+
+    try {
+      await redis.set(
+        CACHE_KEY,
+        JSON.stringify(encounters),
+        "EX",
+        encounters.length > 0 ? 7 * 24 * 60 * 60 : 300,
+      );
+    } catch (err) {
+      logger.warn({ err, zid }, "zone-encounters: redis set failed (continuing)");
+    }
+    return encounters;
   }
 
   private async getAppToken(): Promise<string> {

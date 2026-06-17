@@ -6,8 +6,9 @@
  *
  *   docker compose exec web npx tsx scripts/backfill-pii-encryption.ts
  *
- * NB: `email` is intentionally NOT covered yet (it's the @unique login key and
- * needs the blind-index migration first). All other PII is handled here.
+ * Covers all encrypted PII INCLUDING `email`: re-saving a user both encrypts the
+ * email and (via the db extension) sets its blind index, `emailIndex`. Run once
+ * after deploying the email-encryption migration.
  */
 import { db } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
@@ -18,13 +19,15 @@ async function backfill() {
   let answers = 0;
 
   const allUsers = await db.user.findMany({
-    select: { id: true, displayName: true, avatarUrl: true },
+    select: { id: true, displayName: true, avatarUrl: true, email: true },
   });
   for (const u of allUsers) {
-    if (u.displayName == null && u.avatarUrl == null) continue;
-    const data: { displayName?: string; avatarUrl?: string } = {};
+    if (u.displayName == null && u.avatarUrl == null && u.email == null) continue;
+    const data: { displayName?: string; avatarUrl?: string; email?: string } = {};
     if (u.displayName != null) data.displayName = u.displayName;
     if (u.avatarUrl != null) data.avatarUrl = u.avatarUrl;
+    // Re-saving email encrypts it AND (via the db extension) sets emailIndex.
+    if (u.email != null) data.email = u.email;
     await db.user.update({ where: { id: u.id }, data });
     users++;
   }

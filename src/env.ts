@@ -158,6 +158,13 @@ export const env = createEnv({
     // value falls back to the admin-session path.
     METRICS_TOKEN: requiredInProd(z.string().min(1)),
 
+    // In-app admin Monitoring page queries Prometheus + Loki server-side (so
+    // cloud hosts get observability through the website's own admin auth — no
+    // need to expose Grafana). Internal URLs; defaults match the compose
+    // service names. Leave unset unless your stack differs.
+    PROMETHEUS_URL: z.string().url().default("http://prometheus:9090"),
+    LOKI_URL: z.string().url().default("http://loki:3100"),
+
     // ── Self-hoster branding / homepage customization (ALL OPTIONAL) ──
     // Read at RUNTIME on the server, so they rebrand the pre-built Docker image
     // with NO rebuild (unlike NEXT_PUBLIC_*, which Next inlines at build time).
@@ -208,6 +215,8 @@ export const env = createEnv({
     ADMIN_MFA_EXEMPT: process.env.ADMIN_MFA_EXEMPT,
     RATE_LIMIT_TRUST_PROXY: process.env.RATE_LIMIT_TRUST_PROXY,
     METRICS_TOKEN: process.env.METRICS_TOKEN,
+    PROMETHEUS_URL: process.env.PROMETHEUS_URL,
+    LOKI_URL: process.env.LOKI_URL,
     APP_NAME: process.env.APP_NAME,
     APP_TAGLINE: process.env.APP_TAGLINE,
     APP_DESCRIPTION: process.env.APP_DESCRIPTION,

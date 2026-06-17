@@ -46,7 +46,7 @@ export function DeleteAccountCard() {
         </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate>
-        <CardContent className="space-y-4 text-sm">
+        <CardContent className="space-y-4 pb-6 text-sm">
           <div className="space-y-2">
             <Label htmlFor="delete-password">Password</Label>
             <Input
