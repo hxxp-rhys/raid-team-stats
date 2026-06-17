@@ -8,6 +8,7 @@ import { auth } from "@/server/auth";
 import { db } from "@/lib/db";
 import { env } from "@/env";
 import { logger } from "@/lib/logger";
+import { auditAuthzDenied } from "@/server/security/audit-authz";
 
 export type TrpcContext = {
   db: typeof db;
@@ -224,9 +225,30 @@ export async function assertGuildRole(
     select: { role: true, status: true },
   });
   if (!membership || membership.status !== "ACTIVE") {
+    await auditAuthzDenied({
+      actorUserId: ctx.session.user.id,
+      scope: "guild",
+      subjectId: guildId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      metadata: { scope: "guild", reason: "not_active_member", minRole },
+    });
     throw new TRPCError({ code: "NOT_FOUND" });
   }
   if ((guildRoleRank[membership.role] ?? -1) < guildRoleRank[minRole]!) {
+    await auditAuthzDenied({
+      actorUserId: ctx.session.user.id,
+      scope: "guild",
+      subjectId: guildId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      metadata: {
+        scope: "guild",
+        reason: "insufficient_role",
+        role: membership.role,
+        minRole,
+      },
+    });
     throw new TRPCError({ code: "FORBIDDEN" });
   }
 }
@@ -282,11 +304,32 @@ export async function assertRaidTeamRole(
     select: { role: true },
   });
   if (!teamMembership) {
+    await auditAuthzDenied({
+      actorUserId: ctx.session.user.id,
+      scope: "raidTeam",
+      subjectId: raidTeamId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      metadata: { scope: "raidTeam", reason: "not_member", minRole },
+    });
     throw new TRPCError({ code: "NOT_FOUND" });
   }
   if (
     (raidTeamRoleRank[teamMembership.role] ?? -1) < raidTeamRoleRank[minRole]!
   ) {
+    await auditAuthzDenied({
+      actorUserId: ctx.session.user.id,
+      scope: "raidTeam",
+      subjectId: raidTeamId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      metadata: {
+        scope: "raidTeam",
+        reason: "insufficient_role",
+        role: teamMembership.role,
+        minRole,
+      },
+    });
     throw new TRPCError({ code: "FORBIDDEN" });
   }
   return { guildId: team.guildId };

@@ -11,6 +11,8 @@ import { monitoringRouter } from "@/server/api/routers/monitoring";
 import { raidTeamRouter } from "@/server/api/routers/raidTeam";
 import { recruitmentRouter } from "@/server/api/routers/recruitment";
 import { snapshotRouter } from "@/server/api/routers/snapshot";
+import { settingsRouter } from "@/server/api/routers/settings";
+import { securityRouter } from "@/server/api/routers/security";
 
 export const appRouter = router({
   account: accountRouter,
@@ -25,6 +27,8 @@ export const appRouter = router({
   recruitment: recruitmentRouter,
   snapshot: snapshotRouter,
   dashboard: dashboardRouter,
+  settings: settingsRouter,
+  security: securityRouter,
 });
 
 export type AppRouter = typeof appRouter;

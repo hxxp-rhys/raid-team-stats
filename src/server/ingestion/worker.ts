@@ -34,6 +34,7 @@ import {
 } from "@/server/ingestion/jobs/guild-report-sync";
 import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-sweeper";
 import { runWorldDataRefresh } from "@/server/ingestion/jobs/wcl-worlddata-refresh";
+import { runRetentionPrune } from "@/server/ingestion/jobs/admin-retention-prune";
 import {
   runCalendarMaterializeSweep,
   runCalendarReminderSweep,
@@ -155,6 +156,19 @@ const start = async () => {
       logger.warn({ err }, "wcl worldData refresh failed"),
     );
   }, 6 * 60 * 60_000);
+
+  // Data-retention prune: enforce the admin-configured retention policy
+  // (AuditLog + SyncRun rows pruned directly; Loki access-log retention applied
+  // via its delete API until the written config is picked up on restart). Runs
+  // at startup + every 24h. No-op until an admin sets a finite retention.
+  void runRetentionPrune().catch((err) =>
+    logger.warn({ err }, "retention prune failed (startup)"),
+  );
+  setInterval(() => {
+    void runRetentionPrune().catch((err) =>
+      logger.warn({ err }, "retention prune failed"),
+    );
+  }, 24 * 60 * 60_000);
 
   // Periodic queue-depth gauge update — Prometheus pulls /api/metrics from
   // the web container, but the source of truth for queue counts is the

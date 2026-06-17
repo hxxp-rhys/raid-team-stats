@@ -12,6 +12,9 @@ const TABS = [
   { href: "/admin/audit", label: "Audit log" },
   { href: "/admin/queues", label: "Queues" },
   { href: "/admin/monitoring", label: "Monitoring" },
+  { href: "/admin/security", label: "Security" },
+  // Settings is always pinned to the far right (ml-auto below).
+  { href: "/admin/settings", label: "Settings" },
 ] as const;
 
 export function AdminNav() {
@@ -29,6 +32,7 @@ export function AdminNav() {
             href={t.href}
             className={cn(
               "border-b-2 px-3 py-2 text-sm transition-colors -mb-px",
+              t.href === "/admin/settings" && "ml-auto",
               active
                 ? "border-primary text-foreground font-medium"
                 : "border-transparent text-muted-foreground hover:text-foreground",

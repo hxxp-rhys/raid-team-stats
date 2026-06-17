@@ -175,6 +175,7 @@ enum AuditEvent {
   RAID_TEAM_WCL_SOURCE_DATA_CLEARED
   ADMIN_USER_PROMOTED
   ADMIN_USER_DEMOTED
+  ADMIN_SETTINGS_UPDATED
   DASHBOARD_EXPORTED
   SYNC_TRIGGERED
   SYNC_FAILED
@@ -1496,4 +1497,31 @@ model WclZone {
 
   @@index([frozen])
   @@index([isCurrentRaid])
+}
+
+// Singleton admin-configurable policy/customization settings (id pinned to
+// "singleton" — there is exactly one row, auto-created on first read). Only the
+// admin-gated `settings` router reads/writes it. Retention values are in DAYS;
+// null = keep forever (no auto-prune). Defaults follow audit-log best practice
+// (short-lived ops logs, longer-lived security/audit trail).
+model AdminSettings {
+  id String @id @default("singleton")
+
+  // Retention — DB-enforced by the runRetentionPrune() worker sweep:
+  auditLogRetentionDays Int? @default(90) // AuditLog (security/audit trail)
+  syncRunRetentionDays  Int? @default(14) // SyncRun (ingestion job history)
+  // Retention — Loki Caddy access/traffic logs: enforced immediately via Loki's
+  // delete API + written into the Loki config so the compactor takes over on
+  // next restart (then the API call is skipped):
+  accessLogRetentionDays Int? @default(30)
+  // Retention — Prometheus metrics: written to config for next deploy (startup
+  // flag; no runtime API):
+  metricsRetentionDays Int? @default(15)
+
+  // Security-tab thresholds (what counts as a concerning spike to highlight):
+  loginFailureAlertThreshold Int @default(20) // failures within the window
+  loginFailureWindowMinutes  Int @default(5)
+
+  updatedAt       DateTime @updatedAt
+  updatedByUserId String?
 }
