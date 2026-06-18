@@ -23,7 +23,7 @@ A single `docker compose up -d` brings up the full stack:
 
 | Component | What it does |
 |-----------|--------------|
-| **Caddy** | Reverse proxy + **automatic HTTPS** (Let's Encrypt). The only thing exposed to the internet (ports 80/443). |
+| **Caddy** | Reverse proxy + **HTTPS** — Let's Encrypt, your own cert, or self-signed (see [TLS / HTTPS](#tls--https)). The only thing exposed to the internet (ports 80/443). |
 | **Web** | The Next.js app. Runs database migrations automatically on start. |
 | **Worker** | Background ingestion (Blizzard / Warcraft Logs / Raider.IO syncing). |
 | **PostgreSQL + PgBouncer** | Database and connection pooler. |
@@ -42,8 +42,10 @@ A single `docker compose up -d` brings up the full stack:
 
 - A **Linux server** (2 GB RAM minimum) with **Docker Engine** and the
   **Docker Compose plugin** installed.
-- A **domain name** you control, with a **DNS A record** (and AAAA if you use
-  IPv6) pointing at the server's public IP.
+- A **domain name** you control. For automatic Let's Encrypt TLS (the default),
+  add a **DNS A record** (and AAAA if you use IPv6) pointing at the server's
+  public IP. If you bring your own certificate instead (e.g. behind Cloudflare),
+  see [TLS / HTTPS](#tls--https).
 - Ports **80** and **443** open to the internet. Everything else stays private.
 
 > **Note — pulling the image.** The app image is hosted on GitHub Container
@@ -156,8 +158,9 @@ docker compose up -d
 ```
 
 This pulls the image, starts the database, **runs migrations automatically**,
-then starts the app, worker, and monitoring. The first start takes a minute
-while Caddy obtains your TLS certificate.
+then starts the app, worker, and monitoring. In the default `acme` TLS mode the
+first start takes a minute while Caddy obtains your Let's Encrypt certificate
+(see [TLS / HTTPS](#tls--https) to use your own certificate instead).
 
 Watch it come up:
 
@@ -178,6 +181,54 @@ Then open `https://raid.example.com` in a browser — you should get a valid
 certificate and the app. Create your account, then make yourself a platform
 admin by adding your email to `ADMIN_EMAILS` in `.env` and running
 `docker compose up -d web`.
+
+---
+
+## TLS / HTTPS
+
+Caddy terminates HTTPS for you. Pick how it gets its certificate with `TLS_MODE`
+in `.env`:
+
+| `TLS_MODE` | What Caddy does | Use it when |
+|------------|------------------|-------------|
+| `acme` *(default)* | Automatically obtains & renews a **Let's Encrypt** certificate. | Your domain's DNS points straight at this server and ports 80/443 are open to the internet. |
+| `custom` | Serves **your own** certificate + key from `<DATA_DIR>/certs`. | You're behind a proxy that terminates/validates TLS (e.g. **Cloudflare**), or you have a commercial / externally-issued cert. |
+| `internal` | Serves a **self-signed** certificate from Caddy's internal CA. | Local testing, or behind a load balancer that does its own TLS and doesn't validate the origin. |
+
+Optionally set `ACME_EMAIL=you@example.com` for Let's Encrypt expiry notices.
+
+### Bringing your own certificate (`TLS_MODE=custom`)
+
+This is the right choice behind **Cloudflare's proxy** (orange-cloud), where
+Let's Encrypt's challenges can't reach Caddy. A free **Cloudflare Origin
+Certificate** (Cloudflare dashboard → SSL/TLS → Origin Server → Create
+Certificate) is ideal; any full-chain certificate works too.
+
+1. Put your certificate and private key in `<DATA_DIR>/certs/` (default
+   `./data/certs/`). The **certificate must be the full chain** (leaf +
+   intermediates).
+2. Name them in `.env`:
+   ```ini
+   TLS_MODE=custom
+   SSL_CERT_FILENAME=origin.pem
+   SSL_KEY_FILENAME=origin.key
+   ```
+3. Fix ownership/permissions so Caddy (which runs as **root with all Linux
+   capabilities dropped**) can read them. `init-storage.sh` does this and warns
+   if the files are missing:
+   ```bash
+   sudo ./init-storage.sh
+   ```
+4. Start or restart Caddy:
+   ```bash
+   docker compose up -d caddy
+   ```
+
+> Behind Cloudflare, also set the Cloudflare **SSL/TLS mode to Full (strict)** so
+> the edge validates your origin certificate.
+
+If `TLS_MODE=custom` but the named files are missing or unreadable, Caddy refuses
+to start and logs the exact path it expected — check `docker compose logs caddy`.
 
 ---
 
@@ -252,7 +303,8 @@ default `:latest` is used.
 | `... is required — set it in .env` on `up` | A required value (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `METRICS_TOKEN`) is blank. Run `./generate-secrets.sh`. |
 | Image pull `denied` / `unauthorized` | Package is private — `docker login ghcr.io` (see [Prerequisites](#prerequisites)). |
 | Prometheus/Loki/Grafana keep restarting, "permission denied" | You didn't run `sudo ./init-storage.sh` (or changed `DATA_DIR` without re-running it). |
-| TLS certificate won't issue | DNS A record must point at this server and ports 80/443 must be open. Check `docker compose logs caddy`. |
+| TLS cert won't issue (`acme` mode) | DNS A record must point at this server and ports 80/443 must be open to the internet. Behind a proxy like Cloudflare, switch to `TLS_MODE=custom` (see [TLS / HTTPS](#tls--https)). Check `docker compose logs caddy`. |
+| Caddy won't start, "cert/key not readable" | `TLS_MODE=custom` but the files named by `SSL_CERT_FILENAME` / `SSL_KEY_FILENAME` aren't in `<DATA_DIR>/certs` or aren't root-readable. Add them and run `sudo ./init-storage.sh`. |
 | Grafana panels show "no data" after a token change | Recreate Prometheus: `docker compose up -d prometheus`. |
 | Battle.net login fails (`invalid_grant`) | `AUTH_URL` must equal `APP_URL`, and the redirect URI in `.env` must match the one registered at Battle.net exactly. |
 

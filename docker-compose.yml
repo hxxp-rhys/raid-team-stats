@@ -102,19 +102,31 @@ services:
 
   # TLS terminator for local dev. Hits the same `web` service on 3000 but adds
   # an HTTPS entrypoint at https://localhost (or https://raiders.hxxp.io if DNS
-  # points here) using the bind-mounted Cloudflare Origin cert in ./certs/
-  # (gitignored). The plain-HTTP web port 3000 stays available for tooling
-  # that needs unencrypted hot reload.
+  # points here). TLS_MODE in .env selects the cert source (default custom = the
+  # bind-mounted cert in ./certs/, gitignored). The plain-HTTP web port 3000
+  # stays available for tooling that needs unencrypted hot reload.
   #
   # Bound to 0.0.0.0 (not 127.0.0.1) so an upstream port-forwarder can reach
-  # the host's LAN/public interface. Port 80 is exposed only to issue the
-  # HTTP→HTTPS redirect that Caddyfile.dev defines.
+  # the host's LAN/public interface. Port 80 is exposed for the HTTP→HTTPS
+  # redirect Caddy issues for the listed hostnames.
   caddy:
     image: caddy:2-alpine
     container_name: rts-caddy
     restart: unless-stopped
+    # caddy-entrypoint.sh writes the tls directive (imported by Caddyfile.dev)
+    # from TLS_MODE, then starts Caddy. Run via `sh`, so no +x bit is needed.
+    entrypoint: ["/bin/sh", "/etc/caddy/caddy-entrypoint.sh"]
+    environment:
+      # Dev defaults to your own cert files in ./certs (custom). A fresh clone
+      # has none (*.pem/*.key are gitignored) — drop a cert+key in ./certs, or
+      # set TLS_MODE=internal in .env for a zero-file self-signed cert.
+      TLS_MODE: ${TLS_MODE:-custom}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      SSL_CERT_FILENAME: ${SSL_CERT_FILENAME:-raiders.hxxp.io-crt.pem}
+      SSL_KEY_FILENAME: ${SSL_KEY_FILENAME:-raiders.hxxp.io-key.pem}
     volumes:
       - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ./caddy-entrypoint.sh:/etc/caddy/caddy-entrypoint.sh:ro
       - ./certs:/certs:ro
       - ./persistent_data/caddy/data:/data
       - ./persistent_data/caddy/config:/config

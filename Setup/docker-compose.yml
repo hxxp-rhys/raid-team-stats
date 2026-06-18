@@ -19,11 +19,14 @@
 name: raid-team-stats
 
 services:
-  # ── Reverse proxy + automatic HTTPS (Let's Encrypt) ───────────────────────
+  # ── Reverse proxy + HTTPS (TLS_MODE: acme | custom | internal) ────────────
   caddy:
     image: caddy:2-alpine
     container_name: rts-caddy
     restart: unless-stopped
+    # caddy-entrypoint.sh writes the tls directive (imported by the Caddyfile)
+    # from TLS_MODE, then starts Caddy. Run via `sh`, so no +x bit is needed.
+    entrypoint: ["/bin/sh", "/etc/caddy/caddy-entrypoint.sh"]
     cap_add:
       - NET_BIND_SERVICE
     cap_drop:
@@ -33,12 +36,19 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-entrypoint.sh:/etc/caddy/caddy-entrypoint.sh:ro
       - ${DATA_DIR:-./data}/caddy:/data
       - ${DATA_DIR:-./data}/caddy-config:/config
-      # Cloudflare Origin Certificate (cert + key), read-only. See Caddyfile.
+      # Your TLS cert + key (used when TLS_MODE=custom), read-only. See .env.
       - ${DATA_DIR:-./data}/certs:/certs:ro
     environment:
       APP_HOST: ${APP_HOST:?APP_HOST is required — set it in .env}
+      # TLS strategy — see the TLS section in .env. acme = Let's Encrypt
+      # (default); custom = your own cert files in /certs; internal = self-signed.
+      TLS_MODE: ${TLS_MODE:-acme}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      SSL_CERT_FILENAME: ${SSL_CERT_FILENAME:-origin.pem}
+      SSL_KEY_FILENAME: ${SSL_KEY_FILENAME:-origin.key}
     depends_on:
       web:
         condition: service_healthy

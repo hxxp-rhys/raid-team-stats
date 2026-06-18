@@ -1,7 +1,18 @@
-# Caddy reverse proxy for production. Automatic TLS via Let's Encrypt when a real
-# domain is configured. Replace {$APP_HOST} via env at deploy time.
+# Caddy reverse proxy for production. The TLS strategy is chosen by TLS_MODE in
+# .env.prod and injected via the imported tls.caddy snippet, which is written by
+# caddy-entrypoint.sh at startup:
+#   TLS_MODE=acme      automatic HTTPS via Let's Encrypt (default)
+#   TLS_MODE=custom    your own cert + key in ./certs, named by SSL_CERT_FILENAME
+#                      / SSL_KEY_FILENAME (e.g. a Cloudflare Origin cert; pair it
+#                      with the Cloudflare SSL/TLS mode set to Full (strict))
+#   TLS_MODE=internal  Caddy self-signed certificate
+# Replace {$APP_HOST} via env at deploy time.
 
 {$APP_HOST} {
+	# The tls directive is generated from TLS_MODE (see caddy-entrypoint.sh).
+	# An explicit cert (custom/internal) automatically disables ACME for the site.
+	import /config/tls.caddy
+
 	encode zstd gzip
 
 	# Belt-and-braces: the Next.js app already emits these, but the proxy

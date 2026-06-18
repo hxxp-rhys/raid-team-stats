@@ -1,14 +1,18 @@
-# Caddy reverse proxy for production. TLS uses a Cloudflare Origin Certificate
-# because the origin is proxied through Cloudflare, so ACME/Let's Encrypt
-# challenges can't be validated (HTTP-01 -> CF 522, TLS-ALPN-01 -> CF terminates
-# TLS). Place the cert/key at data/certs/origin.{pem,key} (mounted read-only at
-# /certs) and set the Cloudflare SSL/TLS mode to Full (strict).
+# Caddy reverse proxy for production. The TLS strategy is chosen by TLS_MODE in
+# .env and injected here via the imported tls.caddy snippet, which is written by
+# caddy-entrypoint.sh at startup:
+#   TLS_MODE=acme      automatic HTTPS via Let's Encrypt (default)
+#   TLS_MODE=custom    your own cert + key in <DATA_DIR>/certs, named by
+#                      SSL_CERT_FILENAME / SSL_KEY_FILENAME (e.g. a Cloudflare
+#                      Origin cert). Behind Cloudflare's proxy, use this with the
+#                      Cloudflare SSL/TLS mode set to Full (strict).
+#   TLS_MODE=internal  Caddy self-signed certificate
 # Replace {$APP_HOST} via env at deploy time.
 
 {$APP_HOST} {
-	# Cloudflare Origin Certificate — providing an explicit cert disables Caddy's
-	# automatic HTTPS/ACME (which cannot succeed behind the Cloudflare proxy).
-	tls /certs/origin.pem /certs/origin.key
+	# The tls directive is generated from TLS_MODE (see caddy-entrypoint.sh).
+	# An explicit cert (custom/internal) automatically disables ACME for the site.
+	import /config/tls.caddy
 
 	encode zstd gzip
 

@@ -32,7 +32,8 @@ Required values (`.env.prod`):
 
 | Variable | Notes |
 |----------|-------|
-| `APP_HOST` | Public hostname Caddy will issue a cert for. |
+| `APP_HOST` | Public hostname Caddy serves (and, in the default `acme` TLS mode, issues a cert for). |
+| `TLS_MODE` | `acme` (Let's Encrypt, default) \| `custom` (your cert+key in `./certs`) \| `internal` (self-signed). See note below. |
 | `APP_URL` | `https://${APP_HOST}` |
 | `POSTGRES_PASSWORD` | Strong random (`openssl rand -base64 32`). |
 | `AUTH_SECRET` | `openssl rand -base64 48`. |
@@ -49,7 +50,15 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec web npx prisma migrate deploy
 ```
 
-Caddy will obtain a Let's Encrypt cert for `APP_HOST` on first request. Hit
+In the default `acme` TLS mode Caddy obtains a Let's Encrypt cert for `APP_HOST`
+on first request. To bring your own certificate instead (e.g. behind Cloudflare,
+where ACME can't validate), set `TLS_MODE=custom` in `.env.prod`, place your
+full-chain cert + key in `./certs/` named by `SSL_CERT_FILENAME` /
+`SSL_KEY_FILENAME` (make them root-readable — there is no `init-storage.sh` on
+this legacy path, so run `sudo chown -R 0:0 ./certs && sudo chmod 700 ./certs &&
+sudo chmod 600 ./certs/*`), then
+`docker compose -f docker-compose.prod.yml up -d caddy`. `TLS_MODE=internal`
+serves a self-signed cert (handy for a no-DNS smoke test). Hit
 `https://${APP_HOST}/api/health` to confirm.
 
 ## Backups
@@ -194,6 +203,6 @@ nearest backup before bringing the app back up.
 - The `web` container is `read_only: true` with `/tmp` and `/app/.next/cache`
   on tmpfs — code can't write to its own filesystem at runtime.
 - `pgbouncer` uses SCRAM-SHA-256 auth and transaction-pool mode.
-- Caddy auto-renews TLS certs and emits HSTS preload headers.
+- Caddy auto-renews TLS certs (in the default `acme` mode) and emits HSTS preload headers.
 - See [`SECURITY.md`](../SECURITY.md) for the disclosure policy and the
   list of accepted upstream advisories.

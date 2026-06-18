@@ -39,7 +39,7 @@ doesn't expose.
 | Database | PostgreSQL 16 via Prisma 7 (`@prisma/adapter-pg`) + PgBouncer |
 | Cache / queue | Redis 7 + BullMQ workers |
 | Styling | Tailwind 4 (CSS-first) + shadcn/ui |
-| Reverse proxy | Caddy (automatic TLS) |
+| Reverse proxy | Caddy (TLS: Let's Encrypt, your own cert, or self-signed) |
 | Observability | Prometheus + Loki + Promtail + Grafana |
 | Logging | pino with secret redaction |
 
@@ -157,8 +157,10 @@ and a **self-hosted** VPS.
 3. **Force HTTPS, strictly.** TLS protects every login and token in transit.
    - *AWS:* terminate TLS at an ALB with an ACM cert; redirect 80→443.
    - *Azure:* Application Gateway / Front Door with a managed cert; "HTTPS only."
-   - *Self-hosted:* Caddy auto-provisions Let's Encrypt and sends HSTS. Behind
-     Cloudflare, set SSL/TLS to **Full (strict)** and "Always Use HTTPS."
+   - *Self-hosted:* Caddy provisions TLS per `TLS_MODE` and sends HSTS — default
+     `acme` (Let's Encrypt). Behind Cloudflare (where ACME can't validate), use
+     `TLS_MODE=custom` with a Cloudflare Origin cert and set SSL/TLS to
+     **Full (strict)** and "Always Use HTTPS."
 
 4. **Encrypt the DB connection (or keep it on a trusted network).** By default
    the app talks to Postgres over the private Docker network — fine on one host,

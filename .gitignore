@@ -28,7 +28,11 @@ persistent_data/
 # Misc
 .DS_Store
 Thumbs.db
+# TLS certificates + private keys — NEVER commit. Custom-mode cert/key live in
+# the host's certs dir (Setup: <DATA_DIR>/certs; prod/dev: ./certs).
 *.pem
+*.key
+certs/
 
 # Debug logs
 npm-debug.log*

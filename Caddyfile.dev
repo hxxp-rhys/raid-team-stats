@@ -1,34 +1,29 @@
-# Dev TLS terminator. Caddy listens on :80 (HTTP, redirect-only) and :443
-# (HTTPS, reverse-proxy to the Next.js web service).
+# Dev TLS terminator. Caddy reverse-proxies HTTPS to the Next.js web service and
+# auto-redirects HTTP->HTTPS. The TLS strategy is chosen by TLS_MODE in .env and
+# injected via the imported tls.caddy snippet (written by caddy-entrypoint.sh):
+#   TLS_MODE=custom    your cert + key in ./certs (SSL_CERT_FILENAME /
+#                      SSL_KEY_FILENAME) — DEFAULT for dev; ships a local
+#                      Cloudflare Origin cert (raiders.hxxp.io-crt/-key.pem).
+#   TLS_MODE=internal  Caddy self-signed cert (localhost dev).
+#   TLS_MODE=acme      Let's Encrypt — only meaningful if a public DNS name
+#                      resolves to this host (localhost falls back to internal).
 #
-# Only the two whitelisted hostnames are accepted at the TLS layer:
+# Only the two whitelisted hostnames are answered at the TLS layer:
 #   - localhost            (host machine)
 #   - raiders.hxxp.io      (Cloudflare-fronted public origin)
-# Requests with any other Host header get a 421 "Misdirected Request".
-#
-# Uses the bind-mounted Cloudflare Origin cert + key from ./certs — the same
-# pair a real Cloudflare tunnel would terminate against in production.
-# Browsers don't trust Cloudflare Origin certs directly; cert warning at
-# https://localhost is expected and goes away once Cloudflare's edge sits
-# in front of this origin.
+# Browsers don't trust Cloudflare Origin certs directly, so a cert warning at
+# https://localhost is expected with the default custom cert; it goes away once
+# Cloudflare's edge sits in front of this origin.
 
 {
-	# We supply explicit cert files; don't let Caddy try to ACME-issue.
-	auto_https off
 	admin off
 }
 
-# HTTP listener: redirect everything to HTTPS. The Host header is preserved
-# so https://raiders.hxxp.io routing still works after the redirect.
-:80 {
-	redir https://{host}{uri} permanent
-}
-
-# HTTPS listener. Site address listing both hostnames means Caddy will only
-# answer for those two; anything else (e.g. a scanner hitting the IP) gets
-# 421 and no upstream call.
+# HTTPS listener. Listing both hostnames means Caddy answers only for those two;
+# it automatically adds the HTTP->HTTPS redirect for them.
 localhost, raiders.hxxp.io {
-	tls /certs/raiders.hxxp.io-crt.pem /certs/raiders.hxxp.io-key.pem
+	# The tls directive is generated from TLS_MODE (see caddy-entrypoint.sh).
+	import /config/tls.caddy
 
 	encode zstd gzip
 
