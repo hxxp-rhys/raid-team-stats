@@ -133,7 +133,7 @@ services:
 
   # ── PgBouncer (transaction pooler in front of Postgres) ───────────────────
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.0
+    image: edoburu/pgbouncer:v1.23.0-p1
     container_name: rts-pgbouncer
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
