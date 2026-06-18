@@ -85,7 +85,7 @@ real domain everywhere.
 
 **Battle.net (Blizzard)** — https://develop.battle.net/access/clients
 - Create a client. Add this **Redirect URL**:
-  `https://raid.example.com/bnet-login-callback`
+  `https://raid.example.com/api/auth/callback/battlenet`
 - Copy the **Client ID** and **Client Secret**.
 
 **Warcraft Logs** — https://www.warcraftlogs.com/api/clients/
@@ -121,8 +121,7 @@ cp .env.example .env
 | `APP_HOST` | Your hostname only, e.g. `raid.example.com` (no `https://`). |
 | `APP_URL` | `https://raid.example.com` |
 | `AUTH_URL` | Same as `APP_URL`. |
-| `BLIZZARD_CLIENT_ID` / `BLIZZARD_CLIENT_SECRET` | From Step 2. |
-| `BATTLENET_REDIRECT_URI` | `https://raid.example.com/bnet-login-callback` |
+| `BLIZZARD_CLIENT_ID` / `BLIZZARD_CLIENT_SECRET` | From Step 2. (Register redirect URI `https://raid.example.com/api/auth/callback/battlenet` in the Battle.net console — no env var.) |
 | `WCL_CLIENT_ID` / `WCL_CLIENT_SECRET` | From Step 2. |
 | `WCL_REDIRECT_URI` | `https://raid.example.com/wcl-callback` |
 | `SMTP_HOST` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | From Step 2. |
@@ -306,7 +305,7 @@ default `:latest` is used.
 | TLS cert won't issue (`acme` mode) | DNS A record must point at this server and ports 80/443 must be open to the internet. Behind a proxy like Cloudflare, switch to `TLS_MODE=custom` (see [TLS / HTTPS](#tls--https)). Check `docker compose logs caddy`. |
 | Caddy won't start, "cert/key not readable" | `TLS_MODE=custom` but the files named by `SSL_CERT_FILENAME` / `SSL_KEY_FILENAME` aren't in `<DATA_DIR>/certs` or aren't root-readable. Add them and run `sudo ./init-storage.sh`. |
 | Grafana panels show "no data" after a token change | Recreate Prometheus: `docker compose up -d prometheus`. |
-| Battle.net login fails (`invalid_grant`) | `AUTH_URL` must equal `APP_URL`, and the redirect URI in `.env` must match the one registered at Battle.net exactly. |
+| Battle.net login fails (`invalid_grant` / `400 callback URL is not valid`) | `AUTH_URL` must equal `APP_URL`, and the Battle.net console's redirect URI must be exactly `https://<APP_HOST>/api/auth/callback/battlenet`. |
 
 ---
 

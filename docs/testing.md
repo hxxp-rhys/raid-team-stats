@@ -84,7 +84,7 @@ automated in CI. Smoke-test checklist before each deploy:
 
 - [ ] Battle.net OAuth: visit `/profile`, click **Link Battle.net**,
       complete the OAuth round-trip on `develop.battle.net`'s test
-      account. Confirm redirect to `BATTLENET_REDIRECT_URI` and that the
+      account. Confirm redirect to `/api/auth/callback/battlenet` and that the
       profile page reflects "Linked".
 - [ ] Discover guilds: click **Discover guilds from Battle.net**.
       Confirm the response observes ≥1 character and matches a guild

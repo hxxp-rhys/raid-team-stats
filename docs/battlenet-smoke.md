@@ -9,13 +9,12 @@ during the consent step. Here's the path I've used during dev.
 1. A Battle.net developer client registered at
    <https://develop.battle.net/access/clients>.
 2. Both these redirect URIs registered on that client (Settings → Redirect
-   URIs):
-   - `https://raiders.hxxp.io/bnet-login-callback` (production)
-   - `http://localhost:3000/bnet-login-callback` (dev — Battle.net does allow
-     `http://localhost`)
-3. `BLIZZARD_CLIENT_ID`, `BLIZZARD_CLIENT_SECRET`, and
-   `BATTLENET_REDIRECT_URI=http://localhost:3000/bnet-login-callback` set in
-   `.env`.
+   URIs) — the app's built-in Auth.js callback path:
+   - `https://raiders.hxxp.io/api/auth/callback/battlenet` (production)
+   - `http://localhost:3000/api/auth/callback/battlenet` (dev — Battle.net does
+     allow `http://localhost`)
+3. `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET` set in `.env` (there is no
+   redirect-URI env var).
 
 ## Smoke steps
 
@@ -39,9 +38,9 @@ during the consent step. Here's the path I've used during dev.
 4. On `/profile`, click **Link Battle.net**. You should be redirected to
    <https://us.battle.net/oauth/authorize?...>, see Blizzard's consent
    screen, and on approval be redirected back to
-   `http://localhost:3000/bnet-login-callback?code=...&state=...`. The proxy
-   route rewrites the URL into Auth.js's catch-all handler, which writes the
-   encrypted OAuth tokens onto `Account` and redirects you to `/profile`.
+   `http://localhost:3000/api/auth/callback/battlenet?code=...&state=...`, which
+   Auth.js handles directly — writing the encrypted OAuth tokens onto `Account`
+   and redirecting you to `/profile`.
 
 5. On `/profile`, click **Discover guilds from Battle.net**. This calls
    `api.guild.discoverFromBattlenet`, which:
@@ -69,8 +68,9 @@ during the consent step. Here's the path I've used during dev.
   `127.0.0.1` (or vice versa), the cookie won't follow and you'll see a
   generic OAuthAccountNotLinked / state-mismatch error. Pick one host and
   stick with it.
-- Redirect URI mismatch: the URL on the Battle.net developer console must
-  match `BATTLENET_REDIRECT_URI` exactly, including scheme + port + path.
+- Redirect URI mismatch (Battle.net `400 "callback URL is not valid"`): the URL
+  on the Battle.net developer console must be `/api/auth/callback/battlenet`
+  exactly, matching scheme + host + port + path.
 - Token decrypt failures: if `TOKEN_ENCRYPTION_KEY` changes between linking
   and reading, the Prisma extension returns `null` and the discover flow
   errors out. Either rotate the key with a re-encryption pass or relink.

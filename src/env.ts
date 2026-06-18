@@ -73,13 +73,10 @@ export const env = createEnv({
     BLIZZARD_CLIENT_ID: requiredInProd(z.string().min(1)),
     BLIZZARD_CLIENT_SECRET: requiredInProd(z.string().min(1)),
     BLIZZARD_REGION: z.enum(["us", "eu", "kr", "tw"]).default("us"),
-    // Custom OAuth redirect URI registered with the Battle.net developer
-    // console. Defaults to the localhost dev path; production should set this
-    // to the public URL (e.g. https://raiders.hxxp.io/bnet-login-callback).
-    BATTLENET_REDIRECT_URI: z
-      .string()
-      .url()
-      .default("http://localhost:3000/bnet-login-callback"),
+    // Battle.net's OAuth callback is the Auth.js default
+    // (/api/auth/callback/battlenet) — register THAT in the Blizzard dev
+    // console. There is deliberately no redirect-URI env var: overriding it
+    // would desync the authorize vs token-exchange redirect_uri (invalid_grant).
 
     WCL_CLIENT_ID: requiredInProd(z.string().min(1)),
     WCL_CLIENT_SECRET: requiredInProd(z.string().min(1)),
@@ -196,7 +193,6 @@ export const env = createEnv({
     BLIZZARD_CLIENT_ID: process.env.BLIZZARD_CLIENT_ID,
     BLIZZARD_CLIENT_SECRET: process.env.BLIZZARD_CLIENT_SECRET,
     BLIZZARD_REGION: process.env.BLIZZARD_REGION,
-    BATTLENET_REDIRECT_URI: process.env.BATTLENET_REDIRECT_URI,
     WCL_CLIENT_ID: process.env.WCL_CLIENT_ID,
     WCL_CLIENT_SECRET: process.env.WCL_CLIENT_SECRET,
     WCL_HOURLY_POINTS_BUDGET: process.env.WCL_HOURLY_POINTS_BUDGET,

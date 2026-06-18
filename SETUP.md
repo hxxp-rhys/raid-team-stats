@@ -52,15 +52,14 @@ into `.env`. Take them one at a time.
 ### 3a. Blizzard Battle.net — **required** (login + most character data)
 
 1. Go to <https://develop.battle.net/access/clients> and **Create Client**.
-2. Register **both** redirect URIs (you can add more later):
-   - `http://localhost:3000/bnet-login-callback` (local testing)
-   - `https://your-domain.example/bnet-login-callback` (your real domain, when you have one)
+2. Register **both** redirect URIs — the app's built-in callback path (you can add more later):
+   - `http://localhost:3000/api/auth/callback/battlenet` (local testing)
+   - `https://your-domain.example/api/auth/callback/battlenet` (your real domain, when you have one)
 3. Copy the Client ID and Secret into `.env`:
    ```
    BLIZZARD_CLIENT_ID=...
    BLIZZARD_CLIENT_SECRET=...
    BLIZZARD_REGION=us            # us | eu | kr | tw — match your guild's region
-   BATTLENET_REDIRECT_URI=http://localhost:3000/bnet-login-callback
    ```
 
 ### 3b. Warcraft Logs — **required for parse & coaching widgets**
@@ -261,7 +260,7 @@ an empty database needs neither):
 | Symptom | Fix |
 |---|---|
 | App won't start in production, logs mention a missing env var | A required value in `.env` is blank/malformed. The error names the key. |
-| Battle.net or WCL login fails with `redirect_uri` / `invalid_grant` | The redirect URI in the provider console must match **exactly** — scheme, host, **and** path (`/bnet-login-callback`, `/wcl-callback`). Register both the localhost and the production URLs. |
+| Battle.net or WCL login fails with `redirect_uri` / `invalid_grant` / `400 callback URL is not valid` | The redirect URI in the provider console must match **exactly** — scheme, host, **and** path. Battle.net = `/api/auth/callback/battlenet`; WCL = `/wcl-callback`. Register both the localhost and the production URLs. |
 | Addon-only widgets are blank (vault World row, tier, professions…) | Install the StatSmith addon **and** run the companion uploader (Step 7). `/reload` in-game after enabling the addon. |
 | Can't receive the verification email | Configure SMTP, **or** mint a token locally: `docker compose exec web npx tsx scripts/dev-issue-verify-token.ts verify_email you@example.com` |
 | First `docker compose up` is slow | Normal — the initial image build is ~2 minutes; later boots are seconds. |

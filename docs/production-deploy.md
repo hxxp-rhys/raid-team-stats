@@ -38,7 +38,7 @@ Required values (`.env.prod`):
 | `POSTGRES_PASSWORD` | Strong random (`openssl rand -base64 32`). |
 | `AUTH_SECRET` | `openssl rand -base64 48`. |
 | `TOKEN_ENCRYPTION_KEY` | Exactly 32 bytes base64-encoded (`openssl rand -base64 32`). |
-| `BLIZZARD_CLIENT_ID` / `_SECRET` / `BATTLENET_REDIRECT_URI` | Registered Battle.net OAuth app, redirect URI `https://${APP_HOST}/bnet-login-callback`. |
+| `BLIZZARD_CLIENT_ID` / `_SECRET` | Registered Battle.net OAuth app; register redirect URI `https://${APP_HOST}/api/auth/callback/battlenet` in the dev console (no redirect-URI env var). |
 | `WCL_CLIENT_ID` / `_SECRET` / `WCL_REDIRECT_URI` | Warcraft Logs client, redirect URI `https://${APP_HOST}/wcl-callback`. |
 | `SMTP_*` | Outbound email transport for verification + password-reset. |
 | `RATE_LIMIT_TRUST_PROXY` | `true` (we're behind Caddy). |
