@@ -12,13 +12,19 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Property Id="ARPHELPLINK" Value="https://raiders.hxxp.io" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/hxxp-rhys/raid-stats" />
 
     <!-- User inputs (set via the custom dialog; sensible defaults). -->
     <Property Id="WOWPATH" Value="C:\Program Files (x86)\World of Warcraft" />
     <Property Id="APIKEY" Secure="yes" />
     <Property Id="RUNATSTARTUP" Value="1" />
-    <Property Id="APIBASE" Value="https://raiders.hxxp.io" />
+    <!-- Your Raid Stats site URL. NO default - this is a self-hostable app;
+         the user enters it in the setup dialog. Secure="yes" (like APIKEY) so
+         this public property is set in the UI and carried into the deferred,
+         elevated WriteConfig action (an empty, non-Secure Property is ignored
+         by WiX -> WIX1006). HTTPS-validated + token-verified against it before
+         install, then written into the companion's config.json. -->
+    <Property Id="APIBASE" Secure="yes" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
 
     <StandardDirectory Id="ProgramFiles64Folder">

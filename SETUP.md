@@ -242,16 +242,20 @@ an empty database needs neither):
    re-run; already-encrypted rows are skipped. `TOKEN_ENCRYPTION_KEY` must be set
    and stable.
 
-2. **Rebuild + redeploy the companion installer** so existing users pick up token
-   rotation (the installer version is bumped to **1.0.19.0**):
-   ```powershell
-   pwsh installer/build.ps1        # → installer/dist/raid-team-stats-uploader.msi (+ .exe)
+2. **Publish the companion installer — now via GitHub Releases, no per-server
+   hosting.** CI builds the MSI on a Windows runner and attaches it to the
+   project's GitHub Release; the app's `/uploader/installer` route just redirects
+   to `…/releases/latest/download/raid-team-stats-uploader.msi`, so every
+   instance shares one central download (nobody hosts the ~28 MB binary). To cut
+   a release, bump `installer/Package.wxs` `Version=` and push a matching tag:
+   ```bash
+   git tag v1.0.20 && git push origin v1.0.20   # triggers installer-release.yml
    ```
-   Then copy `installer/dist/raid-team-stats-uploader.msi` **and**
-   `installer/Package.wxs` to the path the `web` container serves the installer
-   from — it's deployed out-of-band (a ~28 MB git-ignored artifact). Companions
-   that aren't updated keep working unchanged; they just don't rotate their token
-   until upgraded.
+   The repo must be **public** for anonymous downloads. The installer is
+   instance-agnostic: each user enters their own site address + upload token at
+   setup, so the one binary works for every deployment. (To build locally
+   instead: `pwsh installer/build.ps1`.) Companions that aren't updated keep
+   working unchanged; they just don't rotate their token until upgraded.
 
 ---
 

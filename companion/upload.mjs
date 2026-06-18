@@ -91,14 +91,22 @@ function loadConfig() {
       die(`config.json is not valid JSON: ${cfgPath}`);
     }
   }
-  const api = (process.env.RTS_API || cfg.api || "https://raiders.hxxp.io")
+  const api = (process.env.RTS_API || cfg.api || "")
     .trim()
     .replace(/\/+$/, "");
   const token = process.env.RTS_TOKEN || cfg.token || "";
   const wowPath = process.env.RTS_WOW_PATH || cfg.wowPath || "";
+  // This is a self-hostable app — the companion talks to YOUR Raid Stats
+  // instance, so there is no canonical default. Set it in config.json (or
+  // RTS_API). The installer writes this from the URL you enter during setup.
+  if (!api) {
+    die(
+      'No instance URL. Set "api" in config.json to your Raid Stats site ' +
+        '(e.g. https://raid.example.com), or pass RTS_API.',
+    );
+  }
   // Hard requirement: your character data + token must never leave this
-  // machine in plaintext. Refuse anything but HTTPS (TLS to Cloudflare,
-  // then Cloudflare→origin is Full-strict TLS). No silent http downgrade.
+  // machine in plaintext. Refuse anything but HTTPS. No silent http downgrade.
   if (!/^https:\/\//i.test(api)) {
     die(
       `"api" must be https:// (got "${api}"). The uploader will not send ` +

@@ -5,7 +5,7 @@
 #   3. compiles the WiX v6 project -> raid-team-stats-uploader.msi
 #   4. (optional) Authenticode-signs the .msi
 #
-# Prereqs (one-time): Node 18+, .NET SDK, WiX v6 + UI ext:
+# Prereqs (one-time): Node 20+ (Single Executable App), .NET SDK, WiX v6 + UI ext:
 #   dotnet tool install --global wix --version 6.0.0
 #   wix extension add -g WixToolset.UI.wixext/6.0.0
 #

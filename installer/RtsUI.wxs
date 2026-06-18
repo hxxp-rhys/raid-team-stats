@@ -39,27 +39,32 @@
                  Text="{\WixUI_Font_Title}Setup options" />
         <Control Id="Desc" Type="Text" X="25" Y="23" Width="320" Height="15"
                  Transparent="yes" NoPrefix="yes"
-                 Text="Point at your WoW install, paste your upload token, and choose startup." />
+                 Text="Enter your site address, WoW folder, and upload token." />
 
-        <Control Id="WowLabel" Type="Text" X="20" Y="58" Width="330" Height="12"
+        <Control Id="UrlLabel" Type="Text" X="20" Y="50" Width="330" Height="12"
+                 NoPrefix="yes" Text="Your Raid Stats site address (e.g. https://raid.example.com):" />
+        <Control Id="UrlEdit" Type="Edit" X="20" Y="63" Width="330" Height="18"
+                 Property="APIBASE" />
+
+        <Control Id="WowLabel" Type="Text" X="20" Y="89" Width="330" Height="12"
                  NoPrefix="yes" Text="World of Warcraft folder (the one containing _retail_):" />
-        <Control Id="WowEdit" Type="PathEdit" X="20" Y="72" Width="270" Height="18"
+        <Control Id="WowEdit" Type="PathEdit" X="20" Y="102" Width="270" Height="18"
                  Property="WOWPATH" Indirect="no" />
-        <Control Id="Browse" Type="PushButton" X="295" Y="72" Width="55" Height="18"
+        <Control Id="Browse" Type="PushButton" X="295" Y="102" Width="55" Height="18"
                  Text="Browse..." />
 
-        <Control Id="KeyLabel" Type="Text" X="20" Y="104" Width="330" Height="12"
+        <Control Id="KeyLabel" Type="Text" X="20" Y="128" Width="330" Height="12"
                  NoPrefix="yes" Text="Upload token (from the website Account page):" />
-        <Control Id="KeyEdit" Type="Edit" X="20" Y="118" Width="330" Height="18"
+        <Control Id="KeyEdit" Type="Edit" X="20" Y="141" Width="330" Height="18"
                  Property="APIKEY" />
 
-        <Control Id="StartChk" Type="CheckBox" X="20" Y="150" Width="330" Height="18"
+        <Control Id="StartChk" Type="CheckBox" X="20" Y="167" Width="330" Height="18"
                  Property="RUNATSTARTUP" CheckBoxValue="1"
                  Text="Run the uploader automatically at Windows startup (hidden, recommended)" />
 
-        <Control Id="Hint" Type="Text" X="20" Y="172" Width="330" Height="58"
+        <Control Id="Hint" Type="Text" X="20" Y="189" Width="330" Height="42"
                  Transparent="yes" NoPrefix="yes"
-                 Text="Next verifies the folder and token with the server. When you then click Install, Windows will ask for Administrator permission - this is normal and is used ONLY to: (1) install this small uploader, (2) copy the in-game addon into your World of Warcraft folder (Windows protects the Program Files area), and (3) set up the optional background sync. Nothing else on your PC is changed, and uninstalling removes all of it." />
+                 Text="Next verifies your site, folder, and token. Install then asks for Administrator permission - used only to install the uploader, copy the in-game addon into your WoW folder, and set up the optional background sync. Uninstalling removes all of it." />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
                  Text="Back" />
