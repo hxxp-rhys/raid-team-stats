@@ -1,9 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Next 16 opt-in: explicit cache control via `'use cache'` instead of implicit fetch caching.
-  // Required for `unstable_instant` validation; matches our snapshot/ingestion model.
-  cacheComponents: true,
+  // Cache Components (cacheComponents / PPR) is intentionally NOT enabled. It is
+  // incompatible with our strict nonce-based CSP: PPR serves a statically
+  // prerendered shell whose framework/chunk <script> tags carry no per-request
+  // nonce, so `script-src 'strict-dynamic'` blocks them and the app never
+  // hydrates (every onClick is dead, zero network on click). A per-request nonce
+  // REQUIRES dynamic rendering — which is free here (the app caches nothing via
+  // `'use cache'`; data is client-side React Query). If you ever adopt
+  // `'use cache'`, turn on `experimental.useCache` ONLY (never cacheComponents),
+  // so PPR's static shell stays off. See src/server/security/csp.ts + src/proxy.ts.
 
   // Disable the X-Powered-By header — also stripped in security/headers.ts as belt-and-braces.
   poweredByHeader: false,
@@ -25,9 +31,8 @@ const nextConfig: NextConfig = {
   ],
 
   // The nested guild-settings page was folded into the guild detail page.
-  // Routing-layer redirect (real 307, no JS needed) keeps old links and
-  // bookmarks working — a page-level redirect() under cacheComponents only
-  // streams a client-side redirect inside the 200 shell.
+  // A routing-layer redirect (real 307, no JS needed) keeps old links and
+  // bookmarks working without rendering a page first.
   async redirects() {
     return [
       {
