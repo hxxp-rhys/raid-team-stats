@@ -133,7 +133,7 @@ services:
       retries: 12
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.0
+    image: edoburu/pgbouncer:v1.23.0-p1
     container_name: rts-pgbouncer
     restart: unless-stopped
     # no-new-privileges is always safe; full cap-drop for this image should be
