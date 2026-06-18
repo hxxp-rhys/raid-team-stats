@@ -1,5 +1,12 @@
 # Production deploy
 
+> **⚠️ Superseded.** The authoritative, supported production path is the
+> self-contained **[`Setup/`](../Setup/README.md)** package — it runs the
+> pre-built image (no build step), needs only one `.env` edited, and ships the
+> monitoring stack on by default. **Use [`Setup/README.md`](../Setup/README.md).**
+> This page documents the older build-from-source `docker-compose.prod.yml`
+> flow and is kept only for reference.
+
 Single-host deploy via `docker-compose.prod.yml` against a fresh VPS
 (Hetzner / Fly.io machine / DigitalOcean). For multi-host, take the same
 images and lift them into your orchestrator.

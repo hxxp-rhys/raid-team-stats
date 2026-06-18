@@ -185,85 +185,41 @@ See [`companion/README.md`](./companion/README.md) for details.
 
 ## 8. Going to production (your own domain + HTTPS)
 
-The repo ships a hardened production stack (Caddy with automatic Let's Encrypt
-TLS + a non-root, read-only web container + a background worker).
+For production, use the self-contained deployment package in the
+**[`Setup/`](./Setup/) folder**. It runs the **pre-built image** (no build step),
+gets **automatic HTTPS** via Caddy, runs database **migrations on boot**, bundles
+the **web app and the background sync worker** from one image, and ships a
+**default-on monitoring stack** (Prometheus + Loki + Grafana) you can opt out of.
 
-1. Point your **domain's DNS** at the server.
-2. In `.env`, switch to production values:
-   ```
-   NODE_ENV=production
-   APP_URL=https://your-domain.example
-   AUTH_URL=https://your-domain.example
-   RATE_LIMIT_TRUST_PROXY=true          # correct ONLY because Caddy sits in front
-   ```
-3. Register the **production redirect URIs** in the Battle.net and Warcraft Logs
-   consoles (`https://your-domain.example/bnet-login-callback` and `/wcl-callback`).
-4. Create a **`.env.prod`** next to `docker-compose.prod.yml` (this file is
-   **git-ignored — never commit it**) with at least:
-   ```
-   APP_HOST=your-domain.example
-   POSTGRES_PASSWORD=<a long random password>
-   REDIS_PASSWORD=<a long random password>   # required — Redis won't start without it
-   METRICS_TOKEN=<openssl rand -hex 32>      # required — the app won't boot without it
-   ```
-   …plus the rest of the secrets/keys from your `.env` (`AUTH_SECRET`,
-   `SHARE_TOKEN_SECRET`, `TOKEN_ENCRYPTION_KEY`, the provider keys, etc.). See
-   `.env.example` for the full list.
-5. Bring it up:
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d
-   ```
-   Caddy auto-acquires a certificate for `APP_HOST`. (Tip: set `APP_HOST=localhost`
-   for a first smoke test to skip the public-DNS requirement — Caddy issues a
-   self-signed cert.)
-
----
-
-## Running from a pre-built image (skip the build)
-
-Every push to `main` (and every `vX.Y.Z` release tag) publishes a ready-to-run
-image via GitHub Actions, so you don't have to build it yourself:
+You edit one file and run one command:
 
 ```bash
-# GitHub Container Registry — no account needed:
-docker pull ghcr.io/hxxp-rhys/raid-stats:latest
-
-# …or Docker Hub, if the maintainer enabled it:
-docker pull hxxp-rhys/raid-stats:latest
+cd Setup
+cp .env.example .env && ./generate-secrets.sh    # configure (one file)
+./init-storage.sh                                # prepare storage
+docker compose up -d                             # launch
 ```
 
-To run the production stack from the published image instead of building locally,
-replace the `web` service's `build:` block in `docker-compose.prod.yml` with:
-
-```yaml
-    image: ghcr.io/hxxp-rhys/raid-stats:latest
-```
-
-Then bring it up as in §8. On a **fresh database**, apply the schema once — the
-image bundles the Prisma CLI + migrations (run this against Postgres directly,
-not through PgBouncer):
-
-```bash
-docker compose -f docker-compose.prod.yml run --rm web npx prisma migrate deploy
-```
-
-> **Heads-up:** the published image runs the web app (dashboards, calendar,
-> recruitment). The background **sync worker** (Battle.net / WCL / Raider.IO data
-> refresh) isn't bundled in this image yet, so keep building the `worker` service
-> locally for now. See the repo's deploy notes / issues for status.
+The complete walkthrough — DNS records, production OAuth redirect URIs, the
+monitoring opt-out, backups, and updates — is in
+**[`Setup/README.md`](./Setup/README.md)**. That folder is the authoritative
+production path; the rest of this page (steps 1–7) covers local development.
 
 ---
 
 ## 9. Updating
 
 ```bash
+# local development (builds from source):
 git pull
-docker compose up -d --build                     # local
-# docker compose -f docker-compose.prod.yml up -d --build   # production
+docker compose up -d --build
+
+# production (from the Setup/ folder — pulls the new image, no build):
+cd Setup && docker compose pull && docker compose up -d
 ```
 
 Database migrations run automatically on container start, so a routine update is
-just a pull + rebuild.
+just a pull + recreate (local dev rebuilds the image first).
 
 ### One-time steps for the PII-encryption release
 
@@ -272,11 +228,12 @@ answers) at rest and rotates the companion upload token automatically. When you
 upgrade an **existing** deployment to it, do these once (a brand-new install on
 an empty database needs neither):
 
-1. **Encrypt rows that predate encryption.** *After* `up -d --build` has deployed
-   the new image (so the running app can read what the backfill writes), run the
-   idempotent backfill once:
+1. **Encrypt rows that predate encryption.** *After* the new version has been
+   deployed (Step 9 above, so the running app can read what the backfill writes),
+   run the idempotent backfill once:
    ```bash
-   docker compose -f docker-compose.prod.yml run --rm -e RUN_MIGRATIONS=false \
+   # from the Setup/ folder, against the running production stack:
+   docker compose run --rm -e RUN_MIGRATIONS=false \
      web node_modules/.bin/tsx scripts/backfill-pii-encryption.ts
    ```
    (Or set `RUN_PII_BACKFILL=true` on the `web` service for a single deploy — the
@@ -314,8 +271,8 @@ an empty database needs neither):
 
 Rebrand the site and tailor the landing page **without editing code or
 rebuilding the image** — every setting is an optional **server** environment
-variable, read at runtime. Set any of them in your `.env` (dev) or `.env.prod`
-(production); unset values fall back to sensible defaults.
+variable, read at runtime. Set any of them in your `.env` (root `.env` for local
+dev, or `Setup/.env` for production); unset values fall back to sensible defaults.
 
 | Variable | What it changes |
 |---|---|
@@ -328,19 +285,21 @@ variable, read at runtime. Set any of them in your `.env` (dev) or `.env.prod`
 | `HOMEPAGE_FOOTER_NOTE` | Small note in the landing-page footer. |
 
 **Using your own logo.** Put your image where the web container can read it and
-point `BRAND_LOGO_URL` at it. The simplest way is a read-only bind mount into the
-container's `public/` directory — add to the `web` service in
-`docker-compose.prod.yml`:
+point `BRAND_LOGO_URL` at it. The cleanest way (without editing the shipped
+compose file) is a small `Setup/docker-compose.override.yml` — Docker Compose
+merges it automatically — that bind-mounts a folder into the container's
+`public/` directory:
 
 ```yaml
+services:
+  web:
     volumes:
       - ./branding:/app/public/branding:ro
 ```
 
-then in `.env.prod` set `BRAND_LOGO_URL=/branding/logo.png` and drop `logo.png`
-into a `./branding/` folder next to the compose file. (A square PNG ~128×128
-looks best.) Per-user theme colors are separately customizable from
-**Settings → Theme**.
+then in `Setup/.env` set `BRAND_LOGO_URL=/branding/logo.png` and drop `logo.png`
+into `Setup/branding/`. (A square PNG ~128×128 looks best.) Per-user theme colors
+are separately customizable from **Settings → Theme**.
 
 **What can't be removed.** The subtle **About** and **Security** footer links,
 the project credit, and the GitHub Sponsors link on the About page are a fixed
