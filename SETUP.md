@@ -187,9 +187,11 @@ See [`companion/README.md`](./companion/README.md) for details.
 
 For production, use the self-contained deployment package in the
 **[`Setup/`](./Setup/) folder**. It runs the **pre-built image** (no build step),
-gets **automatic HTTPS** via Caddy, runs database **migrations on boot**, bundles
-the **web app and the background sync worker** from one image, and ships a
-**default-on monitoring stack** (Prometheus + Loki + Grafana) you can opt out of.
+terminates **HTTPS** via Caddy (automatic Let's Encrypt by default, or bring your
+own certificate — e.g. behind Cloudflare; see `Setup/README.md`), runs database
+**migrations on boot**, bundles the **web app and the background sync worker**
+from one image, and ships a **default-on monitoring stack** (Prometheus + Loki +
+Grafana) you can opt out of.
 
 You edit one file and run one command:
 

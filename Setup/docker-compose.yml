@@ -19,11 +19,14 @@
 name: raid-team-stats
 
 services:
-  # ── Reverse proxy + automatic HTTPS (Let's Encrypt) ───────────────────────
+  # ── Reverse proxy + HTTPS (TLS_MODE: acme | custom | internal) ────────────
   caddy:
     image: caddy:2-alpine
     container_name: rts-caddy
     restart: unless-stopped
+    # caddy-entrypoint.sh writes the tls directive (imported by the Caddyfile)
+    # from TLS_MODE, then starts Caddy. Run via `sh`, so no +x bit is needed.
+    entrypoint: ["/bin/sh", "/etc/caddy/caddy-entrypoint.sh"]
     cap_add:
       - NET_BIND_SERVICE
     cap_drop:
@@ -33,10 +36,19 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-entrypoint.sh:/etc/caddy/caddy-entrypoint.sh:ro
       - ${DATA_DIR:-./data}/caddy:/data
       - ${DATA_DIR:-./data}/caddy-config:/config
+      # Your TLS cert + key (used when TLS_MODE=custom), read-only. See .env.
+      - ${DATA_DIR:-./data}/certs:/certs:ro
     environment:
       APP_HOST: ${APP_HOST:?APP_HOST is required — set it in .env}
+      # TLS strategy — see the TLS section in .env. acme = Let's Encrypt
+      # (default); custom = your own cert files in /certs; internal = self-signed.
+      TLS_MODE: ${TLS_MODE:-acme}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      SSL_CERT_FILENAME: ${SSL_CERT_FILENAME:-origin.pem}
+      SSL_KEY_FILENAME: ${SSL_KEY_FILENAME:-origin.key}
     depends_on:
       web:
         condition: service_healthy
@@ -106,6 +118,11 @@ services:
       DATABASE_URL: postgresql://raid_team_stats:${POSTGRES_PASSWORD}@pgbouncer:6432/raid_team_stats?schema=public
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     command: ["node_modules/.bin/tsx", "src/server/ingestion/worker.ts"]
+    # The shared image bakes a HEALTHCHECK that curls /api/health (correct for
+    # web). The worker serves no HTTP, so that check always fails and the
+    # container is reported "unhealthy" though it is running fine. Disable it.
+    healthcheck:
+      disable: true
     depends_on:
       # Wait for web (which applies migrations) to be healthy before starting.
       web:
@@ -133,7 +150,7 @@ services:
 
   # ── PgBouncer (transaction pooler in front of Postgres) ───────────────────
   pgbouncer:
-    image: edoburu/pgbouncer:v1.23.0-p1
+    image: edoburu/pgbouncer:v1.25.2-p0
     container_name: rts-pgbouncer
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -146,14 +163,22 @@ services:
       MAX_CLIENT_CONN: "500"
       DEFAULT_POOL_SIZE: "20"
       AUTH_TYPE: scram-sha-256
+      # MUST listen on 6432 — web/worker DATABASE_URL and the healthcheck below
+      # both target pgbouncer:6432. The edoburu image defaults LISTEN_PORT to
+      # 5432, which silently breaks both (dependency never goes healthy).
+      LISTEN_PORT: "6432"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z localhost 6432"]
+      # busybox `nc -z` (this image) does not behave like OpenBSD nc and reports
+      # an open port as closed, so the dependency never goes healthy. pg_isready
+      # is purpose-built and confirmed to report pgbouncer on 6432 as up.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432", "-U", "raid_team_stats"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
 
   # ── Redis (cache + BullMQ queue; authenticated, AOF-persisted) ────────────
   redis:
