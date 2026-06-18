@@ -20,8 +20,10 @@ application. See the **Security** and **Hardening your hosting environment**
 sections of the [README](./README.md) for the operator-facing controls.
 
 Authentication is implemented via Auth.js v5 with both a Credentials provider
-(Argon2id password hashing) and Battle.net OAuth (account-linking only — not
-a primary identity).
+(Argon2id password hashing) and Battle.net OAuth. Battle.net is a primary
+identity: signing in with a linked Battle.net account authenticates as its
+owner, and signing in with one that isn't linked to anyone auto-creates a new
+(email-less) account and links it.
 
 ## Cryptography
 
