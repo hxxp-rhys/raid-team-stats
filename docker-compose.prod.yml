@@ -107,6 +107,11 @@ services:
     # Run the worker straight from TypeScript via tsx (shipped in the image),
     # the same way it runs in development.
     command: ["node_modules/.bin/tsx", "src/server/ingestion/worker.ts"]
+    # The shared image bakes a HEALTHCHECK that curls /api/health (correct for
+    # web). The worker serves no HTTP, so that check always fails and the
+    # container is reported "unhealthy" though it is running fine. Disable it.
+    healthcheck:
+      disable: true
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -133,7 +138,7 @@ services:
       retries: 12
 
   pgbouncer:
-    image: edoburu/pgbouncer:v1.23.0-p1
+    image: edoburu/pgbouncer:1.23.0
     container_name: rts-pgbouncer
     restart: unless-stopped
     # no-new-privileges is always safe; full cap-drop for this image should be
@@ -148,14 +153,22 @@ services:
       MAX_CLIENT_CONN: "500"
       DEFAULT_POOL_SIZE: "20"
       AUTH_TYPE: scram-sha-256
+      # MUST listen on 6432 — web/worker DATABASE_URL and the healthcheck below
+      # both target pgbouncer:6432. The edoburu image defaults LISTEN_PORT to
+      # 5432, which silently breaks both (dependency never goes healthy).
+      LISTEN_PORT: "6432"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z localhost 6432"]
+      # busybox `nc -z` (this image) does not behave like OpenBSD nc and reports
+      # an open port as closed, so the dependency never goes healthy. pg_isready
+      # is purpose-built and confirmed to report pgbouncer on 6432 as up.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432", "-U", "raid_team_stats"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
 
   redis:
     image: redis:7-alpine

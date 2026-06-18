@@ -1,7 +1,15 @@
-# Caddy reverse proxy for production. Automatic TLS via Let's Encrypt when a real
-# domain is configured. Replace {$APP_HOST} via env at deploy time.
+# Caddy reverse proxy for production. TLS uses a Cloudflare Origin Certificate
+# because the origin is proxied through Cloudflare, so ACME/Let's Encrypt
+# challenges can't be validated (HTTP-01 -> CF 522, TLS-ALPN-01 -> CF terminates
+# TLS). Place the cert/key at data/certs/origin.{pem,key} (mounted read-only at
+# /certs) and set the Cloudflare SSL/TLS mode to Full (strict).
+# Replace {$APP_HOST} via env at deploy time.
 
 {$APP_HOST} {
+	# Cloudflare Origin Certificate — providing an explicit cert disables Caddy's
+	# automatic HTTPS/ACME (which cannot succeed behind the Cloudflare proxy).
+	tls /certs/origin.pem /certs/origin.key
+
 	encode zstd gzip
 
 	# Belt-and-braces: the Next.js app already emits these, but the proxy

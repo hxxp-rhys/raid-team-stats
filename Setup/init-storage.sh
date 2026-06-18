@@ -4,8 +4,10 @@
 #
 # The bundled containers run as non-root users. On Linux, a freshly created
 # bind-mount directory is owned by root, so Prometheus, Loki, and Grafana
-# cannot write to theirs and fail to start. This script creates every data
-# directory and sets the ownership those three services need.
+# cannot write to theirs and fail to start. Caddy is the mirror image: it runs
+# as root but with cap_drop:ALL (no CAP_DAC_OVERRIDE), so it CANNOT write a
+# store owned by anyone else — its dirs must be owned by uid 0. This script
+# creates every data directory and sets the ownership each service needs.
 #
 #   sh ./init-storage.sh        (use sudo if chown is denied)
 #
@@ -31,6 +33,7 @@ mkdir -p \
   "${DATA_DIR}/redis" \
   "${DATA_DIR}/caddy" \
   "${DATA_DIR}/caddy-config" \
+  "${DATA_DIR}/certs" \
   "${DATA_DIR}/prometheus" \
   "${DATA_DIR}/loki" \
   "${DATA_DIR}/promtail-positions" \
@@ -38,20 +41,25 @@ mkdir -p \
   "${DATA_DIR}/backup-staging"
 
 # These container users need to own their data dir (uid:gid):
-#   Prometheus 65534 (nobody)   Loki 10001   Grafana 472
+#   Prometheus 65534 (nobody)   Loki 10001   Grafana 472   Caddy 0 (root)
+# Caddy runs as root but with cap_drop:ALL, so without owning its store it gets
+# "mkdir /data/caddy: permission denied" and can never obtain a TLS cert.
 chown_or_warn() {
   uid="$1"
   dir="$2"
   if chown -R "${uid}:${uid}" "${dir}" 2>/dev/null; then
     echo "  set owner ${uid} -> ${dir}"
   else
-    echo "  WARN: could not chown ${dir} to ${uid}. Re-run with sudo, or" >&2
-    echo "        monitoring (Prometheus/Loki/Grafana) may fail to start." >&2
+    echo "  WARN: could not chown ${dir} to ${uid}. Re-run with sudo, or that" >&2
+    echo "        service may fail to start (no TLS for Caddy; no monitoring)." >&2
   fi
 }
 
 chown_or_warn 65534 "${DATA_DIR}/prometheus"
 chown_or_warn 10001 "${DATA_DIR}/loki"
 chown_or_warn 472   "${DATA_DIR}/grafana"
+chown_or_warn 0     "${DATA_DIR}/caddy"
+chown_or_warn 0     "${DATA_DIR}/caddy-config"
+chown_or_warn 0     "${DATA_DIR}/certs"
 
 echo "Storage ready at ${DATA_DIR}"
