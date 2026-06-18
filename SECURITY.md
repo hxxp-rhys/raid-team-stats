@@ -14,9 +14,10 @@ disclosure.
 
 ## Security model
 
-This project follows OWASP ASVS L1 as a baseline. See `plans/` for the
-architectural plan, which documents specific mitigations per concern (CSP,
-CSRF, brute-force, SSRF, encryption-at-rest, etc.).
+This project follows OWASP ASVS L1 as a baseline, with specific mitigations per
+concern (CSP, CSRF, brute-force, SSRF, encryption-at-rest, etc.) enforced in the
+application. See the **Security** and **Hardening your hosting environment**
+sections of the [README](./README.md) for the operator-facing controls.
 
 Authentication is implemented via Auth.js v5 with both a Credentials provider
 (Argon2id password hashing) and Battle.net OAuth (account-linking only — not
@@ -27,9 +28,12 @@ a primary identity).
 - Passwords: Argon2id (m=64 MiB, t=3, p=1) via the `argon2` package.
 - OAuth tokens (`Account.access_token`, `Account.refresh_token`, `Account.id_token`):
   AES-256-GCM column-level encryption on top of database-level encryption-at-rest.
-  Master key is `TOKEN_ENCRYPTION_KEY` (env, 32 raw bytes base64-encoded). Key
-  rotation procedure: see `docs/key-rotation.md` (added when the cipher module
-  ships in Phase 2).
+  Master key is `TOKEN_ENCRYPTION_KEY` (env, 32 raw bytes base64-encoded). This
+  key must remain stable: changing it makes every existing encrypted column
+  unreadable. Rotating it therefore requires re-encrypting all encrypted values
+  (decrypt with the old key, then re-encrypt with the new) — no automated
+  rotation tool is shipped yet, so treat the key as long-lived and protect it
+  accordingly.
 - Audit-log IPs: SHA-256 with a daily-rotating salt; raw IPs never persisted.
 - CSRF: Auth.js cookie SameSite=Lax + tRPC same-origin checks. Server Actions
   are POST-only with built-in origin validation.
