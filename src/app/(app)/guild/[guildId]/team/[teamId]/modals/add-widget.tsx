@@ -5,11 +5,13 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
+  WIDGET_ADDON_DEPENDENCE,
   WIDGET_CATEGORIES,
   WIDGET_CATEGORY,
   WIDGET_INFO,
   WIDGET_META,
   WIDGET_TYPES,
+  type AddonDependence,
   type WidgetType,
 } from "@/lib/widgets/types";
 
@@ -113,8 +115,11 @@ export function AddWidgetModal({
                         className="min-w-0 flex-1 text-left"
                         title="What does this track?"
                       >
-                        <span className="block truncate text-xs font-medium">
-                          {WIDGET_META[type].title}
+                        <span className="flex items-center gap-1 text-xs font-medium">
+                          <span className="truncate">
+                            {WIDGET_META[type].title}
+                          </span>
+                          <AddonGlyph dependence={WIDGET_ADDON_DEPENDENCE[type]} />
                         </span>
                       </button>
                     </li>
@@ -127,8 +132,15 @@ export function AddWidgetModal({
 
         {/* Sticky multi-add footer (stays visible while the grid scrolls). */}
         <div className="bg-card sticky bottom-0 -mx-5 mt-3 flex items-center justify-between gap-3 border-t px-5 pb-1 pt-3">
-          <span className="text-muted-foreground text-xs">
-            {count} selected · click a name for details
+          <span className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+            <span>{count} selected · click a name for details</span>
+            <span className="text-[10px]">
+              <span aria-hidden>🧩</span> needs the addon ·{" "}
+              <span aria-hidden className="opacity-50">
+                🧩
+              </span>{" "}
+              partly needs the addon
+            </span>
           </span>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={closePicker}>
@@ -175,6 +187,34 @@ export function AddWidgetModal({
         )}
       </Modal>
     </>
+  );
+}
+
+/**
+ * Small addon-dependence glyph shown next to a widget title. A solid puzzle
+ * piece means every field comes from the Raid Team Stats addon + companion;
+ * a faded one means only some data needs the addon (the rest is Blizzard/WCL).
+ * Widgets fully served without the addon render nothing.
+ */
+function AddonGlyph({ dependence }: { dependence: AddonDependence }) {
+  if (dependence === "none") return null;
+  const isAll = dependence === "all";
+  return (
+    <span
+      aria-label={
+        isAll
+          ? "All of this widget's data comes from the Raid Team Stats addon + companion uploader."
+          : "Some of this widget's data needs the Raid Team Stats addon; the rest is from Blizzard/WCL."
+      }
+      title={
+        isAll
+          ? "All of this widget's data comes from the Raid Team Stats addon + companion uploader."
+          : "Some of this widget's data needs the Raid Team Stats addon; the rest is from Blizzard/WCL."
+      }
+      className={`shrink-0 text-[10px] leading-none ${isAll ? "" : "opacity-50"}`}
+    >
+      🧩
+    </span>
   );
 }
 

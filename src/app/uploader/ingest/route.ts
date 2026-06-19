@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import {
+  LATEST_COMPANION_VERSION,
+  shouldNotify,
+} from "@/lib/companion-release";
+import { sendCompanionUpdateEmail } from "@/lib/email";
+import { DEFAULT_INSTALLER_URL } from "../installer/route";
 import { consumeLimit, policies } from "@/server/security/rate-limit";
 import {
   resolveUploadTokenUserId,
@@ -254,6 +260,49 @@ export async function POST(req: Request) {
         "addon raidObserver persist failed",
       );
     }
+  }
+
+  // Companion "update available" notification (best-effort): if the user's
+  // last-seen companion is behind the latest release and we haven't already
+  // emailed them about THIS version, send a one-time nudge. Race-safe: we claim
+  // the notified-version slot with a conditional updateMany BEFORE sending, so
+  // concurrent uploads can't double-send. A failure here must never fail the
+  // upload above. NOT placed before the partial-capture early return — only a
+  // full, successful upload should trigger it.
+  try {
+    const status = await db.companionStatus.findUnique({
+      where: { userId },
+      select: { lastSeenVersion: true, notifiedUpdateVersion: true },
+    });
+    if (status && shouldNotify(status, LATEST_COMPANION_VERSION)) {
+      // Claim FIRST (conditional on not already claimed for this version). If
+      // another concurrent request already claimed it, count === 0 → skip.
+      const claim = await db.companionStatus.updateMany({
+        where: { userId, NOT: { notifiedUpdateVersion: LATEST_COMPANION_VERSION } },
+        data: { notifiedUpdateVersion: LATEST_COMPANION_VERSION },
+      });
+      if (claim.count > 0) {
+        // email is auto-decrypted by the db extension.
+        const user = await db.user.findUnique({
+          where: { id: userId },
+          select: { email: true, emailVerified: true },
+        });
+        // No email or unverified → skip the send. Match the reminder-sweep
+        // stance: the claim STAYS (send is best-effort), so we don't retry
+        // forever on an unreachable address.
+        if (user?.email && user.emailVerified) {
+          await sendCompanionUpdateEmail({
+            to: user.email,
+            currentVersion: status.lastSeenVersion ?? "(unknown)",
+            latestVersion: LATEST_COMPANION_VERSION,
+            installerUrl:
+              process.env.COMPANION_INSTALLER_URL || DEFAULT_INSTALLER_URL,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, userId }, "companion update-notify failed");
   }
 
   return NextResponse.json({

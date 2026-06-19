@@ -137,7 +137,7 @@ function Inner({ params }: { params: Params }) {
           </CardDescription>
         </CardHeader>
         <form onSubmit={onSubmit} noValidate>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-3 pb-5">
             <div className="space-y-2">
               <Label htmlFor="dashboard-name">Dashboard name</Label>
               <Input

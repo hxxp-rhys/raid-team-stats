@@ -742,3 +742,50 @@ export const WIDGET_INFO: Record<WidgetType, WidgetInfo> = {
     cautions: "A low coverage % is NOT automatically bad — some deaths no defensive would save, and some roles intentionally hold CDs; only ranks players with ≥3 deaths.",
   },
 };
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Add-widget picker: per-widget reliance on the Raid Team Stats addon/companion.
+//   "all"     — every field comes from the addon export; no addon = blank widget.
+//   "partial" — some fields are addon-only, the rest from Blizzard/WCL.
+//   "none"    — fully served by Blizzard / Raider.IO / WCL; the addon is optional.
+// Record<WidgetType, …> so a new widget can't ship without declaring this
+// (tsc fails otherwise). Each entry is justified by that widget's `cautions`
+// prose in WIDGET_INFO above.
+// ──────────────────────────────────────────────────────────────────────────────
+export type AddonDependence = "none" | "partial" | "all";
+
+export const WIDGET_ADDON_DEPENDENCE: Record<WidgetType, AddonDependence> = {
+  ilvl_roster: "none",
+  mplus_ladder: "none",
+  vault_progress: "partial",
+  raid_completion: "none",
+  tier_set_tracker: "all",
+  wcl_parses: "none",
+  character_timeline: "none",
+  class_composition: "none",
+  ilvl_distribution: "none",
+  missing_fixes: "all",
+  mplus_weekly: "none",
+  talent_loadouts: "none",
+  parses_heatmap: "none",
+  recent_kills: "none",
+  vault_detail: "all",
+  keystones: "all",
+  weekly_lockouts: "all",
+  upgrade_currencies: "all",
+  consumable_readiness: "all",
+  delve_progress: "all",
+  talent_builds: "none",
+  data_refresh: "none",
+  engagement_pulse: "partial",
+  prog_curve: "none",
+  parse_consistency: "none",
+  professions: "none",
+  first_death_ledger: "none",
+  attendance_ledger: "all",
+  learning_curve: "none",
+  tonight_ready: "partial",
+  bench_equity: "none",
+  brez_economy: "none",
+  cooldown_usage: "none",
+};
