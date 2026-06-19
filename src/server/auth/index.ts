@@ -353,6 +353,27 @@ const config: NextAuthConfig = {
           isNewUser: Boolean(isNewUser),
         },
       });
+      // On ANY Battle.net login, kick off background character/guild discovery.
+      // Both the auto-create (CASE 3) and returning-login (CASE 1) paths reach
+      // here; previously discovery ran ONLY client-side on the
+      // /account?bnet=linked redirect (the manual-link path), so a plain
+      // Battle.net login left the user with zero characters and "Resync" found
+      // nothing. The job observes their characters/guilds, auto-joins guilds
+      // (ACTIVE), and enqueues each character's first stat sync.
+      // Fire-and-forget: a queue hiccup must never fail the login.
+      if (account?.provider === "battlenet" && user.id) {
+        try {
+          const { enqueueBattlenetDiscover } = await import(
+            "@/server/ingestion/jobs/battlenet-discover"
+          );
+          await enqueueBattlenetDiscover(user.id);
+        } catch (err) {
+          logger.warn(
+            { err, userId: user.id },
+            "battlenet discover enqueue on signIn failed",
+          );
+        }
+      }
     },
     async signOut(message) {
       // JWT strategy always emits { token } here; the { session } variant fires

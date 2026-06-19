@@ -30,6 +30,7 @@ export const guildRouter = router({
    * Used by /guild list page.
    */
   myGuilds: protectedProcedure.query(async ({ ctx }) => {
+    const admin = await isPlatformAdmin(ctx.session.user.id);
     const memberships = await ctx.db.guildMembership.findMany({
       where: { userId: ctx.session.user.id },
       include: {
@@ -48,10 +49,14 @@ export const guildRouter = router({
       orderBy: { joinedAt: "desc" },
     });
 
+    // `isAdmin` lets the list UI show staff-only affordances (the settings
+    // gear) for platform admins even on guilds where they aren't OWNER/OFFICER.
+    const withFlag = memberships.map((m) => ({ ...m, isAdmin: admin }));
+
     // Platform admins see every guild even without a membership row. Synthesize
     // entries for guilds the admin isn't already in so navigation lands on the
     // detail page (which will likewise pass the admin override).
-    if (await isPlatformAdmin(ctx.session.user.id)) {
+    if (admin) {
       const ownedGuildIds = new Set(memberships.map((m) => m.guildId));
       const others = await ctx.db.guild.findMany({
         where: { id: { notIn: [...ownedGuildIds] } },
@@ -78,11 +83,12 @@ export const guildRouter = router({
         approvedByUserId: null,
         departedAt: null,
         guild: g,
+        isAdmin: true,
       }));
-      return [...memberships, ...synthetic];
+      return [...withFlag, ...synthetic];
     }
 
-    return memberships;
+    return withFlag;
   }),
 
   /**

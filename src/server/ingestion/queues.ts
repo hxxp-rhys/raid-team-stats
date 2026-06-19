@@ -18,6 +18,7 @@ export const QUEUE_NAMES = {
   guildRosterSync: "rts-guild-roster-sync",
   manualRosterRefresh: "rts-manual-roster-refresh",
   guildReportSync: "rts-guild-report-sync",
+  battlenetDiscover: "rts-battlenet-discover",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -46,6 +47,10 @@ export const queues = {
     },
   }),
   guildReportSync: new Queue(QUEUE_NAMES.guildReportSync, {
+    connection: redisBlocking,
+    defaultJobOptions,
+  }),
+  battlenetDiscover: new Queue(QUEUE_NAMES.battlenetDiscover, {
     connection: redisBlocking,
     defaultJobOptions,
   }),

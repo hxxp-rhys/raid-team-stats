@@ -24,6 +24,13 @@ type Observation = {
   guildId: string;
   observedAt: Date;
   rosterRank?: number | null;
+  /**
+   * OAuth-proven ownership (the user verified these are their characters).
+   * When true, the rolled-up GuildMembership is created/reactivated as ACTIVE
+   * (no approval step). When false/omitted (public roster ingest), it stays
+   * PENDING for an officer to approve. Only meaningful for recordGuildPresence.
+   */
+  verified?: boolean;
 };
 
 /**
@@ -37,6 +44,7 @@ type Observation = {
  */
 export async function recordGuildPresence(observation: Observation): Promise<void> {
   const { characterId, guildId, observedAt, rosterRank } = observation;
+  const verified = observation.verified ?? false;
   // Track whether this observation might have moved rank 0 around (someone
   // newly promoted to rank 0, or the current rank-0 character demoted). When
   // true, we re-evaluate the guild's claim after the transaction commits.
@@ -63,7 +71,7 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
           consecutiveAbsences: 0,
         },
       });
-      await ensureGuildMembership(tx, characterId, guildId);
+      await ensureGuildMembership(tx, characterId, guildId, verified);
       if (rosterRank === 0) rankZeroChanged = true;
       initialSyncTrigger = "discovery";
       return;
@@ -89,13 +97,18 @@ export async function recordGuildPresence(observation: Observation): Promise<voi
     });
 
     if (wasReactivation) {
-      // User may have left and rejoined; force admin re-approval.
-      await reactivateMembershipAsPending(tx, characterId, guildId);
+      // User left and rejoined. With OAuth-proven ownership (verified) they
+      // re-activate immediately; an unverified public-roster observation keeps
+      // the re-approval gate.
+      await reactivateMembership(tx, characterId, guildId, verified);
       await audit({
         event: "MEMBER_APPROVED",
         subjectType: "character",
         subjectId: characterId,
-        metadata: { guildId, kind: "rejoin_requires_approval" },
+        metadata: {
+          guildId,
+          kind: verified ? "rejoin_auto_active" : "rejoin_requires_approval",
+        },
       });
       initialSyncTrigger = "rejoin";
     }
@@ -304,6 +317,7 @@ async function ensureGuildMembership(
   tx: TxClient,
   characterId: string,
   guildId: string,
+  verified: boolean,
 ): Promise<void> {
   const character = await tx.character.findUnique({
     where: { id: characterId },
@@ -315,26 +329,41 @@ async function ensureGuildMembership(
     where: { userId_guildId: { userId: character.userId, guildId } },
   });
 
+  // verified === OAuth-proven ownership → the user joins their own guild as an
+  // ACTIVE member immediately (no approval gate). Unverified public-roster
+  // ingest keeps the PENDING-then-approve flow.
+  const targetStatus = verified
+    ? GuildMembershipStatus.ACTIVE
+    : GuildMembershipStatus.PENDING;
+
   if (!existing) {
     await tx.guildMembership.create({
       data: {
         userId: character.userId,
         guildId,
-        status: GuildMembershipStatus.PENDING,
+        status: targetStatus,
       },
     });
   } else if (existing.status === GuildMembershipStatus.DEPARTED) {
     await tx.guildMembership.update({
       where: { id: existing.id },
-      data: { status: GuildMembershipStatus.PENDING, departedAt: null },
+      data: { status: targetStatus, departedAt: null },
+    });
+  } else if (verified && existing.status === GuildMembershipStatus.PENDING) {
+    // The owner just proved they own a character in this guild — promote their
+    // existing pending membership to ACTIVE.
+    await tx.guildMembership.update({
+      where: { id: existing.id },
+      data: { status: GuildMembershipStatus.ACTIVE },
     });
   }
 }
 
-async function reactivateMembershipAsPending(
+async function reactivateMembership(
   tx: TxClient,
   characterId: string,
   guildId: string,
+  verified: boolean,
 ): Promise<void> {
   const character = await tx.character.findUnique({
     where: { id: characterId },
@@ -348,6 +377,11 @@ async function reactivateMembershipAsPending(
       guildId,
       status: GuildMembershipStatus.DEPARTED,
     },
-    data: { status: GuildMembershipStatus.PENDING, departedAt: null },
+    data: {
+      status: verified
+        ? GuildMembershipStatus.ACTIVE
+        : GuildMembershipStatus.PENDING,
+      departedAt: null,
+    },
   });
 }

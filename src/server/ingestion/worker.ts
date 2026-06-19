@@ -32,6 +32,10 @@ import {
   enqueueGuildReportSyncForAll,
   type GuildReportSyncPayload,
 } from "@/server/ingestion/jobs/guild-report-sync";
+import {
+  handleBattlenetDiscover,
+  type BattlenetDiscoverPayload,
+} from "@/server/ingestion/jobs/battlenet-discover";
 import { runTeamScheduleSweep } from "@/server/ingestion/jobs/team-schedule-sweeper";
 import { runWorldDataRefresh } from "@/server/ingestion/jobs/wcl-worlddata-refresh";
 import { runRetentionPrune } from "@/server/ingestion/jobs/admin-retention-prune";
@@ -141,6 +145,27 @@ const start = async () => {
     }),
   );
 
+  // Battle.net discovery — enqueued from the auth signIn event on every
+  // Battle.net login (and from "Resync" when the user has no characters yet).
+  // Observes the user's characters/guilds and applies verification, which in
+  // turn enqueues each character's first stat sync. concurrency 2: a handful
+  // of Blizzard calls per job, smoothed by the client's token bucket.
+  workers.push(
+    new Worker<BattlenetDiscoverPayload>(
+      QUEUE_NAMES.battlenetDiscover,
+      async (job) => handleBattlenetDiscover(job.data),
+      {
+        connection: redisBlocking,
+        concurrency: 2,
+      },
+    ).on("failed", (job, err) => {
+      logger.error(
+        { jobId: job?.id, attemptsMade: job?.attemptsMade, err },
+        "battlenet-discover job failed",
+      );
+    }),
+  );
+
   await registerSchedules();
 
   // WCL worldData refresh: persist the full zone/encounter snapshot + maintain
@@ -178,6 +203,7 @@ const start = async () => {
     { name: "tracked-member-sync", q: queues.trackedMemberSync },
     { name: "guild-roster-sync", q: queues.guildRosterSync },
     { name: "guild-report-sync", q: queues.guildReportSync },
+    { name: "battlenet-discover", q: queues.battlenetDiscover },
   ];
   setInterval(async () => {
     for (const { name, q } of queueObjects) {

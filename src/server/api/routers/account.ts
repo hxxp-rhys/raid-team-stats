@@ -119,6 +119,22 @@ export const accountRouter = router({
       take: 50, // sane cap; the per-provider token buckets gate spend anyway
     });
     if (characters.length === 0) {
+      // No characters yet. If Battle.net is linked, "Resync" should DISCOVER
+      // them (find the user's characters + guilds and enqueue their first
+      // sync) rather than telling the user to link Battle.net — this is the
+      // path hit right after a Battle.net login. Only when there's genuinely
+      // no Battle.net link do we report no_characters.
+      const bnet = await ctx.db.account.findFirst({
+        where: { userId, provider: "battlenet" },
+        select: { id: true },
+      });
+      if (bnet) {
+        const { enqueueBattlenetDiscover } = await import(
+          "@/server/ingestion/jobs/battlenet-discover"
+        );
+        await enqueueBattlenetDiscover(userId);
+        return { ok: false as const, reason: "discovering" as const };
+      }
       return { ok: false as const, reason: "no_characters" as const };
     }
 
