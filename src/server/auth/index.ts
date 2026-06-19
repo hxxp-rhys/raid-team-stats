@@ -27,11 +27,14 @@ const REVOKED_TOKEN_KEY = (jti: string) => `auth:revoked:${jti}`;
  * `signOut` adds the current jti to the set, and the `jwt` callback rejects
  * tokens whose jti is present.
  *
- * Battle.net is a PRIMARY identity: signing in with it either signs you in as
- * the user who owns that Battle.net link, or — if it's not linked to anyone —
- * auto-creates a new (email-less) account and links it. The `signIn` callback
- * below implements the three cases. Email/password remains a parallel
- * identity; a user can have either or both.
+ * Battle.net is LINK-ONLY (not a primary identity): signing in with it signs
+ * you in as the user who owns that link, or — if you're already signed in —
+ * links it to your account. It does NOT create accounts: Battle.net exposes no
+ * email, so an auto-created account would be email-less (can't be admin-by-
+ * email, has no password to recover, orphans the user's data). A Battle.net
+ * login with no linked account is refused with a "register with your email
+ * first, then link" message. The `signIn` callback below implements the three
+ * cases. Email/password is the primary identity; Battle.net attaches to it.
  */
 const config: NextAuthConfig = {
   // Wrapped adapter maps our displayName/avatarUrl ↔ the adapter's name/image
@@ -226,9 +229,9 @@ const config: NextAuthConfig = {
       //   2. NOT linked, signed in → attach Battle.net to the current user
       //      (the /account "Link Battle.net" flow). Manual create + redirect
       //      keeps the existing session.
-      //   3. NOT linked, not signed in → AUTO-CREATE a new (email-less) user
-      //      and link it. Returning true lets the wrapped adapter.createUser +
-      //      linkAccount run, then Auth.js mints a JWT for the new user.
+      //   3. NOT linked, not signed in → REFUSE (link-only). Battle.net must
+      //      not create accounts (it exposes no email). Redirect back to
+      //      /signin with a "register with your email first, then link" notice.
       if (account?.provider === "battlenet") {
         const battletag =
           typeof profile?.battle_tag === "string" ? profile.battle_tag : "unknown";
@@ -307,10 +310,16 @@ const config: NextAuthConfig = {
           return "/account?bnet=linked";
         }
 
-        // CASE 3 — not linked, not signed in: auto-create + link via the
-        // wrapped adapter (createUser maps battle_tag → displayName, no email).
-        logger.info({ battletag }, "Battle.net sign-up: creating new account");
-        return true;
+        // CASE 3 — not linked, not signed in: REFUSE. Battle.net is link-only;
+        // it must NOT create accounts. Battle.net exposes no email, so an
+        // auto-created account is email-less — it can't be admin-by-email, has
+        // no password to recover, and orphans the user's data. The user must
+        // register with an email first, then link Battle.net from /account.
+        logger.info(
+          { battletag },
+          "Battle.net sign-in refused: no linked account (link-only)",
+        );
+        return "/signin?error=BattlenetNoAccount";
       }
       return true;
     },
