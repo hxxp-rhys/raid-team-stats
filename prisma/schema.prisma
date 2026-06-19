@@ -892,6 +892,10 @@ model AddonUpload {
   worldUnlocked   Int?
   worldTotal      Int      @default(3)
   weeklyMplusRuns Int?
+  // Equipped item level the addon read directly from the live client
+  // (gear.equippedItemLevel). Addon-primary source for the displayed iLvL
+  // when the capture is fresh; the Blizzard API iLvL stays the fallback.
+  addonItemLevel  Int?
   payload         Json
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)

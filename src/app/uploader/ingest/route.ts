@@ -222,6 +222,21 @@ export async function POST(req: Request) {
   const v = deriveVault(payload);
   const collectedAt = new Date(payload.collectedAt * 1000);
 
+  // Equipped item level the addon read straight from the live client. `gear`
+  // is z.unknown() in the schema, so dig it out defensively: only a finite
+  // number, rounded to an int, is kept — anything else (absent/NaN/string)
+  // → null. Stored as the addon-primary source for the displayed iLvL; the
+  // Blizzard API iLvL remains the fallback (see snapshot.latestForTeam).
+  const gearObj =
+    payload.gear && typeof payload.gear === "object"
+      ? (payload.gear as { equippedItemLevel?: unknown })
+      : null;
+  const rawIlvl = gearObj?.equippedItemLevel;
+  const addonItemLevel =
+    typeof rawIlvl === "number" && Number.isFinite(rawIlvl)
+      ? Math.round(rawIlvl)
+      : null;
+
   try {
     await db.addonUpload.upsert({
       where: { characterId: character.id },
@@ -235,6 +250,7 @@ export async function POST(req: Request) {
         worldUnlocked: v.worldUnlocked,
         worldTotal: v.worldTotal,
         weeklyMplusRuns: v.weeklyMplusRuns,
+        addonItemLevel,
         payload: payload as object,
       },
       update: {
@@ -247,6 +263,7 @@ export async function POST(req: Request) {
         worldUnlocked: v.worldUnlocked,
         worldTotal: v.worldTotal,
         weeklyMplusRuns: v.weeklyMplusRuns,
+        addonItemLevel,
         payload: payload as object,
       },
     });
