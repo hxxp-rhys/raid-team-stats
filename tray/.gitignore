@@ -1,0 +1,3 @@
+# .NET build output for the tray helper (built by installer/build.ps1).
+bin/
+obj/

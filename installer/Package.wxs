@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="Raid Team Stats"
-           Version="1.0.24.0"
+           Version="1.0.25.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -36,6 +36,9 @@
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="CompanionExe">
         <File Id="rts_companion.exe" Source="installer\dist\rts-companion.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="TrayExe">
+        <File Id="rts_tray.exe" Source="installer\dist\rts-tray.exe" KeyPath="yes" />
       </Component>
       <Component Id="RunHiddenVbs">
         <File Id="run_hidden.vbs" Source="installer\run-hidden.vbs" KeyPath="yes" />
@@ -101,6 +104,21 @@
         <RegistryValue Root="HKLM" Key="Software\raid-team-stats\Uploader"
                        Name="startup" Type="integer" Value="1" KeyPath="yes" />
       </Component>
+      <!-- The system-tray helper (rts-tray.exe) also autostarts: a SEPARATE
+           Startup shortcut on the same RUNATSTARTUP gate. Independent of the
+           companion (the tray is the UI; the companion keeps syncing even if
+           the tray is closed). No second RemoveFolder — the one above already
+           cleans the StartupFolder (a duplicate RemoveFolder Id would error). -->
+      <Component Id="TrayStartupShortcut"
+                 Guid="D1E5F2A3-7B8C-4D9E-AF10-2B3C4D5E6F70"
+                 Condition="RUNATSTARTUP = &quot;1&quot;">
+        <Shortcut Id="TrayStartupSc" Name="Raid Team Stats Tray"
+                  Target="[INSTALLFOLDER]rts-tray.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="System-tray controls for Raid Team Stats" />
+        <RegistryValue Root="HKLM" Key="Software\raid-team-stats\Uploader"
+                       Name="traystartup" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
     </StandardDirectory>
 
     <ComponentGroup Id="AddonStageFiles" Directory="ADDONSTAGE">
@@ -122,6 +140,7 @@
       <ComponentRef Id="DesktopShortcut" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="AutostartShortcut" />
+      <ComponentRef Id="TrayStartupShortcut" />
     </Feature>
 
     <!-- ───────── validation (immediate, on the config dialog's Next) ───────── -->
@@ -149,6 +168,15 @@
     <CustomAction Id="LaunchCompanion"
                   FileRef="rts_companion.exe"
                   ExeCommand="--watch"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <!-- Launch the tray immediately after install too (no args), in the
+         installing user's session, without blocking setup. -->
+    <CustomAction Id="LaunchTray"
+                  FileRef="rts_tray.exe"
+                  ExeCommand=""
                   Execute="immediate"
                   Impersonate="yes"
                   Return="asyncNoWait" />
@@ -186,6 +214,8 @@
       <!-- Start the uploader right after a successful install/upgrade
            when the user opted into autostart. -->
       <Custom Action="LaunchCompanion" After="InstallFinalize"
+              Condition="NOT REMOVE AND RUNATSTARTUP=&quot;1&quot;" />
+      <Custom Action="LaunchTray" After="LaunchCompanion"
               Condition="NOT REMOVE AND RUNATSTARTUP=&quot;1&quot;" />
     </InstallExecuteSequence>
 
