@@ -10,10 +10,26 @@
  */
 
 /** = installer/Package.wxs Version. Bump on every companion release. */
-export const LATEST_COMPANION_VERSION = "1.0.23.0";
+export const LATEST_COMPANION_VERSION = "1.0.24.0";
 
 /** = addon StatSmith.toc "## Version" / StatSmith.lua ADDON_VERSION. Bump on every addon release. */
 export const LATEST_ADDON_VERSION = "1.2.2";
+
+/**
+ * Opt-in addon auto-update (Phase 3b-ii). These two bump in lockstep with the
+ * addon (and the coupled companion that ships the auto-apply transport):
+ *
+ *  - MIN_COMPANION_FOR_ADDON: the first companion build that can safely fetch,
+ *    integrity-check, and (gated) apply an addon bundle. Older companions must
+ *    NOT auto-apply, so the manifest advertises this floor and the companion
+ *    self-gates on it.
+ *  - ADDON_BUNDLE_URL: the GitHub "latest release" asset built by
+ *    scripts/build-addon-bundle.mjs and published by installer-release.yml
+ *    (mirrors DEFAULT_INSTALLER_URL's central-hosting style).
+ */
+export const MIN_COMPANION_FOR_ADDON = "1.0.24.0"; // first companion that can safely auto-apply an addon update (compat gate)
+export const ADDON_BUNDLE_URL =
+  "https://github.com/hxxp-rhys/raid-team-stats/releases/latest/download/raid-team-stats-addon.json";
 
 /**
  * Compare two dotted version strings NUMERICALLY (segment-by-segment), not

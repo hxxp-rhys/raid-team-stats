@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import {
   LATEST_COMPANION_VERSION,
   LATEST_ADDON_VERSION,
+  ADDON_BUNDLE_URL,
+  MIN_COMPANION_FOR_ADDON,
 } from "@/lib/companion-release";
 import { DEFAULT_INSTALLER_URL } from "../installer/route";
 
@@ -29,7 +31,11 @@ export async function GET() {
     {
       ok: true,
       companion: { latest: LATEST_COMPANION_VERSION },
-      addon: { latest: LATEST_ADDON_VERSION },
+      addon: {
+        latest: LATEST_ADDON_VERSION,
+        downloadUrl: ADDON_BUNDLE_URL,
+        minCompanionVersion: MIN_COMPANION_FOR_ADDON,
+      },
       installerUrl,
     },
     { headers: { "Cache-Control": "public, max-age=300" } },

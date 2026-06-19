@@ -130,6 +130,16 @@ jobs:
             throw "build.ps1 did not produce installer/dist/raid-team-stats-uploader.msi"
           }
 
+      # Build the opt-in addon auto-update bundle (Phase 3b-ii) + its SHA sidecar.
+      # The companion fetches raid-team-stats-addon.json, verifies it against
+      # raid-team-stats-addon.json.sha256, then (gated) applies the addon files.
+      - name: Build addon auto-update bundle
+        shell: pwsh
+        run: |
+          node scripts/build-addon-bundle.mjs raid-team-stats-addon.json
+          $hash = (Get-FileHash raid-team-stats-addon.json -Algorithm SHA256).Hash.ToLower()
+          "$hash  raid-team-stats-addon.json" | Out-File -FilePath raid-team-stats-addon.json.sha256 -Encoding ascii -NoNewline
+
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -138,9 +148,11 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $msi = "installer/dist/raid-team-stats-uploader.msi"
+          $bundle = "raid-team-stats-addon.json"
+          $bundleSha = "raid-team-stats-addon.json.sha256"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $msi --clobber
+            gh release upload $tag $msi $bundle $bundleSha --clobber
           } else {
-            gh release create $tag $msi --title $tag --generate-notes
+            gh release create $tag $msi $bundle $bundleSha --title $tag --generate-notes
           }

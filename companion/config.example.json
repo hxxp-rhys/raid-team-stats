@@ -1,5 +1,7 @@
 {
   "api": "https://raid.example.com",
   "token": "PASTE-YOUR-UPLOAD-TOKEN-FROM-THE-ACCOUNT-PAGE",
-  "wowPath": "C:\\Program Files (x86)\\World of Warcraft"
+  "wowPath": "C:\\Program Files (x86)\\World of Warcraft",
+  "_comment_autoUpdateAddon": "Set true to let the companion auto-update the Raid Team Stats addon (only when WoW is closed; verified by SHA-256). Off by default.",
+  "autoUpdateAddon": false
 }
