@@ -52,6 +52,7 @@ import {
   groupKnownAlphabetical,
   groupKnownLikeInGame,
 } from "@/lib/widgets/professions-logic";
+import { isAddonFresh, resolveField } from "@/lib/source-resolver";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import {
   DEATH_DAMAGE_TAKEN_QUERY,
@@ -472,6 +473,11 @@ export const snapshotRouter = router({
                 collectedAt: true,
                 receivedAt: true,
                 addonVersion: true,
+                // Addon-primary fields (Phase 5): the equipped iLvL the addon
+                // read live, and the exact weekly M+ run count. Preferred over
+                // the API values only when the capture is fresh (isAddonFresh).
+                addonItemLevel: true,
+                weeklyMplusRuns: true,
                 payload: true,
               },
             }),
@@ -586,15 +592,67 @@ export const snapshotRouter = router({
             state: companionState,
             lastReceivedAt,
           };
+
+          // ── Phase 5: addon-as-primary / API-fallback for a SAFE subset ──
+          // The addon reads live client state the web APIs lag or can't see.
+          // We prefer the addon's value ONLY when the capture is FRESH (the
+          // companion is actively reporting AND the snapshot is recent — see
+          // isAddonFresh); otherwise the API value is used, which is also the
+          // sole source for users without the companion. Scope is deliberately
+          // narrow: equipped item level + the exact weekly M+ run count. WCL
+          // parses, Raider.IO score, and the talent loadout stay API-only /
+          // API-primary and are untouched here.
+          const addonFresh = isAddonFresh({
+            collectedAt: addon?.collectedAt ?? null,
+            companionState,
+            now: companionNow,
+          });
+
+          // Item level: addon's equipped iLvL over the Blizzard API iLvL
+          // (equipment snapshot preferred, character snapshot as its own
+          // fallback). The API value is retained as the fallback and is still
+          // synced independently — we only override what the client displays.
+          const charSnap = latest[i]![0];
+          const apiItemLevel =
+            equipment?.itemLevel ?? charSnap?.itemLevel ?? null;
+          const resolvedItemLevel = resolveField({
+            addonValue: addon?.addonItemLevel ?? null,
+            apiValue: apiItemLevel,
+            addonFresh,
+          }).value;
+          // Surface the resolved iLvL through both shapes the client reads
+          // (`equipment.itemLevel ?? character.itemLevel`), so addon-fresh
+          // members show the live value whether or not an equipment snapshot
+          // exists. Gear-audit counts/slots are left exactly as derived.
+          const character = charSnap
+            ? { ...charSnap, itemLevel: resolvedItemLevel ?? charSnap.itemLevel }
+            : charSnap;
+          const resolvedEquipment = equipment
+            ? { ...equipment, itemLevel: resolvedItemLevel ?? equipment.itemLevel }
+            : equipment;
+
+          // Weekly M+ run count: the addon's count is the authoritative EXACT
+          // number (the API/RIO is only a lower bound). No new storage — the
+          // addon's count already lives on AddonUpload.weeklyMplusRuns.
+          const mplusSnap = latest[i]![2];
+          const resolvedWeeklyRunCount = resolveField({
+            addonValue: addon?.weeklyMplusRuns ?? null,
+            apiValue: mplusSnap?.weeklyRunCount ?? null,
+            addonFresh,
+          }).value;
+          const mplus = mplusSnap
+            ? { ...mplusSnap, weeklyRunCount: resolvedWeeklyRunCount }
+            : mplusSnap;
+
           return {
             character: m.character,
             role: m.role,
             rank: m.rank,
             companion,
             latest: {
-              character: latest[i]![0],
-              equipment,
-              mplus: latest[i]![2],
+              character,
+              equipment: resolvedEquipment,
+              mplus,
               vault,
               raid: latest[i]![4],
               wclParses: latest[i]![5],
