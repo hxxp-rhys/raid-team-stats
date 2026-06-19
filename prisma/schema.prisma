@@ -58,6 +58,7 @@ model User {
   auditLogsActor AuditLog[]  @relation("AuditLogActor")
 
   characters          Character[]
+  companionStatus     CompanionStatus?
   guildMemberships    GuildMembership[]
   membershipApprovals GuildMembership[]    @relation("GuildMembershipApprover")
   guildsClaimed       Guild[]              @relation("GuildClaimedBy")
@@ -897,6 +898,29 @@ model AddonUpload {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// Per-USER companion (desktop uploader) install telemetry. One row per user,
+// upserted by the /uploader/event endpoint the companion pings on
+// install/uninstall. `installed` is the live state; `installedAt` is stamped
+// once (first install) and never cleared; `uninstalledAt` records the most
+// recent uninstall. `lastSeenVersion`/`lastSeenAddonVersion` are the companion
+// app + in-game addon versions reported on the last install event.
+// `notifiedUpdateVersion` is reserved for a Phase 3 "email once when an update
+// is available" flow. Install state is per-User (the companion is a per-account
+// desktop app); the roster widget joins it via Character.userId, so every
+// character of the same user shows the same install state.
+model CompanionStatus {
+  userId                String    @id
+  installed             Boolean   @default(false)
+  installedAt           DateTime?
+  uninstalledAt         DateTime?
+  lastSeenVersion       String?
+  lastSeenAddonVersion  String?
+  notifiedUpdateVersion String?
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

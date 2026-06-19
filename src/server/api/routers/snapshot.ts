@@ -342,6 +342,7 @@ export const snapshotRouter = router({
           character: {
             select: {
               id: true,
+              userId: true,
               name: true,
               realmSlug: true,
               region: true,
@@ -358,6 +359,22 @@ export const snapshotRouter = router({
       if (characterIds.length === 0) {
         return { members: [] as Array<{ character: never; latest: never }> };
       }
+
+      // Companion (desktop uploader) install state is per-USER, joined to each
+      // character via Character.userId — every character of the same user shows
+      // the same install state. lastReceivedAt below stays genuinely
+      // per-character (that character's own most-recent addon upload).
+      const ownerUserIds = [...new Set(memberships.map((m) => m.character.userId))];
+      const companionRows = await ctx.db.companionStatus.findMany({
+        where: { userId: { in: ownerUserIds } },
+        select: { userId: true, installed: true },
+      });
+      const companionByUser = new Map(
+        companionRows.map((c) => [c.userId, c]),
+      );
+      // 7-day staleness threshold, computed SERVER-side.
+      const COMPANION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+      const companionNow = Date.now();
 
       // Pull the latest snapshot of each domain per character. Postgres
       // DISTINCT ON would be ideal but Prisma doesn't expose it; a per-
@@ -453,6 +470,7 @@ export const snapshotRouter = router({
                 worldUnlocked: true,
                 worldTotal: true,
                 collectedAt: true,
+                receivedAt: true,
                 addonVersion: true,
                 payload: true,
               },
@@ -547,10 +565,32 @@ export const snapshotRouter = router({
                 addon.addonVersion,
               )
             : null;
+          // Companion install state for the App column. Per-user install flag
+          // joined via the character's owner; lastReceivedAt is THIS
+          // character's own most-recent addon upload. state="none" when the
+          // user has no CompanionStatus or it's not installed; "warning" when
+          // installed but no data has arrived in 7 days (or ever); else "ok".
+          const companionRow = companionByUser.get(m.character.userId);
+          const lastReceivedAt =
+            companionRow?.installed === true
+              ? (addon?.receivedAt ?? null)
+              : null;
+          const companionState: "none" | "ok" | "warning" =
+            !companionRow || companionRow.installed !== true
+              ? "none"
+              : lastReceivedAt == null ||
+                  companionNow - lastReceivedAt.getTime() > COMPANION_STALE_MS
+                ? "warning"
+                : "ok";
+          const companion = {
+            state: companionState,
+            lastReceivedAt,
+          };
           return {
             character: m.character,
             role: m.role,
             rank: m.rank,
+            companion,
             latest: {
               character: latest[i]![0],
               equipment,

@@ -143,4 +143,8 @@ export const policies = {
   // enough to blunt a leaked token / DB-write spam.
   uploadIngestPerToken: { namespace: "upload:ingest:token", limit: 40, windowMs: 10 * 60_000 },
   uploadVerifyPerToken: { namespace: "upload:verify:token", limit: 40, windowMs: 10 * 60_000 },
+  // Install/uninstall telemetry pings from the companion (CompanionStatus).
+  // The legit companion fires this once on install + once on uninstall, so a
+  // handful per window is plenty; tight enough to blunt a leaked-token replay.
+  uploadEventPerToken: { namespace: "upload:event:token", limit: 20, windowMs: 10 * 60_000 },
 } as const satisfies Record<string, Limit>;
