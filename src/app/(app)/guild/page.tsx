@@ -85,6 +85,7 @@ export default function GuildIndexPage() {
                   faction={m.guild.faction}
                   role={m.role}
                   status={m.status}
+                  isAdmin={m.isAdmin}
                   isSelected={isSelected}
                   onSelect={() =>
                     setSelectedGuildId((id) =>
@@ -110,6 +111,7 @@ function GuildRow({
   faction,
   role,
   status,
+  isAdmin,
   isSelected,
   onSelect,
 }: {
@@ -120,6 +122,7 @@ function GuildRow({
   faction: string;
   role: string;
   status: string;
+  isAdmin: boolean;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -165,13 +168,15 @@ function GuildRow({
           </span>
         </div>
       </button>
-      <Link
-        href={`/guild/${guildId}` as Route}
-        title="Guild settings"
-        className="border-border bg-background text-muted-foreground hover:text-foreground hover:border-primary/50 inline-flex w-10 items-center justify-center rounded-lg border text-sm transition-colors"
-      >
-        ⚙
-      </Link>
+      {(isAdmin || role === "OWNER" || role === "OFFICER") && (
+        <Link
+          href={`/guild/${guildId}` as Route}
+          title="Guild settings"
+          className="border-border bg-background text-muted-foreground hover:text-foreground hover:border-primary/50 inline-flex w-10 items-center justify-center rounded-lg border text-sm transition-colors"
+        >
+          ⚙
+        </Link>
+      )}
     </div>
   );
 }

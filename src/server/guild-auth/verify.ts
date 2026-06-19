@@ -160,6 +160,10 @@ export async function applyVerification(
       guildId: guild.id,
       observedAt: input.observedAt,
       rosterRank: obs.guild.rosterRank ?? null,
+      // OAuth-proven ownership → the user joins their own guild as an ACTIVE
+      // member immediately (no approval step). Public roster ingest
+      // (verifiedOwnership=false) keeps the PENDING-then-approve flow.
+      verified: input.verifiedOwnership ?? false,
     });
 
     // Opportunistic GM auto-claim — only fires when the guild is UNCLAIMED

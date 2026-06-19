@@ -26,13 +26,18 @@ export function AccountRefreshButton() {
 
   const refresh = api.account.refreshMyData.useMutation({
     onSuccess: (data) => {
-      if (data.ok && data.enqueued > 0) {
+      if (data.ok) {
         setMsg(null);
         setProgress({ since: data.at, total: data.enqueued });
         void utils.account.uploadStatus.invalidate();
+      } else if (data.reason === "discovering") {
+        setProgress(null);
+        setMsg(
+          "Finding your characters from Battle.net… give it a moment, then Resync again.",
+        );
       } else {
         setProgress(null);
-        setMsg("No characters linked yet — link Battle.net first.");
+        setMsg("No characters found yet. Link Battle.net on this page, then Resync.");
       }
     },
     onError: (e) => {
