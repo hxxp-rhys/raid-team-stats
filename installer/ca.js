@@ -1,4 +1,4 @@
-// MSI custom actions for the Stat Smith Uploader installer.
+// MSI custom actions for the Raid Team Stats Uploader installer.
 // JScript (WSH) — `Session` is the global MSI session object.
 //
 //   verifyInputs   immediate: validate WoW folder + API token (live HTTP)
@@ -31,6 +31,28 @@ function jstr(s) {
 }
 function caData() {
   return ("" + Session.Property("CustomActionData")).split("|");
+}
+
+// Fail-open install/uninstall telemetry. POSTs {event, version} to the
+// website's /uploader/event (Bearer token), so the roster widget can show
+// whether a member has the companion installed. This MUST NEVER throw - a
+// telemetry/network failure must not affect an install or block an uninstall
+// (callers also wrap it). Same WinHttp shape as verifyInputs. ver may be "".
+function postEvent(api, token, ev, ver) {
+  try {
+    api = trimSlash("" + api);
+    token = ("" + token).replace(/^\s+|\s+$/g, "");
+    if (!api || !token || token.length < 16) return;
+    var body = '{"event":' + jstr(ev);
+    if (ver) body += ',"version":' + jstr(ver);
+    body += "}";
+    var http = new ActiveXObject("WinHttp.WinHttpRequest.5.1");
+    http.SetTimeouts(5000, 8000, 8000, 15000);
+    http.Open("POST", api + "/uploader/event", false);
+    http.SetRequestHeader("Authorization", "Bearer " + token);
+    http.SetRequestHeader("Content-Type", "application/json");
+    http.Send(body);
+  } catch (e) {}
 }
 
 // ── immediate: validate the two user inputs before the install proceeds ──
@@ -108,7 +130,7 @@ function localAppDataDir(user) {
 // %LOCALAPPDATA%\RaidTeamStats (per-user ACL — other standard users
 // can't read it) and delete any legacy Program Files copy.
 function writeConfig() {
-  var d = caData(); // INSTALLFOLDER | APIKEY | WOWPATH | APIBASE | LOGONUSER
+  var d = caData(); // INSTALLFOLDER | APIKEY | WOWPATH | APIBASE | LOGONUSER | PRODUCTVERSION
   var inst = trimSlash(d[0]);
   var key = d[1];
   var wow = trimSlash(d[2]);
@@ -134,6 +156,9 @@ function writeConfig() {
       fso.DeleteFile(legacy, true);
     }
   } catch (e) {}
+  // Telemetry (fail-open): notify the website this companion was installed.
+  // api = d[3], key = d[1]; d[5] = ProductVersion (from SetWriteConfig).
+  postEvent(api, key, "install", "" + (d[5] || ""));
 }
 
 // ── deferred: install the addon into the chosen WoW folder ──
@@ -198,6 +223,19 @@ function uninstallClean() {
     var dir = trimSlash(d[1]);
     var user = ("" + (d[2] || "")).replace(/^\s+|\s+$/g, "");
     var fso = new ActiveXObject("Scripting.FileSystemObject");
+    // Telemetry (fail-open): notify the website BEFORE we delete config.json
+    // (the api + token live in it). Read them from disk, post "uninstall".
+    try {
+      var cfg = user ? (localAppDataDir(user) + "\\config.json") : "";
+      if (cfg && fso.FileExists(cfg)) {
+        var tf = fso.OpenTextFile(cfg, 1);
+        var txt = "" + tf.ReadAll();
+        tf.Close();
+        var am = txt.match(/"api"\s*:\s*"([^"]*)"/);
+        var tm = txt.match(/"token"\s*:\s*"([^"]*)"/);
+        if (am && tm) postEvent(am[1], tm[1], "uninstall", "");
+      }
+    } catch (eU) {}
     // 1. addon copied into the WoW folder (not an MSI component) — remove
     //    the current name AND any pre-rebrand folder left by old installs.
     var addon = wow + "\\_retail_\\Interface\\AddOns\\StatSmith";

@@ -1,5 +1,5 @@
-Stat Smith Uploader
-===================
+Raid Team Stats Uploader
+========================
 
 This program reads your World of Warcraft Great Vault (including the
 World/Delve row), weekly Mythic+ runs, gear/enchants and talents from the
@@ -17,14 +17,14 @@ Installed by the setup:
  - the addon           copied into <WoW>\_retail_\Interface\AddOns\StatSmith
 
 Using it:
- 1. In WoW, enable the "Stat Smith" addon and log in. It writes its data
+ 1. In WoW, enable the "Raid Team Stats" addon and log in. It writes its data
     file automatically within ~60s (no /reload needed).
  2. If you chose "run at startup", it's registered as a normal Windows
     startup app (NOT a scheduled task or service): it starts in your
     session at every sign-in and syncs hidden in the background every few
     minutes while you play. You can toggle it any time in Task Manager >
     Startup. To sync right now without waiting, double-click the desktop
-    "Stat Smith - Upload Now" shortcut. (You can also run
+    "Raid Team Stats - Upload Now" shortcut. (You can also run
     rts-companion.exe directly, or with --watch to poll every 5 minutes.)
 
 Your upload token is like a password. Rotate or revoke it any time on the

@@ -27,7 +27,7 @@ local AddonName, ns = ...
 -- Fix: extra delayed login snapshots + a steady 60s in-session ticker so
 -- the file the companion reads always has fully-loaded data. Also use the
 -- confirmed delve names (GetActiveDelveTier / GetCompanionInfoForActivePlayer).
--- 1.1.3: rebranded to Stat Smith (folder/TOC/SavedVariables StatSmithDB,
+-- 1.1.3: rebranded to the StatSmith folder/TOC/SavedVariables (StatSmithDB,
 -- /statsmith + /ss slash commands). Wire format (RTS1:) is unchanged.
 -- 1.1.4: delve capture fixed against confirmed 12.0.5 returns —
 -- GetActiveDelveTier is a table (use .tier), GetCompanionInfoForActivePlayer
@@ -59,8 +59,12 @@ local AddonName, ns = ...
 -- and rides the normal export. The server upserts each session to
 -- RaidNightObservation and unions observers at read time. Signups stay
 -- first-party (the website calendar) — never inferred from presence.
+-- 1.2.2: display name rebranded to "Raid Team Stats" (TOC Title/Author,
+-- chat prefix, export-window title, login print). Folder/TOC/SavedVariables
+-- (StatSmith / StatSmithDB), /statsmith + /ss commands and the wire format
+-- (RTS1: export, complete flag) are UNCHANGED.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.1"
+local ADDON_VERSION = "1.2.2"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -819,7 +823,7 @@ local function showExport()
     end
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     title:SetPoint("TOP", 0, -12)
-    title:SetText("Stat Smith — copy this, then paste it on the website")
+    title:SetText("Raid Team Stats — copy this, then paste it on the website")
     local sf = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
     sf:SetPoint("TOPLEFT", 16, -36)
     sf:SetPoint("BOTTOMRIGHT", -34, 40)
@@ -848,7 +852,7 @@ local function showExport()
 end
 
 -- ─── slash command ──────────────────────────────────────────────────────
-local PREFIX = "|cff39c5bbStat Smith|r: "
+local PREFIX = "|cff39c5bbRaid Team Stats|r: "
 local function printHelp()
   print(PREFIX .. "commands —")
   print("  /statsmith export  — collect a fresh snapshot and open the copy/paste export window")
@@ -928,7 +932,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     if not refreshTicker then
       refreshTicker = C_Timer.NewTicker(60, collect)
     end
-    print("|cff39c5bbStat Smith|r loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
+    print("|cff39c5bbRaid Team Stats|r loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()

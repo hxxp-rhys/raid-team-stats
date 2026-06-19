@@ -240,7 +240,7 @@ async function runOnce(cfg) {
   const files = findSavedVarFiles(cfg.wowPath);
   if (files.length === 0) {
     log(
-      "No Stat Smith SavedVariables found yet. In WoW: enable the Stat Smith " +
+      "No Raid Team Stats SavedVariables found yet. In WoW: enable the Raid Team Stats " +
         "addon and log in — it writes its data file within ~60s.",
     );
     return;
