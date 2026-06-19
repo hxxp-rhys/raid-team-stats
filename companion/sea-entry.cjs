@@ -23,8 +23,9 @@ const {
 } = require("node:fs");
 const { join, dirname } = require("node:path");
 const { homedir } = require("node:os");
-const { createHash } = require("node:crypto");
+const { createHash, randomBytes } = require("node:crypto");
 const { execFile } = require("node:child_process");
+const http = require("node:http");
 
 // Next to the exe when packaged; next to this file when run via node.
 const HERE = process.execPath.toLowerCase().endsWith("node.exe")
@@ -32,7 +33,7 @@ const HERE = process.execPath.toLowerCase().endsWith("node.exe")
   : dirname(process.execPath);
 
 // bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
-const COMPANION_VERSION = "1.0.24.0";
+const COMPANION_VERSION = "1.0.25.0";
 
 // Hard ceiling on the addon bundle download. The real bundle is ~40 KB; this
 // 8 MB cap bounds memory and refuses an absurd/hostile response before buffering.
@@ -149,6 +150,29 @@ function persistToken(newToken) {
     } catch (e) {
       log(`warning: could not save rotated token: ${(e && e.message) || e}`);
     }
+  }
+}
+
+// Merge `partial` into config.json and write it atomically (temp+rename,
+// mirroring persistToken), preserving all other keys (api/token/wowPath/
+// autoUpdateAddon). Best-effort: a failure here must never crash the caller.
+// Used by the tray control server to persist toggles like autoUpdateAddon.
+function patchConfig(partial) {
+  try {
+    const p = configPath();
+    let cfg = {};
+    try {
+      cfg = JSON.parse(readFileSync(p, "utf8"));
+    } catch {
+      /* missing/corrupt — recreate from the merge */
+    }
+    const merged = { ...cfg, ...partial };
+    const data = JSON.stringify(merged, null, 2) + "\n";
+    const tmp = `${p}.tmp`;
+    writeFileSync(tmp, data);
+    renameSync(tmp, p);
+  } catch (e) {
+    log(`warning: could not patch config: ${(e && e.message) || e}`);
   }
 }
 
@@ -540,6 +564,277 @@ async function runOnce(cfg) {
   for (const f of files) await uploadOne(cfg, f);
 }
 
+// ── --watch sync pass + tray control state ──────────────────────────────────
+// Module-level so the periodic poll, the tray "Sync now", and GET /status all
+// share one mtime debounce + one view of the last result. Kept BYTE-IDENTICAL
+// between upload.mjs and sea-entry.cjs.
+
+// Per-file mtime debounce for the --watch poll (avoid re-uploading an unchanged
+// SavedVariables file every cycle). A forced sync (tray "Sync now") ignores it.
+const seen = new Map();
+// Last sync timestamp (ISO) + a short human-readable result, surfaced to the
+// tray via GET /status. Null until the first --watch pass runs.
+let lastSyncAt = null;
+let lastResult = null;
+
+// Run one upload pass over every SavedVariables file. When opts.force is set
+// (tray "Sync now") the mtime `seen` debounce is IGNORED so even unchanged
+// files re-upload; otherwise only mtime-changed files upload. Updates the
+// module-level lastSyncAt/lastResult and returns { uploaded, skipped }.
+async function syncNow(cfg, opts) {
+  const force = !!(opts && opts.force);
+  let uploaded = 0;
+  let skipped = 0;
+  try {
+    for (const f of findSavedVarFiles(cfg.wowPath)) {
+      let changed = true;
+      try {
+        const m = (await stat(f)).mtimeMs;
+        if (!force && seen.get(f) === m) {
+          changed = false;
+        } else {
+          seen.set(f, m);
+        }
+      } catch (e) {
+        log(`sync: stat failed for ${f}: ${(e && e.message) || e}`);
+        changed = force; // can't debounce; upload only if forced
+      }
+      if (changed) {
+        await uploadOne(cfg, f);
+        uploaded++;
+      } else {
+        skipped++;
+      }
+    }
+    lastResult = `${uploaded} uploaded, ${skipped} skipped`;
+  } catch (e) {
+    lastResult = `error: ${(e && e.message) || e}`;
+    log(`sync pass error: ${(e && e.message) || e}`);
+  }
+  lastSyncAt = new Date().toISOString();
+  return { uploaded, skipped };
+}
+
+// ── Tray loopback control server (Phase 4) ──────────────────────────────────
+// A separate signed tray exe controls this running --watch companion over
+// loopback HTTP. SECURITY: binds ONLY 127.0.0.1 on an ephemeral port; every
+// request must present the per-launch random secret; control.json (with the
+// port + secret) is written into the ACL-protected %LOCALAPPDATA%\RaidTeamStats
+// next to config.json + the token. Started ONLY in --watch mode (never one-shot).
+// The whole thing is fail-safe: a bind/listen error logs + is ignored so the
+// upload poll keeps working WITHOUT the tray, and the server can NEVER crash the
+// upload path. Kept BYTE-IDENTICAL between upload.mjs and sea-entry.cjs.
+
+// Per-launch random secret that gates EVERY control request.
+const controlSecret = randomBytes(16).toString("hex");
+
+function controlJsonPath() {
+  const lad =
+    process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  return join(lad, "RaidTeamStats", "control.json");
+}
+
+// Constant-time-ish secret check: length gate, then compare. A mismatch (or a
+// missing header) is a 403. Never reveals which part failed.
+function controlAuthorized(req) {
+  const got = req.headers["x-rts-control"];
+  if (typeof got !== "string") return false;
+  if (got.length !== controlSecret.length) return false;
+  return got === controlSecret;
+}
+
+// Read a small JSON request body (capped at ~64KB) and JSON.parse it. Returns
+// {} on empty/invalid body so a malformed request can never throw the handler.
+function readControlBody(req) {
+  return new Promise((resolve) => {
+    const MAX = 64 * 1024;
+    let buf = "";
+    let aborted = false;
+    req.on("data", (chunk) => {
+      if (aborted) return;
+      buf += chunk;
+      if (buf.length > MAX) {
+        aborted = true;
+        buf = "";
+        try {
+          req.destroy();
+        } catch {
+          /* best-effort */
+        }
+        resolve({});
+      }
+    });
+    req.on("end", () => {
+      if (aborted) return;
+      try {
+        resolve(buf ? JSON.parse(buf) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+
+function sendJson(res, status, obj) {
+  try {
+    const data = JSON.stringify(obj);
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(data);
+  } catch {
+    try {
+      res.end();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+// Start the loopback control server for the tray. Returns the server (or null
+// if it could not start). FAIL-SAFE: any bind/listen error is logged + ignored;
+// the caller's upload poll continues without the tray.
+function startControlServer(cfg, intervals) {
+  try {
+    const server = http.createServer((req, res) => {
+      // Gate EVERY request on the per-launch secret first.
+      if (!controlAuthorized(req)) {
+        try {
+          res.writeHead(403);
+        } catch {
+          /* best-effort */
+        }
+        try {
+          res.end();
+        } catch {
+          /* best-effort */
+        }
+        return;
+      }
+      const method = req.method || "GET";
+      const url = (req.url || "/").split("?")[0];
+      // Drain/parse the body up front (capped) for every route; harmless on GET.
+      readControlBody(req)
+        .then(async (body) => {
+          if (method === "GET" && url === "/status") {
+            sendJson(res, 200, {
+              ok: true,
+              version: COMPANION_VERSION,
+              autoUpdateAddon: cfg.autoUpdateAddon === true,
+              lastSyncAt,
+              lastResult,
+            });
+            return;
+          }
+          if (method === "POST" && url === "/sync") {
+            const r = await syncNow(cfg, { force: true });
+            sendJson(res, 200, {
+              ok: true,
+              uploaded: r.uploaded,
+              skipped: r.skipped,
+            });
+            return;
+          }
+          if (method === "POST" && url === "/config") {
+            if (typeof body.autoUpdateAddon === "boolean") {
+              // LIVE in-memory update so maybeUpdateAddon sees it immediately,
+              // plus persist it to config.json for the next launch.
+              cfg.autoUpdateAddon = body.autoUpdateAddon;
+              patchConfig({ autoUpdateAddon: body.autoUpdateAddon });
+            }
+            sendJson(res, 200, {
+              ok: true,
+              autoUpdateAddon: cfg.autoUpdateAddon === true,
+            });
+            return;
+          }
+          if (method === "POST" && url === "/quit") {
+            sendJson(res, 200, { ok: true });
+            try {
+              for (const t of intervals || []) clearInterval(t);
+            } catch {
+              /* best-effort */
+            }
+            try {
+              server.close();
+            } catch {
+              /* best-effort */
+            }
+            try {
+              unlinkSync(controlJsonPath());
+            } catch {
+              /* best-effort */
+            }
+            process.exit(0);
+            return;
+          }
+          sendJson(res, 404, { ok: false, error: "not found" });
+        })
+        .catch((e) => {
+          sendJson(res, 500, {
+            ok: false,
+            error: (e && e.message) || String(e),
+          });
+        });
+    });
+
+    server.on("error", (e) => {
+      // EADDRINUSE / EACCES / etc.: log + continue WITHOUT the tray. The upload
+      // poll keeps working; the server must never crash the upload path.
+      log(`control server error (tray disabled, uploads continue): ${
+        (e && e.message) || e
+      }`);
+    });
+
+    server.on("listening", () => {
+      try {
+        const addr = server.address();
+        const port = addr && typeof addr === "object" ? addr.port : 0;
+        const p = controlJsonPath();
+        const data =
+          JSON.stringify(
+            {
+              port,
+              pid: process.pid,
+              secret: controlSecret,
+              version: COMPANION_VERSION,
+            },
+            null,
+            2,
+          ) + "\n";
+        const tmp = `${p}.tmp`;
+        writeFileSync(tmp, data);
+        renameSync(tmp, p);
+        log(`control server listening on 127.0.0.1:${port}`);
+      } catch (e) {
+        log(`control server: could not write control.json: ${
+          (e && e.message) || e
+        }`);
+      }
+    });
+
+    // Bind to an ephemeral port on loopback ONLY.
+    server.listen(0, "127.0.0.1");
+
+    // Best-effort: drop control.json on process exit so a stale port/secret
+    // never lingers for the tray to connect to.
+    process.on("exit", () => {
+      try {
+        unlinkSync(controlJsonPath());
+      } catch {
+        /* best-effort */
+      }
+    });
+
+    return server;
+  } catch (e) {
+    // Fail-safe: never let control-server setup take down the uploader.
+    log(`control server: failed to start (tray disabled, uploads continue): ${
+      (e && e.message) || e
+    }`);
+    return null;
+  }
+}
+
 async function main() {
   const cfg = loadConfig();
   const watch = process.argv.includes("--watch");
@@ -565,22 +860,16 @@ async function main() {
   setTimeout(checkAddon, 30 * 1000);
 
   const POLL_MS = 5 * 60 * 1000;
-  const seen = new Map();
-  setInterval(async () => {
+  const pollTimer = setInterval(async () => {
     checkAddon();
-    try {
-      for (const f of findSavedVarFiles(cfg.wowPath)) {
-        const m = (await stat(f)).mtimeMs;
-        if (seen.get(f) !== m) {
-          seen.set(f, m);
-          await uploadOne(cfg, f);
-        }
-      }
-    } catch (e) {
-      log(`watch cycle error: ${(e && e.message) || e}`);
-    }
+    // Periodic pass keeps the existing mtime-changed debounce (force:false).
+    await syncNow(cfg, { force: false });
   }, POLL_MS);
   log(`watching — re-checks every ${POLL_MS / 60000} min. Ctrl+C to stop.`);
+
+  // Tray loopback control server (Phase 4): started ONLY in --watch mode, after
+  // the timers are armed. Fail-safe — if it can't bind, uploads continue.
+  startControlServer(cfg, [pollTimer]);
 }
 
 main().catch((e) => die((e && e.stack) || String(e)));

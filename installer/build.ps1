@@ -1,9 +1,11 @@
 # Builds the Raid Team Stats Uploader installer:
 #   1. bundles companion/sea-entry.cjs + the Node runtime -> rts-companion.exe
 #      (Node 24 Single Executable Application; no Node needed by end users)
-#   2. (optional) Authenticode-signs the exe
-#   3. compiles the WiX v6 project -> raid-team-stats-uploader.msi
-#   4. (optional) Authenticode-signs the .msi
+#   2. publishes the system-tray helper (tray/RtsTray.csproj) -> rts-tray.exe
+#      (self-contained single-file win-x64 .NET 8 WinForms; no runtime needed)
+#   3. (optional) Authenticode-signs both exes
+#   4. compiles the WiX v6 project -> raid-team-stats-uploader.msi
+#   5. (optional) Authenticode-signs the .msi
 #
 # Prereqs (one-time): Node 20+ (Single Executable App), .NET SDK, WiX v6 + UI ext:
 #   dotnet tool install --global wix --version 6.0.0
@@ -56,9 +58,10 @@ function Invoke-Sign($file) {
 }
 
 $exe = "installer\dist\rts-companion.exe"
+$tray = "installer\dist\rts-tray.exe"
 $msi = "installer\dist\raid-team-stats-uploader.msi"
 
-# ---- exe stages (1-4): build, brand, optionally local-sign ----
+# ---- exe stages (1-5): build, brand, build tray, optionally local-sign ----
 if ($Stage -ne "msi") {
   Write-Host "[1/7] generating SEA blob..."
   Push-Location companion
@@ -136,11 +139,37 @@ if ($Stage -ne "msi") {
   }
   Write-Host "      branded: $($fi.FileDescription) v$($fi.FileVersion)"
 
-  Write-Host "[4/7] signing rts-companion.exe (local cert only; Azure signs in CI between stages)..."
+  # Build the system-tray helper (Phase 4): a self-contained, single-file,
+  # win-x64 .NET WinForms NotifyIcon app (tray\RtsTray.csproj). It is installed
+  # ALONGSIDE rts-companion.exe and drives it via the loopback control server.
+  # The exe is named rts-tray.exe (AssemblyName in the csproj) and is dropped
+  # into installer\dist next to rts-companion.exe so the next step signs both,
+  # and so CI's Azure signing (which targets the whole installer\dist folder
+  # with files-folder-filter "exe") auto-signs it with NO workflow change.
+  Write-Host "[4/8] building rts-tray.exe (self-contained single-file win-x64 v$ver)..."
+  $trayTmp = Join-Path $env:TEMP "rts-tray-publish"
+  if (Test-Path $trayTmp) { Remove-Item -Recurse -Force $trayTmp }
+  dotnet publish tray\RtsTray.csproj -c Release -r win-x64 `
+    --self-contained true `
+    -p:PublishSingleFile=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:Version=$ver `
+    -o $trayTmp
+  if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for tray\RtsTray.csproj" }
+  $trayBuilt = Join-Path $trayTmp "rts-tray.exe"
+  if (-not (Test-Path $trayBuilt)) { throw "tray publish did not produce rts-tray.exe" }
+  Copy-Item $trayBuilt $tray -Force
+  Write-Host "      tray: $tray"
+
+  # Local code-signing (CI's Azure step signs the whole installer\dist folder
+  # with files-folder-filter "exe", so it picks up BOTH rts-companion.exe and
+  # rts-tray.exe automatically -- no workflow change needed).
+  Write-Host "[5/8] signing exes (local cert only; Azure signs the whole dist folder in CI between stages)..."
   Invoke-Sign $exe
+  Invoke-Sign $tray
 }
 
-# ---- msi stages (5-7): validate CA, build MSI, optionally local-sign ----
+# ---- msi stages (6-8): validate CA, build MSI, optionally local-sign ----
 if ($Stage -ne "exe") {
   if (-not (Test-Path $exe)) {
     throw "$exe not found - run 'build.ps1 -Stage exe' (and sign it) before -Stage msi."
@@ -150,19 +179,19 @@ if ($Stage -ne "exe") {
   # A single modern-JS construct (trailing comma in a call, let/const/
   # arrow/template literal) fails the WHOLE script -> every CA fails
   # ("Setup ended prematurely"). Validate with that exact engine.
-  Write-Host "[5/7] validating ca.js (classic JScript)..."
+  Write-Host "[6/8] validating ca.js (classic JScript)..."
   & cscript //NoLogo //E:JScript installer\ca.js
   if ($LASTEXITCODE -ne 0) {
     throw "ca.js failed the classic-JScript syntax check (no trailing commas / let / const / arrow / template literals)."
   }
 
-  Write-Host "[6/7] building MSI..."
+  Write-Host "[7/8] building MSI..."
   wix build installer\Package.wxs installer\RtsUI.wxs `
     -ext WixToolset.UI.wixext `
     -o $msi
   if ($LASTEXITCODE -ne 0) { throw "wix build failed (see the WIX error above); MSI not produced." }
 
-  Write-Host "[7/7] signing MSI (local cert only; Azure signs in CI)..."
+  Write-Host "[8/8] signing MSI (local cert only; Azure signs in CI)..."
   Invoke-Sign $msi
 }
 

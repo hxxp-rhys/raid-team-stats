@@ -212,6 +212,7 @@ function stopAgent() {
     sh.Run('cmd /c schtasks /End /TN "RaidTeamStatsUploader"', 0, true);
     sh.Run('cmd /c schtasks /Delete /F /TN "RaidTeamStatsUploader"', 0, true);
     sh.Run('cmd /c taskkill /F /IM rts-companion.exe', 0, true);
+    sh.Run('cmd /c taskkill /F /IM rts-tray.exe', 0, true);
   } catch (e) {}
 }
 

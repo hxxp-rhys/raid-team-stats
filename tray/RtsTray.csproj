@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Raid Team Stats — system-tray helper (Phase 4).
+
+    A tiny WinForms NotifyIcon app that drives the companion (rts-companion.exe)
+    via its loopback HTTP control server. It is published self-contained,
+    single-file, win-x64 and installed ALONGSIDE rts-companion.exe (same folder),
+    so AppContext.BaseDirectory resolves the sibling exe.
+
+    Build/publish: installer/build.ps1 runs "dotnet publish" in the exe stage as
+    a self-contained, single-file, win-x64 build with Version injected from
+    Package.wxs. The produced single file is named "rts-tray.exe" (AssemblyName
+    below) and is copied to installer\dist\rts-tray.exe, where Azure Artifact
+    Signing (installer-release.yml, files-folder-filter set to "exe") auto-signs
+    every .exe in the dist folder, so this exe is signed with NO workflow change.
+  -->
+
+  <PropertyGroup>
+    <!-- net8.0-windows: the prod hosts / CI runner have the .NET 8 Windows
+         Desktop runtime; self-contained publish bundles it regardless. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- WinExe => GUI subsystem: NO console window pops up. -->
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- The single-file output is rts-tray.exe (NOT rts-companion.exe). -->
+    <AssemblyName>rts-tray</AssemblyName>
+    <RootNamespace>RtsTray</RootNamespace>
+
+    <!-- 0.0.0 placeholder; the real version is injected at publish time via
+         -p:Version=$ver (installer/build.ps1 reads $ver from Package.wxs). -->
+    <Version>0.0.0</Version>
+
+    <!-- Tray icon: reuse the installer's existing app icon (relative path). -->
+    <ApplicationIcon>..\installer\app.ico</ApplicationIcon>
+
+    <!-- Self-contained single-file win-x64 publish defaults. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Trimming is OFF: WinForms is not trim-safe and the size win isn't
+         worth the reflection risk for a tiny tray helper. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- Branding metadata mirrors the companion exe (build.ps1 resedit). -->
+    <Company>Raid Team Stats</Company>
+    <Product>Raid Team Stats</Product>
+    <AssemblyTitle>Raid Team Stats Tray</AssemblyTitle>
+    <Description>Raid Team Stats system-tray helper</Description>
+    <Copyright>Raid Team Stats</Copyright>
+  </PropertyGroup>
+
+  <!-- Embed the app icon as a managed resource so the tray NotifyIcon can load
+       it at runtime without shipping a sidecar .ico file. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\installer\app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+</Project>

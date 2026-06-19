@@ -10,7 +10,7 @@
  */
 
 /** = installer/Package.wxs Version. Bump on every companion release. */
-export const LATEST_COMPANION_VERSION = "1.0.24.0";
+export const LATEST_COMPANION_VERSION = "1.0.25.0";
 
 /** = addon StatSmith.toc "## Version" / StatSmith.lua ADDON_VERSION. Bump on every addon release. */
 export const LATEST_ADDON_VERSION = "1.2.2";
