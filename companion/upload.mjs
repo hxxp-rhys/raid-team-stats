@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Stat Smith — companion uploader
+// Raid Team Stats — companion uploader
 //
 // WoW addons cannot make network requests, so this tiny zero-dependency
-// Node script reads the Stat Smith addon's SavedVariables file
+// Node script reads the Raid Team Stats addon's SavedVariables file
 // and POSTs the captured snapshot to the website. Run it once, or with
 // --watch to keep it uploading automatically while you play.
 //
@@ -253,7 +253,7 @@ async function runOnce(cfg) {
   const files = findSavedVarFiles(cfg.wowPath);
   if (files.length === 0) {
     log(
-      "No Stat Smith SavedVariables found yet. Install the Stat Smith addon, " +
+      "No Raid Team Stats SavedVariables found yet. Install the Raid Team Stats addon, " +
         "enable it, and log in — it writes its data file within ~60s.",
     );
     return;

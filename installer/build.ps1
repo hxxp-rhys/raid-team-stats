@@ -1,4 +1,4 @@
-# Builds the Stat Smith Uploader installer:
+# Builds the Raid Team Stats Uploader installer:
 #   1. bundles companion/sea-entry.cjs + the Node runtime -> rts-companion.exe
 #      (Node 24 Single Executable Application; no Node needed by end users)
 #   2. (optional) Authenticode-signs the exe
@@ -73,7 +73,7 @@ if ($Stage -ne "msi") {
     companion\sea-prep.blob `
     --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
 
-  # Brand the exe so it is clearly "Stat Smith Uploader" everywhere
+  # Brand the exe so it is clearly "Raid Team Stats Uploader" everywhere
   # in Windows (Task Manager / Explorer / Startup) and runs windowless.
   # Version comes from Package.wxs (single source of truth).
   # Case-sensitive + 4-part so it matches the <Package Version="x.x.x.x">
@@ -108,21 +108,21 @@ if ($Stage -ne "msi") {
     --in $exe --out $tmp `
     --ignore-signed `
     --icon "1,installer/app.ico" `
-    --company-name "Stat Smith" `
-    --product-name "Stat Smith" `
-    --file-description "Stat Smith Uploader" `
+    --company-name "Raid Team Stats" `
+    --product-name "Raid Team Stats" `
+    --file-description "Raid Team Stats Uploader" `
     --product-version $ver `
     --file-version $ver `
     --original-filename "rts-companion.exe" `
-    --internal-name "StatSmith" `
-    --legal-copyright "Stat Smith"
+    --internal-name "RaidTeamStats" `
+    --legal-copyright "Raid Team Stats"
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) {
     throw "resedit-cli failed to brand rts-companion.exe"
   }
   Move-Item -Force $tmp $exe
   $fi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
-  if ($fi.ProductName -ne "Stat Smith" -or
-    $fi.FileDescription -ne "Stat Smith Uploader") {
+  if ($fi.ProductName -ne "Raid Team Stats" -or
+    $fi.FileDescription -ne "Raid Team Stats Uploader") {
     throw "exe branding not applied (ProductName='$($fi.ProductName)' FileDescription='$($fi.FileDescription)')"
   }
   Write-Host "      branded: $($fi.FileDescription) v$($fi.FileVersion)"
