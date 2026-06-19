@@ -148,11 +148,18 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $msi = "installer/dist/raid-team-stats-uploader.msi"
+          # Version-stamped COPY so humans browsing Releases can tell builds
+          # apart. The stable name above is KEPT exactly as-is because the
+          # website's /uploader/installer route 302s to
+          # releases/latest/download/raid-team-stats-uploader.msi (that exact
+          # filename). Both are uploaded to the same release.
+          $msiVersioned = "installer/dist/raid-team-stats-uploader-$tag.msi"
+          Copy-Item -Path $msi -Destination $msiVersioned -Force
           $bundle = "raid-team-stats-addon.json"
           $bundleSha = "raid-team-stats-addon.json.sha256"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $msi $bundle $bundleSha --clobber
+            gh release upload $tag $msi $msiVersioned $bundle $bundleSha --clobber
           } else {
-            gh release create $tag $msi $bundle $bundleSha --title $tag --generate-notes
+            gh release create $tag $msi $msiVersioned $bundle $bundleSha --title $tag --generate-notes
           }
