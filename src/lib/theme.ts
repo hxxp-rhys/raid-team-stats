@@ -33,11 +33,11 @@ export const THEME_META: Record<ThemeId, { name: string; description: string }> 
   },
   forge: {
     name: "Forge",
-    description: "Stat Smith dark: deep navy, forge-orange, rune teal.",
+    description: "Raid Team Stats dark: deep navy, forge-orange, rune teal.",
   },
   anvil: {
     name: "Anvil",
-    description: "Stat Smith light: warm parchment + steel, forge-orange.",
+    description: "Raid Team Stats light: warm parchment + steel, forge-orange.",
   },
   alliance: {
     name: "Alliance",

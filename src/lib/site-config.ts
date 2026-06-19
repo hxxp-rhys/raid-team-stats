@@ -23,7 +23,7 @@ import { env } from "@/env";
  * stripping credit to the original work.
  */
 export const UPSTREAM = {
-  projectName: "Stat Smith",
+  projectName: "Raid Team Stats",
   tagline: "forging numbers into insight",
   /** The source repository. */
   repoUrl: "https://github.com/hxxp-rhys/raid-stats",
@@ -64,7 +64,7 @@ const DEFAULT_STEPS: ReadonlyArray<string> = [
 ];
 
 // `appName` resolves through the runtime server var first, then the build-time
-// public var (which has its own "Stat Smith" default), so it is always defined.
+// public var (which has its own "Raid Team Stats" default), so it is always defined.
 const appName = env.APP_NAME ?? env.NEXT_PUBLIC_APP_NAME;
 
 export type SiteConfig = {

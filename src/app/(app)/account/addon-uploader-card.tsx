@@ -87,7 +87,7 @@ export function AddonUploaderCard() {
             ) : null}
             , your WoW folder, and your upload token, then installs the addon and
             verifies the site + token before finishing. In WoW, enable the{" "}
-            <code className="bg-muted/50 rounded px-1">Stat Smith</code> addon
+            <code className="bg-muted/50 rounded px-1">Raid Team Stats</code> addon
             and log in.
           </p>
           <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">

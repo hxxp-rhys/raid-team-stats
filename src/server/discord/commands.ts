@@ -14,17 +14,17 @@ const OPTION_STRING = 3;
 export const STATSMITH_COMMANDS = [
   {
     name: "statsmith",
-    description: "Stat Smith raid tools",
+    description: "Raid Team Stats raid tools",
     options: [
       {
         type: SUB_COMMAND,
         name: "link",
-        description: "Link your Discord to your Stat Smith account",
+        description: "Link your Discord to your Raid Team Stats account",
         options: [
           {
             type: OPTION_STRING,
             name: "code",
-            description: "The link code from your Stat Smith account page",
+            description: "The link code from your Raid Team Stats account page",
             required: true,
           },
         ],

@@ -67,7 +67,7 @@ export function DiscordLinkCard() {
         ) : code ? (
           <div className="space-y-2">
             <p className="text-muted-foreground">
-              In a server where the Stat Smith bot is installed, run:
+              In a server where the Raid Team Stats bot is installed, run:
             </p>
             <code className="bg-muted block w-fit rounded px-2 py-1 font-mono text-sm">
               /statsmith link code:{code}

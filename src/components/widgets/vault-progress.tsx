@@ -43,17 +43,17 @@ function Pips({
   if (total <= 0) return <span className="text-muted-foreground text-xs">—</span>;
   // World (Delve) vault: Blizzard exposes NO Great Vault / Delve API
   // (public or user-OAuth). It is only obtainable from an in-game addon
-  // upload — fed by our Stat Smith addon + companion uploader. Until the
-  // character's owner runs Stat Smith, this row is genuinely unavailable,
+  // upload — fed by our Raid Team Stats addon + companion uploader. Until the
+  // character's owner runs Raid Team Stats, this row is genuinely unavailable,
   // so we label it explicitly rather than fake a 0/3.
   if (!tracked) {
     return (
       <span
         className="inline-flex items-center gap-1"
-        title="Blizzard exposes no Great Vault / Delve API. The World row is fed by the Stat Smith in-game addon + companion uploader; install Stat Smith from your account page and run the addon to populate it."
+        title="Blizzard exposes no Great Vault / Delve API. The World row is fed by the Raid Team Stats in-game addon + companion uploader; install Raid Team Stats from your account page and run the addon to populate it."
       >
         <span className="border-muted-foreground/30 text-muted-foreground rounded border border-dashed px-1.5 py-0.5 text-[10px]">
-          Stat Smith addon needed
+          Raid Team Stats addon needed
         </span>
       </span>
     );
@@ -89,7 +89,7 @@ export function VaultProgressWidget({ raidTeamId }: { raidTeamId: string }) {
   return (
     <WidgetShell
       title="Great Vault progress"
-      description="Vault slots unlocked this reset. Raid + M+ are derived from Blizzard data; World (Delves) has no Blizzard API and shows only when the character's owner runs the Stat Smith addon."
+      description="Vault slots unlocked this reset. Raid + M+ are derived from Blizzard data; World (Delves) has no Blizzard API and shows only when the character's owner runs the Raid Team Stats addon."
     >
       {q.isPending ? (
         <WidgetLoading />

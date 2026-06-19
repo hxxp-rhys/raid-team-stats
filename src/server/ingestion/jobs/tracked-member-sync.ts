@@ -773,7 +773,7 @@ export async function handleTrackedMemberSync(
     // NOT expose Delve/World vault progress, so WoW Audit (fed by its
     // in-game companion addon) is the only reliable source. Resolved per
     // Blizzard's public character API does NOT expose Delve / World Vault
-    // progress. The Stat Smith in-game addon + companion uploader writes
+    // progress. The Raid Team Stats in-game addon + companion uploader writes
     // these into the live-vault tables on the snapshot side; this Tier-A
     // job stores `tracked: false` so the widget knows to fall back to the
     // addon-fed signal rather than render a wrong "0/3".
