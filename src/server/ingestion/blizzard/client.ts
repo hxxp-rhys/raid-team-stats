@@ -130,7 +130,7 @@ export class BlizzardClient {
     return {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "User-Agent": "raid-team-stats/0.1 (+https://github.com/hxxp-rhys/raid-stats)",
+      "User-Agent": "raid-team-stats/0.1 (+https://github.com/hxxp-rhys/raid-team-stats)",
     };
   }
 

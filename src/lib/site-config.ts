@@ -26,7 +26,7 @@ export const UPSTREAM = {
   projectName: "Raid Team Stats",
   tagline: "forging numbers into insight",
   /** The source repository. */
-  repoUrl: "https://github.com/hxxp-rhys/raid-stats",
+  repoUrl: "https://github.com/hxxp-rhys/raid-team-stats",
   /** The original author's GitHub profile. */
   authorUrl: "https://github.com/hxxp-rhys",
   /** GitHub Sponsors page (voluntary donations to fund development). */

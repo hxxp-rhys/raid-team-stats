@@ -18,7 +18,7 @@ import { NextResponse } from "next/server";
  * Not under /api/ (the Cloudflare zone 404s new /api paths; /uploader/* works).
  */
 export const DEFAULT_INSTALLER_URL =
-  "https://github.com/hxxp-rhys/raid-stats/releases/latest/download/raid-team-stats-uploader.msi";
+  "https://github.com/hxxp-rhys/raid-team-stats/releases/latest/download/raid-team-stats-uploader.msi";
 
 export function GET() {
   const url = process.env.COMPANION_INSTALLER_URL || DEFAULT_INSTALLER_URL;

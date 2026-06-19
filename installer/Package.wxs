@@ -12,7 +12,7 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Property Id="ARPHELPLINK" Value="https://github.com/hxxp-rhys/raid-stats" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/hxxp-rhys/raid-team-stats" />
 
     <!-- User inputs (set via the custom dialog; sensible defaults). -->
     <Property Id="WOWPATH" Value="C:\Program Files (x86)\World of Warcraft" />

@@ -34,8 +34,8 @@ There are three pieces. Only the first is required:
 ## 2. Get the code
 
 ```bash
-git clone https://github.com/hxxp-rhys/raid-stats.git
-cd raid-stats
+git clone https://github.com/hxxp-rhys/raid-team-stats.git
+cd raid-team-stats
 cp .env.example .env
 ```
 
