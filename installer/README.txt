@@ -3,9 +3,10 @@ Stat Smith Uploader
 
 This program reads your World of Warcraft Great Vault (including the
 World/Delve row), weekly Mythic+ runs, gear/enchants and talents from the
-in-game addon's saved data and uploads it to https://raiders.hxxp.io so it
-shows on your raid team's dashboard. WoW addons can't use the internet, so
-this small companion does the upload.
+in-game addon's saved data and uploads it to your Raid Stats site (the
+address you entered during setup) so it shows on your raid team's
+dashboard. WoW addons can't use the internet, so this small companion
+does the upload.
 
 Installed by the setup:
  - rts-companion.exe   the uploader (self-contained; no other software needed)

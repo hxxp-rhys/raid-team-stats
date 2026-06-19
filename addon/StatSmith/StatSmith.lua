@@ -6,8 +6,8 @@
 -- catalyst charges & upgrade currencies, tier pieces sitting in bags, delve
 -- progression, raid consumable readiness) plus gear/talents, and writes it
 -- to SavedVariables. WoW addons cannot make network requests, so the
--- companion desktop uploader reads the saved file and POSTs it to
--- https://raiders.hxxp.io. A copy/paste export string is also provided as a
+-- companion desktop uploader reads the saved file and POSTs it to your
+-- Raid Stats site. A copy/paste export string is also provided as a
 -- no-companion fallback (/statsmith export).
 --
 -- Every collector is pcall-guarded (via safe()) AND feature-detects each

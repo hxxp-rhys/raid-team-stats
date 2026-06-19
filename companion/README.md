@@ -16,7 +16,7 @@ API for it).
 1. Copy `config.example.json` to `config.json` (same folder) and fill in:
    - `token` — your upload token from the website **Account** page
    - `wowPath` — your WoW install folder (the one containing `_retail_`)
-   - `api` — leave as `https://raiders.hxxp.io` unless self-hosting
+   - `api` — your Raid Stats site address (e.g. `https://raid.example.com`)
 2. In WoW: install the addon, log in, and `/reload` (or log out once) so the
    game writes the SavedVariables file.
 

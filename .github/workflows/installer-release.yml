@@ -1,0 +1,146 @@
+name: Build + publish companion installer
+
+# Builds the Windows MSI (installer/build.ps1) on a Windows runner and attaches
+# it to the GitHub Release for the pushed tag. The app's /uploader/installer
+# route redirects everyone to
+#   https://github.com/<owner>/<repo>/releases/latest/download/raid-team-stats-uploader.msi
+# so the ~28 MB installer is hosted ONCE (centrally) and NO self-hoster ships it.
+#
+# Cut a release:
+#   1. bump installer/Package.wxs  Version="x.y.z.0"
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+# workflow_dispatch builds the MSI as a smoke test (and signs it, if configured)
+# WITHOUT publishing.
+#
+# IMPORTANT: GitHub Release assets are anonymously downloadable only when the
+# repo is PUBLIC — required for the /uploader/installer redirect to work for
+# everyone's visitors.
+#
+# CODE SIGNING — Azure Artifact Signing (cloud; no local key), removes the
+# Windows SmartScreen "unknown publisher" warning. Signing turns ON only when
+# ALL of the config below is present; otherwise the installer is built UNSIGNED
+# and the rest of the workflow is unchanged (so forks work out of the box).
+#   Repo VARIABLES (Settings -> Secrets and variables -> Actions -> Variables):
+#     AZURE_SIGNING_ENDPOINT  region URI, e.g. https://eus.codesigning.azure.net/
+#     AZURE_SIGNING_ACCOUNT   the Artifact Signing account (codeSigningAccounts) name
+#     AZURE_SIGNING_PROFILE   the certificate profile name
+#   Repo SECRETS:
+#     AZURE_CLIENT_ID, AZURE_TENANT_ID  — a service principal (app registration)
+#       holding the "Artifact Signing Certificate Profile Signer" role on the
+#       account. Auth is OIDC (no client secret): the SP needs a GitHub
+#       federated credential for subject
+#         repo:<owner>/<repo>:environment:release
+#       which is why this job runs in the "release" environment.
+# Because WiX embeds the exe INTO the MSI at build time, the build runs in two
+# stages so the exe is signed BEFORE the MSI is built, then the MSI is signed.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create / upload GitHub Releases
+
+concurrency:
+  group: installer-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    # OIDC federated credential is scoped to this environment
+    # (subject repo:<owner>/<repo>:environment:release).
+    environment: release
+    permissions:
+      contents: write # create / upload GitHub Releases
+      id-token: write # OIDC token for Azure Artifact Signing
+    env:
+      # Sign only when the signing config is present (forks without it still get
+      # an unsigned build). `vars` is used for the gate because the `secrets`
+      # context isn't available in a job-level env; if these vars are set, the
+      # AZURE_CLIENT_ID/AZURE_TENANT_ID secrets must be set too or login fails.
+      HAS_SIGNING: ${{ vars.AZURE_SIGNING_ENDPOINT != '' && vars.AZURE_SIGNING_ACCOUNT != '' && vars.AZURE_SIGNING_PROFILE != '' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Install WiX v6 + UI extension
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.0
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          wix extension add -g WixToolset.UI.wixext/6.0.0
+
+      # 1) Build the branded (unsigned) companion exe.
+      - name: Build companion exe
+        shell: pwsh
+        run: pwsh installer/build.ps1 -Stage exe
+
+      # 2) Sign the exe BEFORE WiX embeds it. OIDC: azure/login establishes the
+      #    session; the signing action authenticates via DefaultAzureCredential.
+      - name: Azure login (OIDC)
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Sign companion exe (Azure Artifact Signing)
+        if: env.HAS_SIGNING == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\installer\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # 3) Pack the (now signed) exe into the MSI.
+      - name: Build MSI
+        shell: pwsh
+        run: pwsh installer/build.ps1 -Stage msi
+
+      # 4) Sign the MSI itself (this is the file users download).
+      - name: Sign MSI (Azure Artifact Signing)
+        if: env.HAS_SIGNING == 'true'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\installer\dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path installer/dist/raid-team-stats-uploader.msi)) {
+            throw "build.ps1 did not produce installer/dist/raid-team-stats-uploader.msi"
+          }
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $msi = "installer/dist/raid-team-stats-uploader.msi"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $msi --clobber
+          } else {
+            gh release create $tag $msi --title $tag --generate-notes
+          }

@@ -141,7 +141,6 @@ jobs:
       BLIZZARD_CLIENT_ID: ci-noop
       BLIZZARD_CLIENT_SECRET: ci-noop
       BLIZZARD_REGION: us
-      BATTLENET_REDIRECT_URI: http://localhost:3000/bnet-login-callback
       WCL_CLIENT_ID: ci-noop
       WCL_CLIENT_SECRET: ci-noop
       WCL_HOURLY_POINTS_BUDGET: 17000

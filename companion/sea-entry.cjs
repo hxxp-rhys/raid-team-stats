@@ -91,11 +91,17 @@ function loadConfig() {
       die(`config.json is not valid JSON: ${cfgPath}`);
     }
   }
-  const api = (process.env.RTS_API || cfg.api || "https://raiders.hxxp.io")
+  const api = (process.env.RTS_API || cfg.api || "")
     .trim()
     .replace(/\/+$/, "");
   const token = process.env.RTS_TOKEN || cfg.token || "";
   const wowPath = process.env.RTS_WOW_PATH || cfg.wowPath || "";
+  if (!api) {
+    die(
+      'No instance URL. Set "api" in config.json to your Raid Stats site ' +
+        '(e.g. https://raid.example.com), or pass RTS_API.',
+    );
+  }
   if (!/^https:\/\//i.test(api)) {
     die(
       `"api" must be https:// (got "${api}"). The uploader will not send ` +

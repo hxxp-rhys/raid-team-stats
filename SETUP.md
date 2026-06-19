@@ -52,15 +52,14 @@ into `.env`. Take them one at a time.
 ### 3a. Blizzard Battle.net — **required** (login + most character data)
 
 1. Go to <https://develop.battle.net/access/clients> and **Create Client**.
-2. Register **both** redirect URIs (you can add more later):
-   - `http://localhost:3000/bnet-login-callback` (local testing)
-   - `https://your-domain.example/bnet-login-callback` (your real domain, when you have one)
+2. Register **both** redirect URIs — the app's built-in callback path (you can add more later):
+   - `http://localhost:3000/api/auth/callback/battlenet` (local testing)
+   - `https://your-domain.example/api/auth/callback/battlenet` (your real domain, when you have one)
 3. Copy the Client ID and Secret into `.env`:
    ```
    BLIZZARD_CLIENT_ID=...
    BLIZZARD_CLIENT_SECRET=...
    BLIZZARD_REGION=us            # us | eu | kr | tw — match your guild's region
-   BATTLENET_REDIRECT_URI=http://localhost:3000/bnet-login-callback
    ```
 
 ### 3b. Warcraft Logs — **required for parse & coaching widgets**
@@ -243,15 +242,22 @@ an empty database needs neither):
    re-run; already-encrypted rows are skipped. `TOKEN_ENCRYPTION_KEY` must be set
    and stable.
 
-2. **Rebuild + redeploy the companion installer** so existing users pick up token
-   rotation (the installer version is bumped to **1.0.19.0**):
-   ```powershell
-   pwsh installer/build.ps1        # → installer/dist/raid-team-stats-uploader.msi (+ .exe)
+2. **Publish the companion installer — now via GitHub Releases, no per-server
+   hosting.** CI builds the MSI on a Windows runner and attaches it to the
+   project's GitHub Release; the app's `/uploader/installer` route just redirects
+   to `…/releases/latest/download/raid-team-stats-uploader.msi`, so every
+   instance shares one central download (nobody hosts the ~28 MB binary). To cut
+   a release, bump `installer/Package.wxs` `Version=` and push a matching tag:
+   ```bash
+   git tag v1.0.20 && git push origin v1.0.20   # triggers installer-release.yml
    ```
-   Then copy `installer/dist/raid-team-stats-uploader.msi` **and**
-   `installer/Package.wxs` to the path the `web` container serves the installer
-   from — it's deployed out-of-band (a ~28 MB git-ignored artifact). Companions
-   that aren't updated keep working unchanged; they just don't rotate their token
+   The repo must be **public** for anonymous downloads. The installer is
+   instance-agnostic: each user enters their own site address + upload token at
+   setup, so the one binary works for every deployment. (To build locally
+   instead: `pwsh installer/build.ps1`.) To ship a **signed** installer (no
+   Windows SmartScreen "unknown publisher" warning), configure Azure Artifact
+   Signing — see [`installer/SIGNING.md`](installer/SIGNING.md). Companions that
+   aren't updated keep working unchanged; they just don't rotate their token
    until upgraded.
 
 ---
@@ -261,7 +267,7 @@ an empty database needs neither):
 | Symptom | Fix |
 |---|---|
 | App won't start in production, logs mention a missing env var | A required value in `.env` is blank/malformed. The error names the key. |
-| Battle.net or WCL login fails with `redirect_uri` / `invalid_grant` | The redirect URI in the provider console must match **exactly** — scheme, host, **and** path (`/bnet-login-callback`, `/wcl-callback`). Register both the localhost and the production URLs. |
+| Battle.net or WCL login fails with `redirect_uri` / `invalid_grant` / `400 callback URL is not valid` | The redirect URI in the provider console must match **exactly** — scheme, host, **and** path. Battle.net = `/api/auth/callback/battlenet`; WCL = `/wcl-callback`. Register both the localhost and the production URLs. |
 | Addon-only widgets are blank (vault World row, tier, professions…) | Install the StatSmith addon **and** run the companion uploader (Step 7). `/reload` in-game after enabling the addon. |
 | Can't receive the verification email | Configure SMTP, **or** mint a token locally: `docker compose exec web npx tsx scripts/dev-issue-verify-token.ts verify_email you@example.com` |
 | First `docker compose up` is slow | Normal — the initial image build is ~2 minutes; later boots are seconds. |

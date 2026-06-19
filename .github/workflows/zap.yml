@@ -32,7 +32,6 @@ jobs:
           TOKEN_ENCRYPTION_KEY=dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWFhYWE=
           BLIZZARD_REGION=us
           WCL_HOURLY_POINTS_BUDGET=17000
-          BATTLENET_REDIRECT_URI=http://localhost:3000/bnet-login-callback
           WCL_REDIRECT_URI=http://localhost:3000/wcl-callback
           SMTP_PORT=587
           RATE_LIMIT_TRUST_PROXY=false

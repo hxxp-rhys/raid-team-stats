@@ -36,6 +36,11 @@ export function AddonUploaderCard() {
   });
   const [copied, setCopied] = useState(false);
   const [nowMs] = useState(() => Date.now());
+  // The installer is a single central binary (GitHub Releases) shared by every
+  // instance, so the user must point it at THIS site. Show the address to paste.
+  const [siteUrl] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.origin,
+  );
 
   const hasToken = q.data?.hasToken ?? false;
   // Only available right after (re)generation — in memory, never refetched.
@@ -72,10 +77,16 @@ export function AddonUploaderCard() {
             ⬇ Download Windows installer (.msi)
           </a>
           <p className="text-muted-foreground text-xs">
-            The installer bundles everything (no Node needed): pick your WoW
-            folder, paste your upload token, choose run-at-startup. It installs
-            the addon for you and verifies the folder + token before
-            finishing. Then in WoW just enable the{" "}
+            The installer bundles everything (no Node needed). It asks for your{" "}
+            <span className="font-medium">site address</span>
+            {siteUrl ? (
+              <>
+                {" "}
+                (<code className="bg-muted/50 rounded px-1">{siteUrl}</code>)
+              </>
+            ) : null}
+            , your WoW folder, and your upload token, then installs the addon and
+            verifies the site + token before finishing. In WoW, enable the{" "}
             <code className="bg-muted/50 rounded px-1">Stat Smith</code> addon
             and log in.
           </p>

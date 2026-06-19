@@ -28,8 +28,6 @@ const KNOWN_SAFE_ERRORS = new Set([
 // `pages.error: "/signin"`) to user-facing copy. Anything not listed falls
 // back to a generic message so we never expose internal failure details.
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
-  BattleNetNotLinked:
-    "No account is linked to that Battle.net identity. Sign in with your email and password first, then link Battle.net from your profile.",
   AccessDenied: "Sign-in was cancelled.",
   OAuthCallbackError: "Battle.net sign-in failed. Please try again.",
   OAuthSignInError: "Battle.net sign-in failed. Please try again.",
@@ -204,11 +202,10 @@ export default function SignInPage() {
                 <span>or</span>
                 <span className="bg-border h-px flex-1" />
               </div>
-              {/* Battle.net sign-in. Only usable if the user has already
-                  linked their Battle.net identity from /account — the
-                  signIn callback refuses to auto-create accounts from
-                  OAuth and redirects back here with
-                  ?error=BattleNetNotLinked otherwise. */}
+              {/* Battle.net sign-in (a primary identity). Signs you in as the
+                  linked owner if this Battle.net is already linked; otherwise
+                  the signIn callback auto-creates a new (email-less) account
+                  and links it. See src/server/auth/index.ts. */}
               <Button
                 type="button"
                 variant="outline"
