@@ -176,7 +176,7 @@ export const env = createEnv({
   },
 
   client: {
-    NEXT_PUBLIC_APP_NAME: z.string().default("Stat Smith"),
+    NEXT_PUBLIC_APP_NAME: z.string().default("Raid Team Stats"),
   },
 
   runtimeEnv: {
