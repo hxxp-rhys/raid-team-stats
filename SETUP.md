@@ -254,8 +254,11 @@ an empty database needs neither):
    The repo must be **public** for anonymous downloads. The installer is
    instance-agnostic: each user enters their own site address + upload token at
    setup, so the one binary works for every deployment. (To build locally
-   instead: `pwsh installer/build.ps1`.) Companions that aren't updated keep
-   working unchanged; they just don't rotate their token until upgraded.
+   instead: `pwsh installer/build.ps1`.) To ship a **signed** installer (no
+   Windows SmartScreen "unknown publisher" warning), configure Azure Artifact
+   Signing — see [`installer/SIGNING.md`](installer/SIGNING.md). Companions that
+   aren't updated keep working unchanged; they just don't rotate their token
+   until upgraded.
 
 ---
 
