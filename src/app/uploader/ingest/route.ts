@@ -137,6 +137,12 @@ export async function POST(req: Request) {
   // one-use grace window, so for them we leave the token static.
   const wantsRotation = req.headers.get("x-rts-rotate") === "1";
 
+  // Companion self-reported version (additive transport, NOT the frozen wire
+  // contract): an optional request header. Trimmed + length-capped; null if
+  // absent (paste-box uploads, older companions).
+  const reportedCompanionVersion =
+    req.headers.get("x-rts-companion-version")?.trim().slice(0, 64) || null;
+
   // ── body (JSON object, JSON string, or RTS1:<base64>) ──
   const raw = await req.text();
   if (!raw || raw.length > MAX_BODY) return bad(400, "empty or oversized body");
@@ -270,6 +276,25 @@ export async function POST(req: Request) {
   // upload above. NOT placed before the partial-capture early return — only a
   // full, successful upload should trigger it.
   try {
+    // Record the freshly-reported version(s) FIRST so the notify decision below
+    // uses up-to-date state. Only when the companion sent its version header
+    // (paste-box / older companions omit it, so we don't clobber a known
+    // lastSeenVersion with null). lastSeenAddonVersion comes from the parsed
+    // payload when present.
+    if (reportedCompanionVersion) {
+      const seen = {
+        lastSeenVersion: reportedCompanionVersion,
+        ...(payload.addonVersion
+          ? { lastSeenAddonVersion: payload.addonVersion }
+          : {}),
+      };
+      await db.companionStatus.upsert({
+        where: { userId },
+        create: { userId, installed: true, ...seen },
+        update: seen,
+      });
+    }
+
     const status = await db.companionStatus.findUnique({
       where: { userId },
       select: { lastSeenVersion: true, notifiedUpdateVersion: true },

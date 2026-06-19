@@ -83,6 +83,15 @@ if ($Stage -ne "msi") {
     Select-Object -First 1).Matches[0].Groups[1].Value
   if (-not $ver) { throw "could not read Package Version= from Package.wxs" }
 
+  # Drift guard: the companion's self-reported COMPANION_VERSION must match the
+  # MSI version it ships in (sea-entry.cjs is the twin compiled into the exe).
+  $cv = (Select-String -Path companion\sea-entry.cjs `
+      -Pattern 'COMPANION_VERSION\s*=\s*"([^"]+)"' |
+    Select-Object -First 1).Matches[0].Groups[1].Value
+  if ($cv -ne $ver) {
+    throw "COMPANION_VERSION ('$cv') in companion/sea-entry.cjs != Package.wxs Version ('$ver'). Bump them in lockstep."
+  }
+
   Write-Host "[3/7] branding rts-companion.exe (windowless + icon + v$ver)..."
   # (a) flip PE subsystem CONSOLE(3) -> WINDOWS_GUI(2): no console window
   #     from the autostart Run key, and Startup attributes to THIS exe

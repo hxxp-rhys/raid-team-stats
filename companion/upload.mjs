@@ -30,6 +30,9 @@ import { homedir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
+const COMPANION_VERSION = "1.0.23.0";
+
 // Mirrors sea-entry.cjs: best-effort rotating log next to the per-user
 // config (the packaged exe is windowless / GUI-subsystem).
 const LOG_DIR = join(
@@ -209,6 +212,8 @@ async function uploadOne(cfg, file) {
         Authorization: `Bearer ${cfg.token}`,
         // Opt in to rolling token rotation: we persist the next token below.
         "X-RTS-Rotate": "1",
+        // Report our version so the site can flag out-of-date companions.
+        "X-RTS-Companion-Version": COMPANION_VERSION,
       },
       body: exp,
     });
