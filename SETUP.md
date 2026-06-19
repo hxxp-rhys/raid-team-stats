@@ -249,7 +249,7 @@ an empty database needs neither):
    instance shares one central download (nobody hosts the ~28 MB binary). To cut
    a release, bump `installer/Package.wxs` `Version=` and push a matching tag:
    ```bash
-   git tag v1.0.20 && git push origin v1.0.20   # triggers installer-release.yml
+   git tag v1.0.21 && git push origin v1.0.21   # triggers installer-release.yml
    ```
    The repo must be **public** for anonymous downloads. The installer is
    instance-agnostic: each user enters their own site address + upload token at
