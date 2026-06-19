@@ -224,3 +224,36 @@ export const sendRecruitmentNotificationEmail = async (args: {
       `Review it here:\n${args.reviewUrl}\n`,
   });
 };
+
+/**
+ * Notify a user that a newer version of the desktop companion uploader is
+ * available. Sent best-effort from the ingest hook (the upload still succeeds
+ * regardless). Routes through the single sendMail choke point (Redis dedupe,
+ * never throws).
+ */
+export const sendCompanionUpdateEmail = async (args: {
+  to: string;
+  currentVersion: string;
+  latestVersion: string;
+  installerUrl: string;
+}): Promise<void> => {
+  const accountUrl = `${env.APP_URL}/account`;
+  await sendMail({
+    to: args.to,
+    subject: `Companion update available — ${siteConfig.appName}`,
+    text:
+      `A new version of the ${siteConfig.appName} companion uploader is available.\n\n` +
+      `Your version: ${args.currentVersion}\n` +
+      `Latest version: ${args.latestVersion}\n\n` +
+      `Download the latest installer here:\n${args.installerUrl}\n\n` +
+      `Or manage your account and uploader here:\n${accountUrl}\n\n` +
+      `Updating keeps your uploads working as the site evolves.\n`,
+    html:
+      `<p>A new version of the <strong>${siteConfig.appName}</strong> companion uploader is available.</p>` +
+      `<p>Your version: <strong>${args.currentVersion}</strong><br/>` +
+      `Latest version: <strong>${args.latestVersion}</strong></p>` +
+      `<p><a href="${args.installerUrl}">Download the latest installer</a> ` +
+      `or <a href="${accountUrl}">manage your account and uploader</a>.</p>` +
+      `<p>Updating keeps your uploads working as the site evolves.</p>`,
+  });
+};

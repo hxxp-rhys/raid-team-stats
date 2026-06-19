@@ -82,7 +82,7 @@ export function MfaCard() {
           Authy, Bitwarden, Google Authenticator, and any other TOTP app.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4 text-sm">
+      <CardContent className="space-y-4 pb-5 text-sm">
         {status.isPending ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : status.data?.enabled ? (

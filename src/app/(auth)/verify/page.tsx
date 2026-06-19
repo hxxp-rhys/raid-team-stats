@@ -104,7 +104,7 @@ function ResendForm() {
         </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit}>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 pb-5">
           <div className="space-y-1.5">
             <Label htmlFor="resend-email">Email</Label>
             <Input

@@ -316,7 +316,7 @@ function Inner({ params }: { params: Params }) {
             widgets in the list below to reorder within the active tab.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pb-5">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {WIDGET_TYPES.map((type) => (
               <button

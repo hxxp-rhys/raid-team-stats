@@ -477,7 +477,7 @@ function Stepper({
   onChange: (v: number) => void;
 }) {
   return (
-    <span className="inline-flex items-center gap-0.5">
+    <span className="inline-flex items-center gap-1">
       <span className="text-muted-foreground">{label}</span>
       <button
         type="button"

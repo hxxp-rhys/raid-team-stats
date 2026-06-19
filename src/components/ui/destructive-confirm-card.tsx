@@ -91,7 +91,7 @@ export function DestructiveConfirmCard({
         </CardFooter>
       ) : (
         <form onSubmit={onSubmit} noValidate>
-          <CardContent className="space-y-3 text-sm">
+          <CardContent className="space-y-3 pb-5 text-sm">
             <div className="space-y-2">
               <Label htmlFor={inputId}>
                 Type <span className="font-semibold">{expectedConfirm}</span> to
