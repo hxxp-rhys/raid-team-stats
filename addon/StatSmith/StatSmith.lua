@@ -63,8 +63,11 @@ local AddonName, ns = ...
 -- chat prefix, export-window title, login print). Folder/TOC/SavedVariables
 -- (StatSmith / StatSmithDB), /statsmith + /ss commands and the wire format
 -- (RTS1: export, complete flag) are UNCHANGED.
+-- 1.2.3: in-game version readout — the login chat line now prints the addon
+-- version (v" .. ADDON_VERSION), and a new `/statsmith version` (`/ss version`)
+-- subcommand prints the version + schema for support. No wire-format change.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.2"
+local ADDON_VERSION = "1.2.3"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -858,6 +861,7 @@ local function printHelp()
   print("  /statsmith export  — collect a fresh snapshot and open the copy/paste export window")
   print("  /statsmith now     — collect a fresh snapshot silently (the companion app uploads it)")
   print("  /statsmith status  — show when the last snapshot was taken")
+  print("  /statsmith version — show the installed addon version")
   print("  /statsmith help    — show this list")
 end
 
@@ -873,6 +877,9 @@ SlashCmdList["STATSMITH"] = function(msg)
     print(PREFIX .. "last snapshot " ..
       (at and date("%Y-%m-%d %H:%M", at) or "never") ..
       ". The companion app uploads the saved file.")
+  elseif cmd == "version" or cmd == "ver" then
+    print(PREFIX .. "|cff39c5bbRaid Team Stats|r v" .. ADDON_VERSION ..
+      " (schema " .. SCHEMA_VERSION .. ")")
   elseif cmd == "export" or cmd == "show" or cmd == "copy" then
     -- Initiate a manual data export: collect a fresh snapshot, then open
     -- the copy/paste window (also rewrites SavedVariables so the companion
@@ -932,7 +939,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     if not refreshTicker then
       refreshTicker = C_Timer.NewTicker(60, collect)
     end
-    print("|cff39c5bbRaid Team Stats|r loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
+    print("|cff39c5bbRaid Team Stats|r v" .. ADDON_VERSION .. " loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()

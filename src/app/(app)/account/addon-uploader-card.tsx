@@ -22,7 +22,13 @@ function relAge(d: Date | string, nowMs: number): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-export function AddonUploaderCard() {
+export function AddonUploaderCard({
+  companionVersion,
+}: {
+  // Latest published companion version, passed from the server (the page reads
+  // LATEST_COMPANION_VERSION from @/lib/companion-release) so no client fetch.
+  companionVersion: string;
+}) {
   const utils = api.useUtils();
   const q = api.account.uploadStatus.useQuery();
   const regen = api.account.regenerateToken.useMutation({
@@ -74,7 +80,7 @@ export function AddonUploaderCard() {
             href="/uploader/installer"
             className="bg-primary text-primary-foreground inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:opacity-90"
           >
-            ⬇ Download Windows installer (.msi)
+            ⬇ Download Windows installer (.msi) (v{companionVersion})
           </a>
           <p className="text-muted-foreground text-xs">
             The installer bundles everything (no Node needed). It asks for your{" "}

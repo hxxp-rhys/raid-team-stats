@@ -3,6 +3,7 @@ import type { Session } from "next-auth";
 
 import { auth } from "@/server/auth";
 import { db } from "@/lib/db";
+import { LATEST_COMPANION_VERSION } from "@/lib/companion-release";
 import {
   Card,
   CardContent,
@@ -110,7 +111,7 @@ export default async function AccountPage() {
 
         <MfaCard />
 
-        <AddonUploaderCard />
+        <AddonUploaderCard companionVersion={LATEST_COMPANION_VERSION} />
 
         <DeleteAccountCard />
       </div>
