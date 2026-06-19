@@ -28,6 +28,9 @@ const HERE = process.execPath.toLowerCase().endsWith("node.exe")
   ? __dirname
   : dirname(process.execPath);
 
+// bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
+const COMPANION_VERSION = "1.0.23.0";
+
 // The exe is built as a Windows GUI-subsystem binary (no console), so
 // status goes to a rotating log next to the per-user config. Every
 // call is best-effort and never throws — a logging fault must not take
@@ -194,6 +197,8 @@ async function uploadOne(cfg, file) {
         Authorization: `Bearer ${cfg.token}`,
         // Opt in to rolling token rotation: we persist the next token below.
         "X-RTS-Rotate": "1",
+        // Report our version so the site can flag out-of-date companions.
+        "X-RTS-Companion-Version": COMPANION_VERSION,
       },
       body: exp,
     });
