@@ -33,7 +33,7 @@ const SIGNUP_LABEL: Record<string, string> = {
 };
 
 const DESC =
-  "Observed raid presence per night with a rolling attendance %, shown next to calendar signups — so signed-but-no-show is obvious. Needs the Stat Smith addon.";
+  "Observed raid presence per night with a rolling attendance %, shown next to calendar signups — so signed-but-no-show is obvious. Needs the Raid Team Stats addon.";
 
 const fmtNight = (ms: number): string =>
   new Date(ms).toLocaleDateString(undefined, {
@@ -74,7 +74,7 @@ export function AttendanceLedgerWidget({ raidTeamId }: { raidTeamId: string }) {
       <WidgetShell title="Attendance ledger" description={DESC} requiresCompanion>
         <WidgetEmpty>
           No observed raid nights yet. Attendance is recorded in-game by the
-          Stat Smith addon — once an officer runs it during raid, who actually
+          Raid Team Stats addon — once an officer runs it during raid, who actually
           showed (and who signed up but didn&apos;t) appears here. Install it
           from your account page.
         </WidgetEmpty>

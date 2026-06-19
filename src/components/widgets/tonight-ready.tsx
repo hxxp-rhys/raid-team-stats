@@ -200,7 +200,7 @@ export function TonightReadyWidget({ raidTeamId }: { raidTeamId: string }) {
 }
 
 const DESC =
-  "Pre-raid readiness — consumables on hand + gear hygiene per player, with a Ready / Needs-attention tally. Consumables need the Stat Smith addon.";
+  "Pre-raid readiness — consumables on hand + gear hygiene per player, with a Ready / Needs-attention tally. Consumables need the Raid Team Stats addon.";
 
 function PillarChip({ pillar, detail }: { pillar: Pillar; detail: string }) {
   return (

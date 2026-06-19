@@ -82,7 +82,7 @@ export function reasonModal(eventId: string) {
 /** Unlinked user → ephemeral prompt with a link-to-website button. */
 export function linkPrompt(accountUrl: string) {
   return ephemeral(
-    "Link your Stat Smith account first, then your taps here sign you up. Open your account page to get a link code.",
+    "Link your Raid Team Stats account first, then your taps here sign you up. Open your account page to get a link code.",
     [
       {
         type: ComponentType.ACTION_ROW,

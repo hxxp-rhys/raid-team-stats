@@ -21,7 +21,7 @@ export function WidgetShell({
 }: {
   title: string;
   description?: string;
-  /** Show a small "Stat Smith addon required" chip in the header for
+  /** Show a small "Raid Team Stats addon required" chip in the header for
    *  widgets whose data comes only from the in-game addon/companion. */
   requiresCompanion?: boolean;
   /** Optional action rendered top-right, inline with the title (e.g. a button
@@ -40,9 +40,9 @@ export function WidgetShell({
             {requiresCompanion && (
               <span
                 className="border-border bg-muted/50 text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium"
-                title="This widget's data comes from the Stat Smith in-game addon + companion uploader."
+                title="This widget's data comes from the Raid Team Stats in-game addon + companion uploader."
               >
-                Stat Smith required
+                Raid Team Stats required
               </span>
             )}
             {headerAction}

@@ -437,7 +437,7 @@ export const WIDGET_META: Record<
   attendance_ledger: {
     title: "Attendance ledger",
     description:
-      "Who actually showed each raid night (observed by the Stat Smith addon) next to their calendar signup — with a rolling attendance % and no-show flags.",
+      "Who actually showed each raid night (observed by the Raid Team Stats addon) next to their calendar signup — with a rolling attendance % and no-show flags.",
   },
   learning_curve: {
     title: "Learning curve",
@@ -631,7 +631,7 @@ export const WIDGET_INFO: Record<WidgetType, WidgetInfo> = {
     tracks: "All three Great Vault rows per character with unlocked slots and progress toward each remaining slot.",
     displayed: "A table with Raid / M+ / World columns; hover a cell for per-row progress numbers.",
     interpret: "See not just how many slots are unlocked but how close each member is to the next one.",
-    cautions: "Entirely addon-fed (no Blizzard web API exposes the vault, especially the World row); needs Stat Smith.",
+    cautions: "Entirely addon-fed (no Blizzard web API exposes the vault, especially the World row); needs Raid Team Stats.",
   },
   keystones: {
     tracks: "The actual Mythic+ keystone each member is currently holding.",

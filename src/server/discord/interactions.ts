@@ -231,7 +231,7 @@ async function handleCommand(interaction: Interaction, snowflake: string) {
       if (res.ok) {
         return ephemeral(
           res.alreadyLinked
-            ? "Your Discord is already linked to your Stat Smith account. ✅"
+            ? "Your Discord is already linked to your Raid Team Stats account. ✅"
             : "Linked! Your taps here now sign you up. ✅",
         );
       }
@@ -241,7 +241,7 @@ async function handleCommand(interaction: Interaction, snowflake: string) {
           : res.reason === "used"
             ? "That code was already used — generate a fresh one."
             : res.reason === "snowflake_taken"
-              ? "This Discord account is already linked to a different Stat Smith account."
+              ? "This Discord account is already linked to a different Raid Team Stats account."
               : "That code isn't valid — check it and try again.";
       return ephemeral(msg);
     }

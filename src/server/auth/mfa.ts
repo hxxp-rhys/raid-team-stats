@@ -2,6 +2,7 @@ import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { TOTP, Secret } from "otpauth";
 
 import { siteConfig } from "@/lib/site-config";
+import { env } from "@/env";
 import { db } from "@/lib/db";
 import { encryptToken, decryptToken } from "@/server/crypto/token-cipher";
 import { hashPassword, verifyPassword } from "@/server/crypto/kdf";
@@ -62,7 +63,20 @@ export async function startEnrollment(userId: string, label: string): Promise<{
     },
   });
 
-  return { secretBase32, otpauthUrl: totp.toString() };
+  // The `otpauth://` standard has NO logo field, so the logo can only be
+  // conveyed via the non-standard `image=` param (an absolute https URL to a
+  // square PNG). Authenticator apps that support it (2FAS, Bitwarden, Ente)
+  // fetch + show the brand logo; apps that don't (Google Authenticator,
+  // Microsoft Authenticator, Authy) ignore it and just show the issuer name
+  // ("Raid Team Stats"). The phone fetches this URL directly, so it must be a
+  // public absolute URL (not affected by the site CSP). Built from the brand
+  // logo (siteConfig.logoUrl) resolved against APP_URL.
+  const logo = siteConfig.logoUrl;
+  const logoUrl = /^https?:\/\//i.test(logo)
+    ? logo
+    : `${env.APP_URL.replace(/\/+$/, "")}/${logo.replace(/^\/+/, "")}`;
+  const otpauthUrl = `${totp.toString()}&image=${encodeURIComponent(logoUrl)}`;
+  return { secretBase32, otpauthUrl };
 }
 
 /**

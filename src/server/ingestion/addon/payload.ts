@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Schema + derivation for the in-game addon payload (Stat Smith addon).
+ * Schema + derivation for the in-game addon payload (Raid Team Stats addon).
  *
  * This is the ONLY authoritative source for the World/Delve Great Vault row
  * — no Blizzard web API exposes it. Kept permissive (`.passthrough()`,
