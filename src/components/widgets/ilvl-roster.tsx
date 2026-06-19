@@ -53,6 +53,14 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
       level: m.character.level ?? 0,
       ilvl:
         m.latest.equipment?.itemLevel ?? m.latest.character?.itemLevel ?? null,
+      companion: (
+        m as {
+          companion?: {
+            state: "none" | "ok" | "warning";
+            lastReceivedAt: Date | string | null;
+          };
+        }
+      ).companion ?? { state: "none" as const, lastReceivedAt: null },
     }));
     const dir = asc ? 1 : -1;
     const cmp = (a: (typeof withVals)[number], b: (typeof withVals)[number]) => {
@@ -109,10 +117,13 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
                 <SortHeader label="Realm" col="realm" sortKey={sortKey} asc={asc} onClick={toggle} />
                 <SortHeader label="Lvl" col="level" sortKey={sortKey} asc={asc} onClick={toggle} />
                 <SortHeader label="iLvL" col="ilvl" sortKey={sortKey} asc={asc} onClick={toggle} align="right" />
+                <th scope="col" className="py-1 pr-3 text-center font-medium uppercase">
+                  App
+                </th>
               </tr>
             </thead>
             <tbody className="divide-border divide-y">
-              {rows.map(({ m, rank, ilvl }) => (
+              {rows.map(({ m, rank, ilvl, companion }) => (
                 <tr key={m.character.id}>
                   <td
                     className="py-1.5 pr-3 font-medium"
@@ -135,6 +146,9 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
                   </td>
                   <td className="py-1.5 pr-3 text-right font-mono">
                     {ilvl ?? "—"}
+                  </td>
+                  <td className="py-1.5 pr-3 text-center">
+                    <CompanionCell companion={companion} />
                   </td>
                 </tr>
               ))}
@@ -179,5 +193,50 @@ function SortHeader({
         <span className="text-[9px]">{active ? (asc ? "▲" : "▼") : "↕"}</span>
       </button>
     </th>
+  );
+}
+
+/**
+ * Companion-app install indicator for one roster row. Install state is per-User
+ * (the desktop uploader), so every character of the same user shows the same
+ * icon; lastReceivedAt is that character's own most-recent addon upload.
+ *   none    → muted dash (not installed / no telemetry)
+ *   ok      → green check (installed, data fresh within 7 days)
+ *   warning → amber ⚠ (installed but no data in 7 days / ever)
+ */
+function CompanionCell({
+  companion,
+}: {
+  companion: {
+    state: "none" | "ok" | "warning";
+    lastReceivedAt: Date | string | null;
+  };
+}) {
+  if (companion.state === "none") {
+    return (
+      <span className="text-muted-foreground/60" title="Not installed">
+        —
+      </span>
+    );
+  }
+  const received =
+    companion.lastReceivedAt != null
+      ? new Date(companion.lastReceivedAt)
+      : null;
+  const title =
+    received != null
+      ? `Last data received: ${received.toLocaleString()}`
+      : "No data received yet";
+  if (companion.state === "warning") {
+    return (
+      <span className="text-amber-500" title={title} aria-label={title}>
+        ⚠
+      </span>
+    );
+  }
+  return (
+    <span className="text-emerald-500" title={title} aria-label={title}>
+      ✓
+    </span>
   );
 }
