@@ -32,6 +32,9 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   OAuthCallbackError: "Battle.net sign-in failed. Please try again.",
   OAuthSignInError: "Battle.net sign-in failed. Please try again.",
   Configuration: "Sign-in is misconfigured. Please contact an administrator.",
+  // Battle.net is link-only: a login with no linked account is refused.
+  BattlenetNoAccount:
+    "No account is linked to that Battle.net login. Create an account with your email first, then link Battle.net from your Account page.",
 };
 
 // Read `?callbackUrl=` from window.location after hydration. Using
@@ -202,10 +205,11 @@ export default function SignInPage() {
                 <span>or</span>
                 <span className="bg-border h-px flex-1" />
               </div>
-              {/* Battle.net sign-in (a primary identity). Signs you in as the
-                  linked owner if this Battle.net is already linked; otherwise
-                  the signIn callback auto-creates a new (email-less) account
-                  and links it. See src/server/auth/index.ts. */}
+              {/* Battle.net sign-in is LINK-ONLY: it signs you in if this
+                  Battle.net is already linked to an account; otherwise it's
+                  refused with a "register first, then link" notice (Battle.net
+                  exposes no email, so it can't create accounts). Link it from
+                  /account after signing in. See src/server/auth/index.ts. */}
               <Button
                 type="button"
                 variant="outline"
