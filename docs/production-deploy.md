@@ -22,7 +22,7 @@ images and lift them into your orchestrator.
 
 ```bash
 # Clone + create the prod env file (never commit this).
-git clone https://github.com/hxxp-rhys/raid-stats.git /opt/raid-stats
+git clone https://github.com/hxxp-rhys/raid-team-stats.git /opt/raid-stats
 cd /opt/raid-stats
 cp .env.example .env.prod
 $EDITOR .env.prod

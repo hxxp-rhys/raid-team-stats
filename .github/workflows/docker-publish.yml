@@ -68,9 +68,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
-          # github.repository is already lowercase here (ghcr requires lowercase).
+          # NOTE: the repo was renamed to raid-team-stats, but the GHCR image is
+          # intentionally pinned to ghcr.io/hxxp-rhys/raid-stats (NOT
+          # github.repository). That package is already public + linked to this
+          # repo and is exactly what the prod compose pulls; pinning avoids a
+          # private-package migration + a prod image switch. The image name is
+          # internal infra (not user-visible) and matches the hardcoded Docker
+          # Hub name below.
           images: |
-            ghcr.io/${{ github.repository }}
+            ghcr.io/hxxp-rhys/raid-stats
             name=docker.io/${{ env.DOCKERHUB_USERNAME }}/raid-stats,enable=${{ env.DOCKERHUB_USERNAME != '' }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}

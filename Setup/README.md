@@ -62,8 +62,8 @@ clone the repo and use the `Setup/` subfolder, or `scp` the folder across:
 
 ```bash
 # option A: clone, then work inside Setup/
-git clone https://github.com/hxxp-rhys/raid-stats.git
-cd raid-stats/Setup
+git clone https://github.com/hxxp-rhys/raid-team-stats.git
+cd raid-team-stats/Setup
 
 # option B: copy just this folder from your machine
 scp -r ./Setup you@your-server:/opt/raidstats
