@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="Raid Team Stats"
-           Version="1.0.33.0"
+           Version="1.0.34.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -223,6 +223,17 @@
     <CustomAction Id="UninstallClean" BinaryRef="RtsScript" JScriptCall="uninstallClean"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!-- Bridge for upgrades FROM a version whose baked uninstallClean still
+         deletes config.json during RemoveExistingProducts: readExistingConfig
+         backed config.json up to a sibling .bak BEFORE that deletion; this
+         recreates config.json verbatim if it went missing, then removes the
+         backup. Deferred/SYSTEM, path from LogonUser (mirrors WriteConfig).
+         Return=ignore - a restore failure must never block the upgrade. -->
+    <CustomAction Id="SetRestoreConfig" Property="RestoreConfig"
+                  Value="[LogonUser]" />
+    <CustomAction Id="RestoreConfig" BinaryRef="RtsScript" JScriptCall="restoreConfig"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
     <Binary Id="RtsScript" SourceFile="installer\ca.js" />
 
     <InstallExecuteSequence>
@@ -241,10 +252,16 @@
               Condition="NOT REMOVE" />
       <Custom Action="StopAgent" Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot;" />
+      <!-- Deep-clean (incl. the per-user config dir / config.json) ONLY on a
+           GENUINE uninstall. During an UPGRADE the old product is removed with
+           REMOVE=ALL too, but MSI ALSO sets UPGRADINGPRODUCTCODE in that
+           removal - so excluding it preserves config.json across the upgrade.
+           (Without this the old product deleted config.json and v1.0.30's
+           WriteConfig skip left it gone -> "No instance URL" after every update.) -->
       <Custom Action="SetUninstallClean" Before="UninstallClean"
-              Condition="REMOVE=&quot;ALL&quot;" />
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="UninstallClean" After="RemoveFiles"
-              Condition="REMOVE=&quot;ALL&quot;" />
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 
       <!-- First install only: on upgrade (HAVECONFIG) KEEP the existing
            config.json untouched - it may hold a server-rotated token and the
@@ -257,6 +274,15 @@
       <Custom Action="SetInstallAddon" Before="InstallAddon"
               Condition="NOT REMOVE" />
       <Custom Action="InstallAddon" After="WriteConfig"
+              Condition="NOT REMOVE" />
+
+      <!-- Restore config.json if a transition upgrade (from a pre-fix build)
+           deleted it. After WriteConfig => after RemoveExistingProducts (which,
+           at the default afterInstallValidate schedule, runs early). On a fixed
+           upgrade nothing was deleted, so this just removes the stale backup. -->
+      <Custom Action="SetRestoreConfig" Before="RestoreConfig"
+              Condition="NOT REMOVE" />
+      <Custom Action="RestoreConfig" After="WriteConfig"
               Condition="NOT REMOVE" />
 
       <!-- Start the uploader right after a successful install/upgrade
