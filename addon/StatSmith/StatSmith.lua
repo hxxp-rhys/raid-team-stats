@@ -75,8 +75,14 @@ local AddonName, ns = ...
 -- now a PERSISTED per-season high (no season-high API exists) built from the
 -- active-delve tier + the weekly vault World row. Dropped the non-existent
 -- GetHighestRunForCurrentSeason probe. No wire-format change.
+-- 1.2.7: delve TIER now reads the highest COMPLETED-tier STATISTIC ("Midnight
+-- Tier N delves completed", matched BY NAME; ids 61779-61789 on 12.0.7) -- an
+-- always-on, retroactive source (no need to be in a delve; shows the real
+-- season high immediately). Removed the 1.2.6 persisted-high + the Great Vault
+-- "World" row source (confirmed via /dump that row is WORLD BOSSES, not delves).
+-- Small GetActiveDelveTier fallback retained. No wire-format change.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.6"
+local ADDON_VERSION = "1.2.7"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -488,10 +494,20 @@ end
 -- The companion (Valeera) LEVEL is a Warband FRIENDSHIP reputation, read via
 -- C_GossipInfo.GetFriendshipReputationRanks(factionID).currentLevel -- it is
 -- NOT what GetCompanionInfoForActivePlayer returns (that is the config ID).
--- There is NO season-high delve-tier API (GetHighestRunForCurrentSeason does
--- NOT exist on this build -> it returned nil), so we PERSIST the max tier we
--- observe per season in StatSmithDB.delveHigh (same field-assign pattern as
--- raidObserver, so it survives the export write) and report that.
+--
+-- HIGHEST COMPLETED TIER (season high): sourced from the per-tier delve
+-- COMPLETION STATISTICS, which are ALWAYS-ON and retroactive (no need to be in
+-- a delve, no client-side persistence needed). Confirmed live 12.0.7 via /dump:
+-- statistics named "Midnight Tier N delves completed" exist at ids 61779..61789
+-- = Tier 1..11 (61790 = total, 61791 = most-completed). GetStatistic(id)
+-- returns the completion count as a string ("71" for Tier 11; "0"/empty if
+-- undone). The HIGHEST tier whose count > 0 is the season high. We resolve the
+-- tier FROM THE NAME (never assume id==tier) over a generous id window to
+-- tolerate a small id shift, and match an expansion-agnostic name pattern.
+-- The old Great Vault "World" (type 6) row is NOT delves -- its raidString is
+-- "Defeat %d Midnight Season 1 Bosses" (world bosses) -- so it was removed as a
+-- tier source. A small live GetActiveDelveTier() fallback remains so we never
+-- regress below the previous behavior if the statistics scan finds nothing.
 local function collectDelves()
   local out = {}
   if not C_DelvesUI then return out end
@@ -507,49 +523,50 @@ local function collectDelves()
     end
   end
 
-  -- The delve TIER the player has reached. No API returns a season high, so
-  -- gather what the client exposes RIGHT NOW and persist the max ourselves:
-  --   * GetActiveDelveTier().tier  -- only while standing in a delve (else 0)
-  --   * the weekly Great Vault World row's `level` -- this reset's delve tiers
-  local observed = 0
-  if type(C_DelvesUI.GetActiveDelveTier) == "function" then
-    local ok, info = pcall(C_DelvesUI.GetActiveDelveTier)
-    if ok and type(info) == "table" and type(info.tier) == "number" and info.tier > observed then
-      observed = info.tier
-    elseif ok and type(info) == "number" and info > observed then
-      observed = info
-    end
-  end
-  if C_WeeklyRewards and type(C_WeeklyRewards.GetActivities) == "function" then
-    local worldType = Enum and Enum.WeeklyRewardChestThresholdType
-      and Enum.WeeklyRewardChestThresholdType.World
-    local okA, acts = pcall(C_WeeklyRewards.GetActivities)
-    if okA and type(acts) == "table" then
-      local wk = 0
-      for _, a in ipairs(acts) do
-        if type(a) == "table" and (worldType == nil or a.type == worldType)
-           and type(a.level) == "number" and a.level > wk then
-          wk = a.level
+  -- Highest COMPLETED delve tier this season, from the always-on per-tier
+  -- delve-completion statistics. Resolve the tier FROM THE NAME (never assume
+  -- id==tier); scan a generous id window (61770..61800) to tolerate a small id
+  -- shift. Each id: name -> "Tier N delves completed"; GetStatistic(id) -> the
+  -- completion count as a string. Highest N whose count > 0 is the season high.
+  local best = 0
+  if type(GetAchievementInfo) == "function" and type(GetStatistic) == "function" then
+    for id = 61770, 61800 do
+      local okN, _, name = pcall(GetAchievementInfo, id)
+      if okN and type(name) == "string" then
+        local tierStr = name:match("Tier (%d+) delves? completed")
+        local tier = tierStr and tonumber(tierStr)
+        if tier then
+          local okC, raw = pcall(GetStatistic, id)
+          if okC then
+            -- strip non-digits; extra parens truncate gsub's 2nd return value.
+            local count = tonumber((((raw or ""):gsub("%D", ""))))
+            if count and count > 0 and tier > best then best = tier end
+          end
+        elseif name:match("total delves? completed") then
+          -- cheap passthrough diagnostic: lifetime total delves completed.
+          local okT, raw = pcall(GetStatistic, id)
+          if okT then
+            local total = tonumber((((raw or ""):gsub("%D", ""))))
+            if total and total > 0 then out.totalDelves = total end
+          end
         end
       end
-      out.tierThisWeek = wk -- diagnostic: this reset's best World/delve tier
-      if wk > observed then observed = wk end
     end
   end
 
-  -- Persist the season high (the game exposes no query for it). Reset on a new
-  -- season. Field-assigned into StatSmithDB so it survives the export write.
-  local season = out.api.GetCurrentDelvesSeasonNumber or out.api.GetDelvesSeasonNumber
-  if type(season) == "number" then
-    StatSmithDB = StatSmithDB or {}
-    local dh = StatSmithDB.delveHigh
-    if type(dh) ~= "table" or dh.season ~= season then dh = { season = season, tier = 0 } end
-    if observed > (dh.tier or 0) then dh.tier = observed end
-    StatSmithDB.delveHigh = dh
-    if (dh.tier or 0) > 0 then out.tier = dh.tier end
-  elseif observed > 0 then
-    out.tier = observed
+  -- Defensive fallback: if the statistics scan found nothing, use the live
+  -- active-delve tier (only non-zero while standing in a delve) so we never
+  -- regress below the old behavior.
+  if best == 0 and type(C_DelvesUI.GetActiveDelveTier) == "function" then
+    local ok, info = pcall(C_DelvesUI.GetActiveDelveTier)
+    if ok and type(info) == "table" and type(info.tier) == "number" and info.tier > best then
+      best = info.tier
+    elseif ok and type(info) == "number" and info > best then
+      best = info
+    end
   end
+
+  if best > 0 then out.tier = best end
 
   -- Delve companion (Valeera). The LEVEL is a Warband FRIENDSHIP reputation:
   --   GetFactionForCompanion()  -- NO argument = the active companion's faction
