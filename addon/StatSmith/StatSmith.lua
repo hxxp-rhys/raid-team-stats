@@ -68,8 +68,15 @@ local AddonName, ns = ...
 -- subcommand prints the version + schema for support. No wire-format change.
 -- 1.2.4: rebranded the in-game slash commands to /raidteamstats + /rts (legacy /statsmith + /ss kept as aliases). No wire-format change.
 -- 1.2.5: weekly M+ runs now carry the dungeon name (GetMapUIInfo); delve tier now reports the highest completed run for the season (best-effort) + captures the raw API return. No wire-format change.
+-- 1.2.6: delve fixes. The Valeera column now shows her real companion LEVEL
+-- (a Warband friendship rep: GetFactionForCompanion() with NO arg ->
+-- C_GossipInfo.GetFriendshipReputationRanks().currentLevel), not the config ID
+-- (GetCompanionInfoForActivePlayer) it was mislabeling as a level. Delve tier is
+-- now a PERSISTED per-season high (no season-high API exists) built from the
+-- active-delve tier + the weekly vault World row. Dropped the non-existent
+-- GetHighestRunForCurrentSeason probe. No wire-format change.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.5"
+local ADDON_VERSION = "1.2.6"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -471,90 +478,108 @@ local function collectInventory()
   return { items = items, scanned = n }
 end
 
--- Delve progression. The Delve season feeds the World Great Vault row
--- (already captured in `vault`). C_DelvesUI function names have moved
--- across 12.0.x, so probe defensively and store whatever this client
--- exposes — the server interprets it.
+-- Delve progression. API notes verified on Midnight 12.0.x via the live
+-- warcraft.wiki C_DelvesUI inventory + a reference companion addon:
+--   GetCurrentDelvesSeasonNumber()    -> number (season)
+--   HasActiveDelve()                  -> bool
+--   GetActiveDelveTier()              -> TABLE { tier=, ... } (tier 0 OUTSIDE a delve)
+--   GetCompanionInfoForActivePlayer() -> number = the companion CONFIG ID (NOT a level)
+--   GetFactionForCompanion(id)        -> the friendship factionID for that companion
+-- The companion (Valeera) LEVEL is a Warband FRIENDSHIP reputation, read via
+-- C_GossipInfo.GetFriendshipReputationRanks(factionID).currentLevel -- it is
+-- NOT what GetCompanionInfoForActivePlayer returns (that is the config ID).
+-- There is NO season-high delve-tier API (GetHighestRunForCurrentSeason does
+-- NOT exist on this build -> it returned nil), so we PERSIST the max tier we
+-- observe per season in StatSmithDB.delveHigh (same field-assign pattern as
+-- raidObserver, so it survives the export write) and report that.
 local function collectDelves()
   local out = {}
   if not C_DelvesUI then return out end
   out.api = {}
-  -- Verified via /dump on live 12.0.5:
-  --   GetCurrentDelvesSeasonNumber() -> number (season)
-  --   HasActiveDelve()               -> bool
-  --   GetActiveDelveTier()           -> TABLE { tier=, unlocked=, ... }
-  --                                     (tier is 0 unless a delve is active)
-  --   GetCompanionInfoForActivePlayer() -> NUMBER (Valeera's level)
-  local getters = {
+  for _, fn in ipairs({
     "GetCurrentDelvesSeasonNumber",
     "GetDelvesSeasonNumber",
     "HasActiveDelve",
-    "GetHighestRunForCurrentSeason",
-  }
-  for _, fn in ipairs(getters) do
+  }) do
     if type(C_DelvesUI[fn]) == "function" then
       local ok, v = pcall(C_DelvesUI[fn])
       if ok and v ~= nil and type(v) ~= "table" then out.api[fn] = v end
     end
   end
-  -- Tier: GetActiveDelveTier returns a table; pull its numeric `tier`
-  -- (older patches returned a bare number — accept both). NOTE this is the
-  -- ACTIVE delve's tier, which is 0 unless the player is standing in a delve
-  -- — so it's only a fallback below.
+
+  -- The delve TIER the player has reached. No API returns a season high, so
+  -- gather what the client exposes RIGHT NOW and persist the max ourselves:
+  --   * GetActiveDelveTier().tier  -- only while standing in a delve (else 0)
+  --   * the weekly Great Vault World row's `level` -- this reset's delve tiers
+  local observed = 0
   if type(C_DelvesUI.GetActiveDelveTier) == "function" then
     local ok, info = pcall(C_DelvesUI.GetActiveDelveTier)
-    if ok and type(info) == "table" and type(info.tier) == "number" then
-      out.tier = info.tier
-    elseif ok and type(info) == "number" then
-      out.tier = info
+    if ok and type(info) == "table" and type(info.tier) == "number" and info.tier > observed then
+      observed = info.tier
+    elseif ok and type(info) == "number" and info > observed then
+      observed = info
     end
   end
-  -- Highest COMPLETED delve tier this season — the meaningful "progress"
-  -- value the widget wants (GetActiveDelveTier is 0 outside a delve). The
-  -- getters loop above drops this because it skips table returns, so resolve
-  -- it explicitly here. Best-effort: GetHighestRunForCurrentSeason returns a
-  -- TABLE on this patch whose exact field name is unconfirmed in-game, so we
-  -- store the RAW return (out.highestRunRaw) to verify the shape from the
-  -- next upload, and probe a list of plausible numeric fields. This is
-  -- pending an in-game /dump confirmation of the table's layout.
-  if type(C_DelvesUI.GetHighestRunForCurrentSeason) == "function" then
-    local ok, raw = pcall(C_DelvesUI.GetHighestRunForCurrentSeason)
-    if ok and raw ~= nil then
-      out.highestRunRaw = raw -- store as-is (number OR table) to confirm shape
-      local highest
-      if type(raw) == "number" then
-        highest = raw
-      elseif type(raw) == "table" then
-        for _, key in ipairs({ "tier", "level", "runLevel", "highestTier", "delveLevel" }) do
-          local v = raw[key]
-          if type(v) == "number" and v > 0 then highest = v break end
+  if C_WeeklyRewards and type(C_WeeklyRewards.GetActivities) == "function" then
+    local worldType = Enum and Enum.WeeklyRewardChestThresholdType
+      and Enum.WeeklyRewardChestThresholdType.World
+    local okA, acts = pcall(C_WeeklyRewards.GetActivities)
+    if okA and type(acts) == "table" then
+      local wk = 0
+      for _, a in ipairs(acts) do
+        if type(a) == "table" and (worldType == nil or a.type == worldType)
+           and type(a.level) == "number" and a.level > wk then
+          wk = a.level
         end
       end
-      -- Never regress: only override the active-delve tier when we actually
-      -- resolved a positive highest-completed value.
-      if type(highest) == "number" and highest > 0 then
-        out.tier = highest
+      out.tierThisWeek = wk -- diagnostic: this reset's best World/delve tier
+      if wk > observed then observed = wk end
+    end
+  end
+
+  -- Persist the season high (the game exposes no query for it). Reset on a new
+  -- season. Field-assigned into StatSmithDB so it survives the export write.
+  local season = out.api.GetCurrentDelvesSeasonNumber or out.api.GetDelvesSeasonNumber
+  if type(season) == "number" then
+    StatSmithDB = StatSmithDB or {}
+    local dh = StatSmithDB.delveHigh
+    if type(dh) ~= "table" or dh.season ~= season then dh = { season = season, tier = 0 } end
+    if observed > (dh.tier or 0) then dh.tier = observed end
+    StatSmithDB.delveHigh = dh
+    if (dh.tier or 0) > 0 then out.tier = dh.tier end
+  elseif observed > 0 then
+    out.tier = observed
+  end
+
+  -- Delve companion (Valeera). The LEVEL is a Warband FRIENDSHIP reputation:
+  --   GetFactionForCompanion()  -- NO argument = the active companion's faction
+  --   -> C_GossipInfo.GetFriendshipReputationRanks(factionID).currentLevel
+  -- GetCompanionInfoForActivePlayer() returns the companion CONFIG ID (e.g. 11),
+  -- which is NEITHER the level NOR a valid GetFactionForCompanion argument
+  -- (passing it returns faction 0). Confirmed live 12.0.7: no-arg faction = 2744,
+  -- currentLevel = 60 (maxed). The config ID is kept only as a diagnostic. If any
+  -- step is unavailable we leave companion.level nil (column shows "-") rather
+  -- than reporting a fake value.
+  out.companion = {}
+  if type(C_DelvesUI.GetCompanionInfoForActivePlayer) == "function" then
+    local okI, id = pcall(C_DelvesUI.GetCompanionInfoForActivePlayer)
+    if okI and type(id) == "number" then out.companion.id = id end
+  end
+  if type(C_DelvesUI.GetFactionForCompanion) == "function" then
+    local okF, factionID = pcall(C_DelvesUI.GetFactionForCompanion)
+    if okF and type(factionID) == "number" and factionID > 0 then
+      out.companion.factionID = factionID
+      if C_GossipInfo and type(C_GossipInfo.GetFriendshipReputationRanks) == "function" then
+        local okR, ranks = pcall(C_GossipInfo.GetFriendshipReputationRanks, factionID)
+        if okR and type(ranks) == "table" then
+          if type(ranks.currentLevel) == "number" then out.companion.level = ranks.currentLevel end
+          if type(ranks.maxLevel) == "number" then out.companion.maxLevel = ranks.maxLevel end
+        end
       end
     end
   end
-  -- Delve companion (Valeera, 12.0.5): GetCompanionInfoForActivePlayer
-  -- returns the companion LEVEL as a plain number on this patch; older
-  -- patches returned a table — handle both.
-  for _, fn in ipairs({
-    "GetCompanionInfoForActivePlayer",
-    "GetCompanionInfo",
-  }) do
-    if not out.companion and type(C_DelvesUI[fn]) == "function" then
-      local ok, info = pcall(C_DelvesUI[fn])
-      if ok and type(info) == "number" then
-        out.companion = { level = info }
-      elseif ok and type(info) == "table" then
-        out.companion = info
-        out.companion.level = info.level or info.experienceLevel
-          or info.companionLevel or out.companion.level
-      end
-    end
-  end
+  if not next(out.companion) then out.companion = nil end
+
   return out
 end
 

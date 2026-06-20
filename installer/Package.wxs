@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="Raid Team Stats"
-           Version="1.0.28.0"
+           Version="1.0.29.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -172,11 +172,16 @@
                   Impersonate="yes"
                   Return="asyncNoWait" />
 
-    <!-- Launch the tray immediately after install too (no args), in the
-         installing user's session, without blocking setup. -->
+    <!-- Launch the tray immediately after install too, in the installing
+         user's session, without blocking setup. NOTE: a FileRef Exe CA with an
+         EMPTY ExeCommand is a malformed type-18 action the Windows Installer
+         engine refuses to launch (the tray then only appeared at the NEXT logon
+         via TrayStartupShortcut, never right after setup). So this is a
+         Directory-based Exe CA whose ExeCommand carries the full quoted exe
+         path as a NON-empty command line. -->
     <CustomAction Id="LaunchTray"
-                  FileRef="rts_tray.exe"
-                  ExeCommand=""
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]rts-tray.exe&quot;"
                   Execute="immediate"
                   Impersonate="yes"
                   Return="asyncNoWait" />
