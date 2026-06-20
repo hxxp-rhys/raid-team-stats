@@ -139,6 +139,14 @@ function readExistingConfig() {
       Session.Property("WOWPATH") = ("" + wm[1]).replace(/\\\\/g, "\\");
     }
     Session.Property("HAVECONFIG") = "1";
+    // Back up the verbatim config to a sibling path that SURVIVES the upgrade's
+    // RemoveExistingProducts: the old product's uninstallClean deletes the
+    // RaidTeamStats SUBfolder, not its parent (%LOCALAPPDATA%). restoreConfig
+    // (deferred, after RemoveExistingProducts) recreates config.json from this
+    // if the old product deleted it. Best-effort — never blocks setup.
+    try {
+      fso.CopyFile(cfg, upgradeBackupPath(user), true);
+    } catch (eBak) {}
   } catch (e) {}
 }
 
@@ -152,6 +160,14 @@ function ensureTree(fso, path) {
 function localAppDataDir(user) {
   // The installing user's per-user, non-world-readable config home.
   return "C:\\Users\\" + user + "\\AppData\\Local\\RaidTeamStats";
+}
+
+// A SIBLING of the RaidTeamStats config home (NOT inside it), so an upgrade's
+// uninstallClean (which deletes only the RaidTeamStats subfolder) cannot remove
+// it. Holds a verbatim config.json copy across the upgrade window. Same per-user
+// LocalAppData ACL as config.json itself.
+function upgradeBackupPath(user) {
+  return "C:\\Users\\" + user + "\\AppData\\Local\\rts-config-upgrade.bak";
 }
 
 // ── deferred: write config.json into the user's %LOCALAPPDATA% ──
@@ -279,6 +295,37 @@ function uninstallClean() {
     if (user) {
       var udir = localAppDataDir(user);
       if (fso.FolderExists(udir)) fso.DeleteFolder(udir, true);
+      // and the upgrade-backup sibling (outside the config home, so the folder
+      // delete above doesn't cover it) — no token-bearing .bak lingers after a
+      // genuine uninstall.
+      var ubak = upgradeBackupPath(user);
+      if (fso.FileExists(ubak)) fso.DeleteFile(ubak, true);
     }
+  } catch (e) {}
+}
+
+// ── deferred (ignored): RESTORE config.json on an upgrade if the OLD product's
+// uninstallClean (run by RemoveExistingProducts) deleted it. readExistingConfig
+// backed it up to the sibling .bak BEFORE RemoveExistingProducts ran; here we
+// recreate the per-user config verbatim (preserving the server-rotated token +
+// autoUpdateAddon) if it's missing, then remove the backup. Mirrors writeConfig
+// (deferred/SYSTEM, paths from LogonUser). This is the bridge for upgrades FROM
+// versions whose baked uninstallClean still deletes; on fixed versions the
+// deletion is skipped (UPGRADINGPRODUCTCODE) and this just cleans up the backup.
+function restoreConfig() {
+  try {
+    var d = caData(); // LOGONUSER
+    var user = ("" + (d[0] || "")).replace(/^\s+|\s+$/g, "");
+    if (!user) return;
+    var fso = new ActiveXObject("Scripting.FileSystemObject");
+    var bak = upgradeBackupPath(user);
+    if (!fso.FileExists(bak)) return; // nothing to restore or clean up
+    var dir = localAppDataDir(user);
+    var cfg = dir + "\\config.json";
+    if (!fso.FileExists(cfg)) {
+      ensureTree(fso, dir);
+      fso.CopyFile(bak, cfg, true); // verbatim restore
+    }
+    try { fso.DeleteFile(bak, true); } catch (eDel) {}
   } catch (e) {}
 }
