@@ -27,14 +27,12 @@ export const WIDGET_TYPES = [
   "talent_loadouts",
   "parses_heatmap",
   "recent_kills",
-  "vault_detail",
   "keystones",
   "weekly_lockouts",
   "upgrade_currencies",
   "consumable_readiness",
   "delve_progress",
   "talent_builds",
-  "data_refresh",
   "engagement_pulse",
   "prog_curve",
   "parse_consistency",
@@ -99,14 +97,12 @@ const BASE_SIZE: Record<WidgetType, { cols: number; rows: number }> = {
   talent_loadouts: { cols: 6, rows: 4 },
   parses_heatmap: { cols: 12, rows: 4 },
   recent_kills: { cols: 4, rows: 4 },
-  vault_detail: { cols: 6, rows: 4 },
   keystones: { cols: 6, rows: 4 },
   weekly_lockouts: { cols: 6, rows: 4 },
   upgrade_currencies: { cols: 6, rows: 4 },
   consumable_readiness: { cols: 6, rows: 3 },
   delve_progress: { cols: 4, rows: 3 },
   talent_builds: { cols: 6, rows: 4 },
-  data_refresh: { cols: 4, rows: 2 },
   engagement_pulse: { cols: 12, rows: 4 },
   prog_curve: { cols: 12, rows: 4 },
   parse_consistency: { cols: 12, rows: 4 },
@@ -369,11 +365,6 @@ export const WIDGET_META: Record<
     title: "Recent kills",
     description: "Boss kills across the team in the last 7 days, newest first.",
   },
-  vault_detail: {
-    title: "Great Vault detail",
-    description:
-      "All three vault rows (Raid / M+ / World·Delve) with unlocked slots + progress.",
-  },
   keystones: {
     title: "This week's keystones",
     description:
@@ -403,11 +394,6 @@ export const WIDGET_META: Record<
     title: "Talent builds",
     description:
       "Each member's current talent loadout, linked to the calculator.",
-  },
-  data_refresh: {
-    title: "Data refresh",
-    description:
-      "On-demand Tier-A refresh + recurring schedule. Raid leaders configure who can trigger it.",
   },
   engagement_pulse: {
     title: "Engagement pulse",
@@ -517,7 +503,6 @@ export const WIDGET_CATEGORY: Record<WidgetType, WidgetCategoryId> = {
   keystones: "mplus",
   weekly_lockouts: "mplus",
   vault_progress: "mplus",
-  vault_detail: "mplus",
   first_death_ledger: "coaching",
   learning_curve: "coaching",
   cooldown_usage: "coaching",
@@ -527,7 +512,6 @@ export const WIDGET_CATEGORY: Record<WidgetType, WidgetCategoryId> = {
   engagement_pulse: "engagement",
   upgrade_currencies: "engagement",
   delve_progress: "engagement",
-  data_refresh: "engagement",
 };
 
 /** User-facing info for the picker's per-widget detail lightbox. */
@@ -627,12 +611,6 @@ export const WIDGET_INFO: Record<WidgetType, WidgetInfo> = {
     interpret: "A quick pulse of recent raid activity and what's been clearing.",
     cautions: "Fixed 7-day window; alts/cross-realm kills only appear if that character is tracked.",
   },
-  vault_detail: {
-    tracks: "All three Great Vault rows per character with unlocked slots and progress toward each remaining slot.",
-    displayed: "A table with Raid / M+ / World columns; hover a cell for per-row progress numbers.",
-    interpret: "See not just how many slots are unlocked but how close each member is to the next one.",
-    cautions: "Entirely addon-fed (no Blizzard web API exposes the vault, especially the World row); needs Raid Team Stats.",
-  },
   keystones: {
     tracks: "The actual Mythic+ keystone each member is currently holding.",
     displayed: "A table sorted by keystone level, highest first.",
@@ -668,12 +646,6 @@ export const WIDGET_INFO: Record<WidgetType, WidgetInfo> = {
     displayed: "A table with a 'View build ↗' link to the Wowhead calculator per character.",
     interpret: "Audit builds against the calculator without asking members to export anything.",
     cautions: "Sourced from Blizzard's /specializations (the addon can't read the loadout on 12.0); falls back to an import string on older uploads.",
-  },
-  data_refresh: {
-    tracks: "When the team's data last refreshed, the next scheduled auto-refresh, and a manual 'Refresh now' trigger.",
-    displayed: "A control panel with timestamps, a countdown, a button, and a live sync progress bar while refreshing.",
-    interpret: "Confirm data is current and kick off a refresh before raid; watch the sync bar complete.",
-    cautions: "The trigger is permission-gated — public/share viewers see the schedule but the button is hidden.",
   },
   engagement_pulse: {
     tracks: "Each player's weekly activity as a 0–100 weighted 'Pulse' index, plus a churn-risk watchlist.",
@@ -769,14 +741,12 @@ export const WIDGET_ADDON_DEPENDENCE: Record<WidgetType, AddonDependence> = {
   talent_loadouts: "none",
   parses_heatmap: "none",
   recent_kills: "none",
-  vault_detail: "all",
   keystones: "all",
   weekly_lockouts: "all",
   upgrade_currencies: "all",
   consumable_readiness: "all",
   delve_progress: "all",
   talent_builds: "none",
-  data_refresh: "none",
   engagement_pulse: "partial",
   prog_curve: "none",
   parse_consistency: "none",
