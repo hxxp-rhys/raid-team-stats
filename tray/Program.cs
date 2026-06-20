@@ -37,17 +37,65 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isNew);
-        if (!isNew)
+        TrayLog.Write("starting");
+        try
         {
-            // Another tray is already running — quietly exit.
-            return;
-        }
+            using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isNew);
+            if (!isNew)
+            {
+                // Another tray is already running — quietly exit.
+                TrayLog.Write("another instance already running; exiting");
+                return;
+            }
 
-        ApplicationConfiguration.Initialize();
-        using var app = new TrayApp();
-        Application.Run();
-        GC.KeepAlive(mutex);
+            // This is a windowless app, so an unhandled startup exception would
+            // vanish with no trace — route both the WinForms UI-thread and the
+            // AppDomain failures to tray.log so a no-show can always be diagnosed.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) => TrayLog.Write("thread exception: " + e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+                TrayLog.Write("unhandled exception: " + (e.ExceptionObject as Exception)?.ToString());
+
+            ApplicationConfiguration.Initialize();
+            using var app = new TrayApp();
+            TrayLog.Write("icon created; entering message loop");
+            Application.Run();
+            TrayLog.Write("message loop exited");
+            GC.KeepAlive(mutex);
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Write("FATAL in Main: " + ex);
+            throw;
+        }
+    }
+}
+
+/// <summary>
+/// Tiny append-only diagnostic log at %LOCALAPPDATA%\RaidTeamStats\tray.log.
+/// The tray is a windowless app, so a startup crash is otherwise invisible —
+/// this records start/stop and any unhandled exception. Must NEVER throw.
+/// </summary>
+internal static class TrayLog
+{
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "RaidTeamStats", "tray.log");
+
+    public static void Write(string message)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(LogPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            string ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "?";
+            string stamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            File.AppendAllText(LogPath, $"{stamp}  [tray v{ver}]  {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // logging must never break the app
+        }
     }
 }
 
@@ -192,10 +240,11 @@ internal sealed class TrayApp : IDisposable
             var asm = Assembly.GetExecutingAssembly();
             using var s = asm.GetManifestResourceStream("app.ico");
             if (s != null) return new Icon(s);
+            TrayLog.Write("embedded app.ico not found; using system icon");
         }
-        catch
+        catch (Exception ex)
         {
-            // fall through
+            TrayLog.Write("icon load failed; using system icon: " + ex.Message);
         }
         return SystemIcons.Application;
     }
