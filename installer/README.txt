@@ -27,6 +27,12 @@ Using it:
     "Raid Team Stats - Upload Now" shortcut. (You can also run
     rts-companion.exe directly, or with --watch to poll every 5 minutes.)
 
+In-game commands (type these in WoW chat; /raidteamstats works the same as /rts):
+ - /rts now      collect a fresh snapshot now (the uploader sends it for you)
+ - /rts status   show when your data was last collected
+ - /rts version  show the installed addon version
+ - /rts help     list the commands
+
 Your upload token is like a password. Rotate or revoke it any time on the
 website Account page. All uploads are sent over HTTPS (TLS).
 
