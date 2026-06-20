@@ -67,8 +67,9 @@ local AddonName, ns = ...
 -- version (v" .. ADDON_VERSION), and a new `/statsmith version` (`/ss version`)
 -- subcommand prints the version + schema for support. No wire-format change.
 -- 1.2.4: rebranded the in-game slash commands to /raidteamstats + /rts (legacy /statsmith + /ss kept as aliases). No wire-format change.
+-- 1.2.5: weekly M+ runs now carry the dungeon name (GetMapUIInfo); delve tier now reports the highest completed run for the season (best-effort) + captures the raw API return. No wire-format change.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.4"
+local ADDON_VERSION = "1.2.5"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -294,8 +295,17 @@ local function collectMythicPlus()
       local runs = C_MythicPlus.GetRunHistory(false, true) -- not previous weeks, this week
       if type(runs) == "table" then
         for _, r in ipairs(runs) do
+          -- Resolve the dungeon name the same way the held keystone does
+          -- (GetMapUIInfo returns the name as its first value) so weekly
+          -- runs read "Nexus-Point Xenus +10", not a bare "+10".
+          local mapName
+          if C_ChallengeMode and C_ChallengeMode.GetMapUIInfo then
+            local okN, n = pcall(C_ChallengeMode.GetMapUIInfo, r.mapChallengeModeID)
+            if okN and type(n) == "string" then mapName = n end
+          end
           out.weeklyRuns[#out.weeklyRuns + 1] = {
             mapId = r.mapChallengeModeID,
+            mapName = mapName,
             level = r.level,
             completed = r.completed,
             runDateTime = r.runDateTime,
@@ -488,13 +498,43 @@ local function collectDelves()
     end
   end
   -- Tier: GetActiveDelveTier returns a table; pull its numeric `tier`
-  -- (older patches returned a bare number — accept both).
+  -- (older patches returned a bare number — accept both). NOTE this is the
+  -- ACTIVE delve's tier, which is 0 unless the player is standing in a delve
+  -- — so it's only a fallback below.
   if type(C_DelvesUI.GetActiveDelveTier) == "function" then
     local ok, info = pcall(C_DelvesUI.GetActiveDelveTier)
     if ok and type(info) == "table" and type(info.tier) == "number" then
       out.tier = info.tier
     elseif ok and type(info) == "number" then
       out.tier = info
+    end
+  end
+  -- Highest COMPLETED delve tier this season — the meaningful "progress"
+  -- value the widget wants (GetActiveDelveTier is 0 outside a delve). The
+  -- getters loop above drops this because it skips table returns, so resolve
+  -- it explicitly here. Best-effort: GetHighestRunForCurrentSeason returns a
+  -- TABLE on this patch whose exact field name is unconfirmed in-game, so we
+  -- store the RAW return (out.highestRunRaw) to verify the shape from the
+  -- next upload, and probe a list of plausible numeric fields. This is
+  -- pending an in-game /dump confirmation of the table's layout.
+  if type(C_DelvesUI.GetHighestRunForCurrentSeason) == "function" then
+    local ok, raw = pcall(C_DelvesUI.GetHighestRunForCurrentSeason)
+    if ok and raw ~= nil then
+      out.highestRunRaw = raw -- store as-is (number OR table) to confirm shape
+      local highest
+      if type(raw) == "number" then
+        highest = raw
+      elseif type(raw) == "table" then
+        for _, key in ipairs({ "tier", "level", "runLevel", "highestTier", "delveLevel" }) do
+          local v = raw[key]
+          if type(v) == "number" and v > 0 then highest = v break end
+        end
+      end
+      -- Never regress: only override the active-delve tier when we actually
+      -- resolved a positive highest-completed value.
+      if type(highest) == "number" and highest > 0 then
+        out.tier = highest
+      end
     end
   end
   -- Delve companion (Valeera, 12.0.5): GetCompanionInfoForActivePlayer
