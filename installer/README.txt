@@ -27,6 +27,13 @@ Using it:
     "Raid Team Stats - Upload Now" shortcut. (You can also run
     rts-companion.exe directly, or with --watch to poll every 5 minutes.)
 
+Upgrading:
+ Installing a newer version over your existing one REUSES your saved site,
+ upload token, and WoW folder automatically - it will NOT ask for them
+ again. To change them later, edit config.json in
+ %LOCALAPPDATA%\RaidTeamStats (the "api", "token", and "wowPath" fields)
+ and the uploader picks up the change on its next run.
+
 In-game commands (type these in WoW chat; /raidteamstats works the same as /rts):
  - /rts now      collect a fresh snapshot now (the uploader sends it for you)
  - /rts status   show when your data was last collected

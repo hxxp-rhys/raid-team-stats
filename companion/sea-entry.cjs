@@ -33,7 +33,7 @@ const HERE = process.execPath.toLowerCase().endsWith("node.exe")
   : dirname(process.execPath);
 
 // bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
-const COMPANION_VERSION = "1.0.29.0";
+const COMPANION_VERSION = "1.0.30.0";
 
 // Hard ceiling on the addon bundle download. The real bundle is ~40 KB; this
 // 8 MB cap bounds memory and refuses an absurd/hostile response before buffering.

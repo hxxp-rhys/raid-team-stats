@@ -112,6 +112,36 @@ function verifyInputs() {
   }
 }
 
+// ── immediate (impersonated): on an upgrade/reinstall the user's settings
+// already live in %LOCALAPPDATA%\RaidTeamStats\config.json. Read them so setup
+// can SKIP re-prompting for the site + token. Sets HAVECONFIG=1 (gates the
+// dialog skip + the config-write skip) and WOWPATH (the addon copy still needs
+// it). The token is read only to confirm a real config exists - it is NOT
+// copied into any property. Never throws: a read failure just falls back to the
+// normal first-install prompt. LogonUser locates the per-user dir, same as
+// writeConfig/uninstallClean.
+function readExistingConfig() {
+  try {
+    Session.Property("HAVECONFIG") = "";
+    var user = ("" + Session.Property("LogonUser")).replace(/^\s+|\s+$/g, "");
+    if (!user) return;
+    var cfg = localAppDataDir(user) + "\\config.json";
+    var fso = new ActiveXObject("Scripting.FileSystemObject");
+    if (!fso.FileExists(cfg)) return;
+    var tf = fso.OpenTextFile(cfg, 1);
+    var txt = "" + tf.ReadAll();
+    tf.Close();
+    var am = txt.match(/"api"\s*:\s*"([^"]*)"/);
+    var tm = txt.match(/"token"\s*:\s*"([^"]*)"/);
+    if (!am || !tm || !am[1] || !tm[1]) return; // need a real api + token
+    var wm = txt.match(/"wowPath"\s*:\s*"([^"]*)"/);
+    if (wm && wm[1]) {
+      Session.Property("WOWPATH") = ("" + wm[1]).replace(/\\\\/g, "\\");
+    }
+    Session.Property("HAVECONFIG") = "1";
+  } catch (e) {}
+}
+
 function ensureTree(fso, path) {
   if (fso.FolderExists(path)) return;
   var parent = fso.GetParentFolderName(path);
