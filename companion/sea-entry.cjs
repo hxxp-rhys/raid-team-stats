@@ -24,7 +24,7 @@ const {
 const { join, dirname } = require("node:path");
 const { homedir } = require("node:os");
 const { createHash, randomBytes } = require("node:crypto");
-const { execFile } = require("node:child_process");
+const { execFile, execFileSync } = require("node:child_process");
 const http = require("node:http");
 
 // Next to the exe when packaged; next to this file when run via node.
@@ -33,7 +33,7 @@ const HERE = process.execPath.toLowerCase().endsWith("node.exe")
   : dirname(process.execPath);
 
 // bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
-const COMPANION_VERSION = "1.0.30.0";
+const COMPANION_VERSION = "1.0.31.0";
 
 // Hard ceiling on the addon bundle download. The real bundle is ~40 KB; this
 // 8 MB cap bounds memory and refuses an absurd/hostile response before buffering.
@@ -68,6 +68,21 @@ const die = (m) => {
     /* no console under GUI subsystem */
   }
   writeLog(`ERROR: ${m}`);
+  // On a one-shot run, make the fatal error visible so it no longer looks like
+  // "nothing happened". The --watch watcher stays silent (interactive===false).
+  if (interactive) {
+    const notConfigured = /^No (instance URL|upload token|WoW path)\b/.test(m);
+    if (notConfigured) {
+      showBox(
+        "Raid Team Stats isn't set up yet (no site address / upload token saved).\n\n" +
+          "Re-run the installer to enter them, or edit config.json in " +
+          "%LOCALAPPDATA%\\RaidTeamStats.",
+        "Raid Team Stats",
+      );
+    } else {
+      showBox(m, "Raid Team Stats");
+    }
+  }
   process.exit(1);
 };
 const log = (m) => {
@@ -78,6 +93,36 @@ const log = (m) => {
   }
   writeLog(m);
 };
+
+// Interactive (one-shot) heuristic: the autostart background watcher passes
+// --watch and MUST stay completely silent/windowless; a manual double-click or
+// the "Upload Now" shortcut passes no --watch, so we give the user a visible
+// result instead of "nothing happened".
+const interactive = !process.argv.includes("--watch");
+
+// Best-effort native message box via a hidden PowerShell. PowerShell is always
+// present + trusted, so this is fine from a signed SEA. Wrapped so it can NEVER
+// throw and NEVER block the caller (windowsHide keeps the watcher windowless,
+// but we gate every call on `interactive` regardless).
+function showBox(msg, title) {
+  try {
+    execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        "Add-Type -AssemblyName System.Windows.Forms;" +
+          "[void][System.Windows.Forms.MessageBox]::Show(" +
+          `${JSON.stringify(msg)},${JSON.stringify(title)})`,
+      ],
+      { windowsHide: true },
+    );
+  } catch {
+    /* best-effort: a UI fault must never crash the uploader */
+  }
+}
 
 // SECURITY (H3b): config + token live in the per-user, non-world-
 // readable %LOCALAPPDATA%\RaidTeamStats. Fall back to the legacy
@@ -486,18 +531,23 @@ function captureIsPartial(exp) {
   }
 }
 
+// Returns a short outcome tag for the one-shot result box:
+//   "none"     no snapshot yet / partial capture (nothing to upload)
+//   "uploaded" the server accepted a fresh upload
+//   "skipped"  server had nothing new (already current)
+//   "failed"   network/HTTP error
 async function uploadOne(cfg, file) {
   const exp = extractExport(await readFile(file, "utf8"));
   if (!exp) {
     log(`skip (no snapshot yet): ${file}`);
-    return;
+    return "none";
   }
   if (captureIsPartial(exp)) {
     log(
       "skip (partial capture — stay logged into WoW ~5 min for a full " +
         `sync): ${file}`,
     );
-    return;
+    return "none";
   }
   let res;
   try {
@@ -515,7 +565,7 @@ async function uploadOne(cfg, file) {
     });
   } catch (e) {
     log(`network error: ${(e && e.message) || e}`);
-    return;
+    return "failed";
   }
   const bodyText = await res.text();
   let body;
@@ -537,6 +587,7 @@ async function uploadOne(cfg, file) {
   }
   if (res.ok && body.ok && body.skipped) {
     log(`skipped: ${body.skipped}`);
+    return "skipped";
   } else if (res.ok && body.ok) {
     log(
       `uploaded ${body.character || "?"} — World vault ${
@@ -545,13 +596,18 @@ async function uploadOne(cfg, file) {
         body.weeklyMplusRuns ?? "?"
       } M+ this week`,
     );
+    return "uploaded";
   } else {
     log(
       `upload failed (${res.status}): ${body.error || bodyText.slice(0, 200)}`,
     );
+    return "failed";
   }
 }
 
+// Aggregates the per-file outcomes into a single tag for the one-shot result
+// box: "uploaded" if anything uploaded, else "failed" if anything failed, else
+// "none" (no data / nothing new). One box per run — main() shows it.
 async function runOnce(cfg) {
   const files = findSavedVarFiles(cfg.wowPath);
   if (files.length === 0) {
@@ -559,9 +615,18 @@ async function runOnce(cfg) {
       "No Raid Team Stats SavedVariables found yet. In WoW: enable the Raid Team Stats " +
         "addon and log in — it writes its data file within ~60s.",
     );
-    return;
+    return "none";
   }
-  for (const f of files) await uploadOne(cfg, f);
+  let uploaded = false;
+  let failed = false;
+  for (const f of files) {
+    const r = await uploadOne(cfg, f);
+    if (r === "uploaded") uploaded = true;
+    else if (r === "failed") failed = true;
+  }
+  if (uploaded) return "uploaded";
+  if (failed) return "failed";
+  return "none";
 }
 
 // ── --watch sync pass + tray control state ──────────────────────────────────
@@ -839,8 +904,30 @@ async function main() {
   const cfg = loadConfig();
   const watch = process.argv.includes("--watch");
   log(`api=${cfg.api}  wow=${cfg.wowPath}${watch ? "  (watch mode)" : ""}`);
-  await runOnce(cfg);
-  if (!watch) return;
+  const result = await runOnce(cfg);
+  if (!watch) {
+    // One-shot run finished — give the user a single visible result box so a
+    // manual double-click / "Upload Now" no longer looks like nothing happened.
+    // (The --watch watcher never reaches here; it reports via the tray.)
+    if (interactive) {
+      if (result === "uploaded") {
+        showBox("Uploaded your latest WoW data.", "Raid Team Stats");
+      } else if (result === "failed") {
+        showBox(
+          "Couldn't upload right now. Check your connection and try again — " +
+            "see the log in %LOCALAPPDATA%\\RaidTeamStats\\uploader.log for details.",
+          "Raid Team Stats",
+        );
+      } else {
+        showBox(
+          "No new data to upload yet — log into WoW with the addon enabled, " +
+            "then try again.",
+          "Raid Team Stats",
+        );
+      }
+    }
+    return;
+  }
 
   // Opt-in addon auto-update runs in --watch mode ONLY (never one-shot). It is
   // fire-and-forget (never awaited) so it can't block or delay upload polling,
