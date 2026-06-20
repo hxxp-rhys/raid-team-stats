@@ -10,10 +10,10 @@
  */
 
 /** = installer/Package.wxs Version. Bump on every companion release. */
-export const LATEST_COMPANION_VERSION = "1.0.26.0";
+export const LATEST_COMPANION_VERSION = "1.0.27.0";
 
 /** = addon StatSmith.toc "## Version" / StatSmith.lua ADDON_VERSION. Bump on every addon release. */
-export const LATEST_ADDON_VERSION = "1.2.3";
+export const LATEST_ADDON_VERSION = "1.2.4";
 
 /**
  * Opt-in addon auto-update (Phase 3b-ii). These two bump in lockstep with the

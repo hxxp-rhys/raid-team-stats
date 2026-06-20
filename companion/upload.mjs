@@ -35,7 +35,7 @@ import http from "node:http";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
-const COMPANION_VERSION = "1.0.26.0";
+const COMPANION_VERSION = "1.0.27.0";
 
 // Hard ceiling on the addon bundle download. The real bundle is ~40 KB; this
 // 8 MB cap bounds memory and refuses an absurd/hostile response before buffering.

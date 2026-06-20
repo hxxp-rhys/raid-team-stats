@@ -1,8 +1,8 @@
 ## Interface: 120007
 ## Title: Raid Team Stats
-## Notes: Collects Great Vault (incl. World/Delve + reward previews), M+ (incl. held keystone), weekly raid lockouts, gear/enchants, talents, catalyst/upgrade currencies, bagged tier pieces, delve progress, raid consumables & observed raid attendance. No network access — data is read into SavedVariables for the Raid Team Stats companion uploader (or /statsmith export copy/paste).
+## Notes: Collects Great Vault (incl. World/Delve + reward previews), M+ (incl. held keystone), weekly raid lockouts, gear/enchants, talents, catalyst/upgrade currencies, bagged tier pieces, delve progress, raid consumables & observed raid attendance. No network access — data is read into SavedVariables for the Raid Team Stats companion uploader (or /rts export copy/paste).
 ## Author: Raid Team Stats
-## Version: 1.2.3
+## Version: 1.2.4
 ## SavedVariables: StatSmithDB
 ## IconTexture: Interface\ICONS\INV_Misc_Note_01
 ## X-Website: https://github.com/hxxp-rhys/raid-team-stats
