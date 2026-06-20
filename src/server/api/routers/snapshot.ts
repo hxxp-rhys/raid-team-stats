@@ -95,6 +95,15 @@ export type AddonView = {
   addonVersion: string | null;
   vault: ReturnType<typeof deriveVaultDetail>;
   keystone: { mapName: string | null; level: number | null } | null;
+  // THIS reset's completed M+ runs (repeats included), highest level first.
+  // The authoritative weekly run list straight from the addon — Blizzard/RIO
+  // only expose the deduped best-per-dungeon. `mapName` is null today; a
+  // future addon release adds it, so the view is designed for both.
+  weeklyRuns: Array<{
+    mapId: number | null;
+    level: number | null;
+    mapName: string | null;
+  }>;
   // One entry per raid this reset, with the four standard difficulties
   // (LFR / Normal / Heroic / Mythic) as fixed columns — `null` where the
   // member has no lockout at that difficulty.
@@ -153,6 +162,22 @@ function buildAddonView(
     ? { mapName: ks.mapName ?? null, level: ks.level ?? null }
     : null;
 
+  // THIS reset's completed M+ runs. `mapId`/`mapName` ride along via the
+  // schema's passthrough (not in the typed shape); `mapName` is null until a
+  // future addon release supplies it. Drop the explicitly-incomplete runs,
+  // then sort by key level descending so the highest keys lead.
+  const weeklyRuns = (p.mythicPlus?.weeklyRuns ?? [])
+    .filter((run) => run.completed !== false)
+    .map((run) => {
+      const r = run as { mapId?: unknown; mapName?: unknown };
+      return {
+        mapId: typeof r.mapId === "number" ? r.mapId : null,
+        level: typeof run.level === "number" ? run.level : null,
+        mapName: typeof r.mapName === "string" ? r.mapName : null,
+      };
+    })
+    .sort((a, b) => (b.level ?? -1) - (a.level ?? -1));
+
   // Group raid lockouts by raid, with the four standard difficulties as
   // fixed slots. Blizzard difficultyIds: 17=LFR, 14=Normal, 15=Heroic,
   // 16=Mythic (fall back to the localized name when an id is missing).
@@ -183,6 +208,15 @@ function buildAddonView(
   const raidMap = new Map<string, Partial<Record<DiffKey, DiffProg>>>();
   for (const l of p.lockouts ?? []) {
     if (l.isRaid !== true) continue;
+    // Only an ACTIVE weekly reset counts. The addon emits `resetSeconds`
+    // (passthrough — not in the typed shape): the genuine current lockouts
+    // carry a positive time-until-reset, while stale/expired saved-instance
+    // rows (old raids, duplicate difficulty rows, world bosses) all report
+    // resetSeconds 0. Coerce with Number() — the field may arrive as a string.
+    const resetSeconds = Number(
+      (l as { resetSeconds?: unknown }).resetSeconds,
+    );
+    if (!(resetSeconds > 0)) continue;
     const k = diffKey(l);
     if (!k) continue;
     const raid = l.name ?? "?";
@@ -318,6 +352,7 @@ function buildAddonView(
     addonVersion,
     vault: deriveVaultDetail(p),
     keystone,
+    weeklyRuns,
     lockouts,
     currencies,
     consumables,
