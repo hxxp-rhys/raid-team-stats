@@ -34,6 +34,17 @@ Tip: put the `--watch` command in a `.bat`/shell script and run it at login
 so it's always up to date. Each `/reload` or logout refreshes the snapshot;
 the watcher uploads it automatically.
 
+## In-game commands
+
+Type these in WoW chat (`/raidteamstats` works the same as `/rts`):
+
+| Command | What it does |
+|---|---|
+| `/rts now` | collect a fresh snapshot now — the companion uploads it for you |
+| `/rts status` | show when the last snapshot was taken |
+| `/rts version` | show the installed addon version |
+| `/rts help` | list the commands |
+
 ## What it sends
 
 Only your own character's Great Vault (incl. World/Delve), this-week M+
