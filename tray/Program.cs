@@ -189,7 +189,7 @@ internal sealed class TrayApp : IDisposable
             Visible = false,
         };
         _sep1 = new ToolStripSeparator();
-        _miStart = new ToolStripMenuItem("Start", null, (_, _) => OnStartCompanion())
+        _miStart = new ToolStripMenuItem("Start", null, async (_, _) => await OnStartCompanionAsync())
         {
             Visible = false,
         };
@@ -442,30 +442,109 @@ internal sealed class TrayApp : IDisposable
         }
     }
 
-    private void OnStartCompanion()
+    private async Task OnStartCompanionAsync()
     {
+        // PRE-FLIGHT: a companion with no site/token saved self-exits SILENTLY
+        // ("No instance URL" -> process.exit(1)), so control.json never appears
+        // and the tray would just keep saying "not running". Detect the
+        // not-configured case up front and tell the user, rather than launching
+        // a doomed process. Reuse the same config the update check reads.
+        string? api = ReadApiFromConfig();
+        if (string.IsNullOrWhiteSpace(api))
+        {
+            TrayLog.Write("Start aborted: config.json missing or no api set (not configured)");
+            ShowBalloon("Raid Team Stats",
+                "Raid Team Stats isn't set up yet — re-run setup to add your site + token.",
+                ToolTipIcon.Warning);
+            return;
+        }
+
         // Launch the sibling rts-companion.exe --watch from the tray's own folder.
         string exe = Path.Combine(AppContext.BaseDirectory, "rts-companion.exe");
         if (!File.Exists(exe))
         {
+            TrayLog.Write("Start failed: rts-companion.exe not found at " + exe);
             ShowBalloon("Start", "rts-companion.exe not found next to the tray app.", ToolTipIcon.Error);
             return;
         }
+
         try
         {
-            Process.Start(new ProcessStartInfo(exe)
+            using var proc = Process.Start(new ProcessStartInfo(exe)
             {
                 Arguments = "--watch",
                 UseShellExecute = false,
                 WorkingDirectory = AppContext.BaseDirectory,
             });
+            int pid = proc?.Id ?? -1;
+            TrayLog.Write($"Start: launched {exe} --watch (pid {pid})");
             ShowBalloon("Raid Team Stats", "Starting companion…", ToolTipIcon.Info);
-            // The companion writes control.json on startup; refresh shortly after.
-            ScheduleDelayedRefresh(2500);
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Write("Start failed: could not start the companion: " + ex);
+            ShowBalloon("Start", "Could not start the companion.", ToolTipIcon.Error);
+            return;
+        }
+
+        // The companion writes control.json once its loopback server is listening.
+        // A doomed launch (e.g. bad config) self-exits SILENTLY before that, so a
+        // single 2.5s refresh would just silently show "not running". Poll for a
+        // live companion for ~6s; if it never comes up, surface the last log line.
+        bool up = false;
+        for (int i = 0; i < 6; i++)
+        {
+            await Task.Delay(1000);
+            ControlFile? c = ReadControl();
+            if (c != null && IsProcessAlive(c.Pid) && c.Port > 0 && !string.IsNullOrEmpty(c.Secret))
+            {
+                up = true;
+                break;
+            }
+        }
+
+        if (up)
+        {
+            TrayLog.Write("Start: companion came up (control.json present, pid alive)");
+        }
+        else
+        {
+            string? lastLine = ReadLastLogLine();
+            string detail = string.IsNullOrWhiteSpace(lastLine)
+                ? "no details in the log yet."
+                : lastLine!;
+            TrayLog.Write("Start: companion did not stay running. Last log line: " + detail);
+            ShowBalloon("Raid Team Stats",
+                "Companion didn't stay running: " + detail, ToolTipIcon.Error);
+        }
+
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Return the last non-blank line of uploader.log (so a silent self-exit
+    /// like "No instance URL" becomes visible). Best-effort: never throws,
+    /// returns null on any problem. Opens shared so a writing companion can't
+    /// lock us out.
+    /// </summary>
+    private static string? ReadLastLogLine()
+    {
+        try
+        {
+            if (!File.Exists(LogPath)) return null;
+            using var fs = new FileStream(LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sr = new StreamReader(fs);
+            string? last = null;
+            string? line;
+            while ((line = sr.ReadLine()) != null)
+            {
+                if (!string.IsNullOrWhiteSpace(line)) last = line.Trim();
+            }
+            return last;
         }
         catch
         {
-            ShowBalloon("Start", "Could not start the companion.", ToolTipIcon.Error);
+            return null;
         }
     }
 
@@ -667,18 +746,6 @@ internal sealed class TrayApp : IDisposable
         {
             // best-effort UI
         }
-    }
-
-    private void ScheduleDelayedRefresh(int ms)
-    {
-        var t = new System.Windows.Forms.Timer { Interval = ms };
-        t.Tick += async (_, _) =>
-        {
-            t.Stop();
-            t.Dispose();
-            await RefreshAsync();
-        };
-        t.Start();
     }
 
     // NotifyIcon tooltip is capped at 63 chars; keep it safe.

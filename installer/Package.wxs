@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="Raid Team Stats"
-           Version="1.0.30.0"
+           Version="1.0.31.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -208,6 +208,16 @@
          left by pre-1.0.6 builds, then deep-clean. -->
     <CustomAction Id="StopAgent" BinaryRef="RtsScript" JScriptCall="stopAgent"
                   Execute="deferred" Impersonate="no" Return="ignore" />
+    <!-- The deferred StopAgent above is gated REMOVE=ALL (uninstall only), so a
+         major UPGRADE never stopped the running companion/tray - the MSI then
+         couldn't replace the locked exes and the user had to kill them in Task
+         Manager. This IMMEDIATE, impersonated twin runs stopAgent in the user
+         session on any install/upgrade, in the immediate phase BEFORE
+         InstallValidate / RemoveExistingProducts / RemoveFiles, so the locked
+         exes are killed before file replacement. Return=ignore => harmless
+         no-op on a clean first install where nothing is running. -->
+    <CustomAction Id="StopRunningForUpgrade" BinaryRef="RtsScript" JScriptCall="stopAgent"
+                  Execute="immediate" Impersonate="yes" Return="ignore" />
     <CustomAction Id="SetUninstallClean" Property="UninstallClean"
                   Value="[WOWPATH]|[INSTALLFOLDER]|[LogonUser]" />
     <CustomAction Id="UninstallClean" BinaryRef="RtsScript" JScriptCall="uninstallClean"
@@ -221,6 +231,13 @@
            WOWPATH). On a FIRST install config.json doesn't exist yet (WriteConfig
            writes it later), so this is a no-op and the dialog values stand. -->
       <Custom Action="ReadExistingConfig" After="CostFinalize"
+              Condition="NOT REMOVE" />
+      <!-- Kill any running companion/tray early (immediate phase, after
+           ReadExistingConfig, hence after CostFinalize and BEFORE
+           InstallValidate) so a major upgrade can replace the otherwise-locked
+           exes - this precedes RemoveExistingProducts + RemoveFiles +
+           InstallFiles (all of which run in the later deferred script). -->
+      <Custom Action="StopRunningForUpgrade" After="ReadExistingConfig"
               Condition="NOT REMOVE" />
       <Custom Action="StopAgent" Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot;" />
