@@ -26,6 +26,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace RtsTray;
 
@@ -118,10 +119,12 @@ internal sealed class StatusResponse
     [JsonPropertyName("lastResult")] public string? LastResult { get; set; }
 }
 
-/// <summary>Shape of config.json (same dir) — only `api` is needed here.</summary>
+/// <summary>Shape of config.json (same dir) — `api` for the update check,
+/// `wowPath` to locate the installed addon .toc for the version readout.</summary>
 internal sealed class CompanionConfig
 {
     [JsonPropertyName("api")] public string? Api { get; set; }
+    [JsonPropertyName("wowPath")] public string? WowPath { get; set; }
 }
 
 /// <summary>Subset of the website manifest GET {api}/uploader/manifest.</summary>
@@ -158,6 +161,9 @@ internal sealed class TrayApp : IDisposable
     private readonly ContextMenuStrip _menu;
     private readonly System.Windows.Forms.Timer _poll;
 
+    private readonly ToolStripMenuItem _miAppVersion;
+    private readonly ToolStripMenuItem _miAddonVersion;
+    private readonly ToolStripSeparator _sepVersions;
     private readonly ToolStripMenuItem _miSync;
     private readonly ToolStripMenuItem _miAutoUpdate;
     private readonly ToolStripMenuItem _miUpdateAvailable;
@@ -179,6 +185,14 @@ internal sealed class TrayApp : IDisposable
     {
         _menu = new ContextMenuStrip();
 
+        // Two read-only info lines at the top: the companion App version + the
+        // installed Add-on version. Disabled = informational (not clickable).
+        // RenderMenu rewrites their text every poll, so they track updates,
+        // including the addon's automatic update.
+        _miAppVersion = new ToolStripMenuItem("App: …") { Enabled = false };
+        _miAddonVersion = new ToolStripMenuItem("Add-on: …") { Enabled = false };
+        _sepVersions = new ToolStripSeparator();
+
         _miSync = new ToolStripMenuItem("Sync now", null, async (_, _) => await OnSyncAsync());
         _miAutoUpdate = new ToolStripMenuItem("Auto-update addon", null, async (_, _) => await OnToggleAutoUpdateAsync())
         {
@@ -198,6 +212,9 @@ internal sealed class TrayApp : IDisposable
 
         _menu.Items.AddRange(new ToolStripItem[]
         {
+            _miAppVersion,
+            _miAddonVersion,
+            _sepVersions,
             _miSync,
             _miAutoUpdate,
             _miUpdateAvailable,
@@ -298,6 +315,15 @@ internal sealed class TrayApp : IDisposable
 
     private void RenderMenu(bool running)
     {
+        // Always-visible version lines (independent of running state): the App
+        // version from the running companion if up, else the tray's own build
+        // (they ship lockstep from one MSI); the Add-on version read live from
+        // its installed .toc, so it reflects an automatic addon update within
+        // one poll.
+        _miAppVersion.Text = $"App: v{_runningVersion ?? OwnVersion()}";
+        string? addonVer = ReadInstalledAddonVersion();
+        _miAddonVersion.Text = addonVer != null ? $"Add-on: v{addonVer}" : "Add-on: not found";
+
         if (running && _status != null)
         {
             string ver = _runningVersion ?? "?";
@@ -676,6 +702,41 @@ internal sealed class TrayApp : IDisposable
         {
             return null;
         }
+    }
+
+    // The installed addon's "## Version:" read live from its .toc (located via
+    // config.json's wowPath). Always available (even when the companion isn't
+    // running) and reflects an automatic addon update within one poll. Best-
+    // effort: returns null on any problem.
+    private static readonly Regex AddonVersionRe =
+        new(@"^\s*##\s*Version:\s*(.+?)\s*$", RegexOptions.Multiline);
+
+    private static string? ReadInstalledAddonVersion()
+    {
+        try
+        {
+            if (!File.Exists(ConfigPath)) return null;
+            var cfg = JsonSerializer.Deserialize<CompanionConfig>(File.ReadAllText(ConfigPath), JsonOpts);
+            string? wow = cfg?.WowPath;
+            if (string.IsNullOrWhiteSpace(wow)) return null;
+            string toc = Path.Combine(wow, "_retail_", "Interface", "AddOns", "StatSmith", "StatSmith.toc");
+            if (!File.Exists(toc)) return null;
+            var m = AddonVersionRe.Match(File.ReadAllText(toc));
+            return m.Success ? m.Groups[1].Value.Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // The tray's own build version — equals the installed companion version (both
+    // ship together from one MSI). Used as the App-version fallback when the
+    // companion isn't running to report it via /status.
+    private static string OwnVersion()
+    {
+        var v = Assembly.GetExecutingAssembly().GetName().Version;
+        return v != null ? v.ToString() : "?";
     }
 
     private static bool IsProcessAlive(int pid)
