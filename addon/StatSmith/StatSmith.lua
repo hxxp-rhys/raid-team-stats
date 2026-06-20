@@ -81,8 +81,10 @@ local AddonName, ns = ...
 -- season high immediately). Removed the 1.2.6 persisted-high + the Great Vault
 -- "World" row source (confirmed via /dump that row is WORLD BOSSES, not delves).
 -- Small GetActiveDelveTier fallback retained. No wire-format change.
+-- 1.2.8: version bump only, to exercise the opt-in addon auto-update end-to-end
+-- (no functional/collector change; no wire-format change).
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.7"
+local ADDON_VERSION = "1.2.8"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
