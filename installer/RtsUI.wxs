@@ -6,10 +6,25 @@
       <!-- flow: ...InstallDirDlg -> RtsConfigDlg -> VerifyReadyDlg
            Higher Order with a true condition wins over the WixUI default
            NewDialog publishes, so the config dialog is inserted. -->
+      <!-- On the way into config, first read any existing config.json
+           (sets HAVECONFIG=1 + WOWPATH). If found (upgrade/reinstall), route
+           straight to VerifyReadyDlg and skip the site+token re-prompt;
+           otherwise show RtsConfigDlg (first install). The two NewDialog
+           targets use mutually-exclusive conditions so exactly one fires. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction"
+               Value="ReadExistingConfig" Order="5" Condition="1" />
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog"
-               Value="RtsConfigDlg" Order="10" Condition="1" />
+               Value="RtsConfigDlg" Order="10"
+               Condition="HAVECONFIG &lt;&gt; &quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog"
+               Value="VerifyReadyDlg" Order="20"
+               Condition="HAVECONFIG = &quot;1&quot;" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog"
-               Value="RtsConfigDlg" Order="10" Condition="1" />
+               Value="RtsConfigDlg" Order="10"
+               Condition="HAVECONFIG &lt;&gt; &quot;1&quot;" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog"
+               Value="InstallDirDlg" Order="20"
+               Condition="HAVECONFIG = &quot;1&quot;" />
 
       <Publish Dialog="RtsConfigDlg" Control="Back" Event="NewDialog"
                Value="InstallDirDlg" Order="1" Condition="1" />

@@ -4,7 +4,7 @@
 
   <Package Name="Raid Team Stats Uploader"
            Manufacturer="Raid Team Stats"
-           Version="1.0.29.0"
+           Version="1.0.30.0"
            UpgradeCode="6F2A8E14-3C7B-4D29-9B1E-7A5C2D4F8E10"
            Scope="perMachine"
            Compressed="yes">
@@ -26,6 +26,16 @@
          install, then written into the companion's config.json. -->
     <Property Id="APIBASE" Secure="yes" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- Set to "1" by ReadExistingConfig when a valid per-user config.json
+         already exists (i.e. an upgrade/reinstall). Gates skipping the
+         site+token dialog AND the config-write, so existing settings are
+         reused and never re-prompted. Secure="yes" (like APIBASE/APIKEY): an
+         empty non-Secure Property is dropped by WiX (WIX1006), and Secure lets
+         the UI-set value cross into the execute sequence. ReadExistingConfig
+         re-derives it from disk in BOTH sequences, so a command-line override
+         can't force a skip on a real first install. -->
+    <Property Id="HAVECONFIG" Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RaidTeamStatsUploader">
@@ -147,6 +157,13 @@
     <CustomAction Id="VerifyInputs" BinaryRef="RtsScript" JScriptCall="verifyInputs"
                   Execute="immediate" Return="check" />
 
+    <!-- immediate + impersonated: read the existing per-user config.json (if
+         any) so an upgrade reuses the site/token/WoW-folder and skips the
+         re-prompt. Return="ignore" - a read failure must never block setup
+         (it just falls back to first-install prompting). -->
+    <CustomAction Id="ReadExistingConfig" BinaryRef="RtsScript" JScriptCall="readExistingConfig"
+                  Execute="immediate" Impersonate="yes" Return="ignore" />
+
     <!-- ───────── deferred work (elevated, after files are laid down) ───────── -->
     <CustomAction Id="SetWriteConfig" Property="WriteConfig"
                   Value="[INSTALLFOLDER]|[APIKEY]|[WOWPATH]|[APIBASE]|[LogonUser]|[ProductVersion]" />
@@ -199,6 +216,12 @@
     <Binary Id="RtsScript" SourceFile="installer\ca.js" />
 
     <InstallExecuteSequence>
+      <!-- Reuse existing config on upgrade (also covers silent installs). Runs
+           before SetWriteConfig (gates it) and before SetInstallAddon (provides
+           WOWPATH). On a FIRST install config.json doesn't exist yet (WriteConfig
+           writes it later), so this is a no-op and the dialog values stand. -->
+      <Custom Action="ReadExistingConfig" After="CostFinalize"
+              Condition="NOT REMOVE" />
       <Custom Action="StopAgent" Before="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot;" />
       <Custom Action="SetUninstallClean" Before="UninstallClean"
@@ -206,10 +229,13 @@
       <Custom Action="UninstallClean" After="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot;" />
 
+      <!-- First install only: on upgrade (HAVECONFIG) KEEP the existing
+           config.json untouched - it may hold a server-rotated token and the
+           autoUpdateAddon flag - instead of overwriting it. -->
       <Custom Action="SetWriteConfig" Before="WriteConfig"
-              Condition="NOT REMOVE" />
+              Condition="NOT REMOVE AND NOT HAVECONFIG" />
       <Custom Action="WriteConfig" After="InstallFiles"
-              Condition="NOT REMOVE" />
+              Condition="NOT REMOVE AND NOT HAVECONFIG" />
 
       <Custom Action="SetInstallAddon" Before="InstallAddon"
               Condition="NOT REMOVE" />
