@@ -8,7 +8,7 @@
 -- to SavedVariables. WoW addons cannot make network requests, so the
 -- companion desktop uploader reads the saved file and POSTs it to your
 -- Raid Stats site. A copy/paste export string is also provided as a
--- no-companion fallback (/statsmith export).
+-- no-companion fallback (/rts export).
 --
 -- Every collector is pcall-guarded (via safe()) AND feature-detects each
 -- Blizzard API before calling it: one missing/renamed API on a given 12.0.x
@@ -66,8 +66,9 @@ local AddonName, ns = ...
 -- 1.2.3: in-game version readout — the login chat line now prints the addon
 -- version (v" .. ADDON_VERSION), and a new `/statsmith version` (`/ss version`)
 -- subcommand prints the version + schema for support. No wire-format change.
+-- 1.2.4: rebranded the in-game slash commands to /raidteamstats + /rts (legacy /statsmith + /ss kept as aliases). No wire-format change.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.3"
+local ADDON_VERSION = "1.2.4"
 -- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
 -- tripped — fires even with zero lockouts, the meaningful "ready" signal
 -- that lagged in sparse captures). Re-armed each addon load/reload.
@@ -857,12 +858,12 @@ end
 -- ─── slash command ──────────────────────────────────────────────────────
 local PREFIX = "|cff39c5bbRaid Team Stats|r: "
 local function printHelp()
-  print(PREFIX .. "commands —")
-  print("  /statsmith export  — collect a fresh snapshot and open the copy/paste export window")
-  print("  /statsmith now     — collect a fresh snapshot silently (the companion app uploads it)")
-  print("  /statsmith status  — show when the last snapshot was taken")
-  print("  /statsmith version — show the installed addon version")
-  print("  /statsmith help    — show this list")
+  print(PREFIX .. "commands (also /raidteamstats; legacy /statsmith and /ss still work) —")
+  print("  /rts export  — collect a fresh snapshot and open the copy/paste export window")
+  print("  /rts now     — collect a fresh snapshot silently (the companion app uploads it)")
+  print("  /rts status  — show when the last snapshot was taken")
+  print("  /rts version — show the installed addon version")
+  print("  /rts help    — show this list")
 end
 
 SlashCmdList["STATSMITH"] = function(msg)
@@ -871,7 +872,7 @@ SlashCmdList["STATSMITH"] = function(msg)
     local p = collect()
     print(PREFIX .. "snapshot collected for " ..
       (p.character and p.character.name or "?") ..
-      ". It uploads automatically; use /statsmith export to copy it manually.")
+      ". It uploads automatically; use /rts export to copy it manually.")
   elseif cmd == "status" then
     local at = StatSmithDB and StatSmithDB.collectedAt
     print(PREFIX .. "last snapshot " ..
@@ -890,8 +891,11 @@ SlashCmdList["STATSMITH"] = function(msg)
     printHelp()
   end
 end
-SLASH_STATSMITH1 = "/statsmith"
-SLASH_STATSMITH2 = "/ss"
+-- Branded commands + legacy aliases (/statsmith, /ss) — all map to SlashCmdList["STATSMITH"].
+SLASH_STATSMITH1 = "/raidteamstats"
+SLASH_STATSMITH2 = "/rts"
+SLASH_STATSMITH3 = "/statsmith"
+SLASH_STATSMITH4 = "/ss"
 
 -- ─── lifecycle ──────────────────────────────────────────────────────────
 local refreshTicker -- steady in-session re-snapshot (server data lands late)
@@ -939,7 +943,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     if not refreshTicker then
       refreshTicker = C_Timer.NewTicker(60, collect)
     end
-    print("|cff39c5bbRaid Team Stats|r v" .. ADDON_VERSION .. " loaded. /statsmith export to copy a manual export, /statsmith help for commands.")
+    print("|cff39c5bbRaid Team Stats|r v" .. ADDON_VERSION .. " loaded. /rts export to copy a manual export, /rts help for commands.")
   elseif event == "PLAYER_LOGOUT" then
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()
