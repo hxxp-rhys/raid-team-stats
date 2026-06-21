@@ -173,6 +173,13 @@ export const env = createEnv({
     HOMEPAGE_HEADLINE: z.string().optional(), // hero H1 on the landing page
     HOMEPAGE_SUBHEADING: z.string().optional(), // hero paragraph
     HOMEPAGE_FOOTER_NOTE: z.string().optional(), // small note in the homepage footer
+
+    // AGPL-3.0 section 13 (network use): where users interacting with THIS
+    // running instance over a network can obtain its Corresponding Source.
+    // Defaults to the upstream repo. If you SELF-HOST AND MODIFY the code, set
+    // this to YOUR fork so you offer users your modified source (a section-13
+    // obligation). Read at runtime (no rebuild needed); consumed via site-config.
+    SOURCE_REPO_URL: z.string().url().optional(),
   },
 
   client: {
@@ -220,6 +227,7 @@ export const env = createEnv({
     HOMEPAGE_HEADLINE: process.env.HOMEPAGE_HEADLINE,
     HOMEPAGE_SUBHEADING: process.env.HOMEPAGE_SUBHEADING,
     HOMEPAGE_FOOTER_NOTE: process.env.HOMEPAGE_FOOTER_NOTE,
+    SOURCE_REPO_URL: process.env.SOURCE_REPO_URL,
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
   },
 

@@ -74,6 +74,10 @@ export type SiteConfig = {
   logoUrl: string;
   hero: { headline: string; subheading: string };
   footerNote: string;
+  /** AGPL-3.0 section-13 Corresponding-Source URL for THIS instance. */
+  sourceUrl: string;
+  /** SPDX license identifier, shown in the footer. */
+  license: string;
   features: ReadonlyArray<HomepageFeature>;
   steps: ReadonlyArray<string>;
 };
@@ -95,6 +99,11 @@ export const siteConfig: SiteConfig = {
   footerNote:
     env.HOMEPAGE_FOOTER_NOTE ??
     `${appName} is self-hosted, open-source, and guild-private by default.`,
+  // AGPL-3.0 section-13: the Corresponding-Source offer shown to network users.
+  // Defaults to the upstream repo; a modified self-host overrides it via
+  // SOURCE_REPO_URL to point at its own fork.
+  sourceUrl: env.SOURCE_REPO_URL ?? UPSTREAM.repoUrl,
+  license: "AGPL-3.0-or-later",
   features: DEFAULT_FEATURES,
   steps: DEFAULT_STEPS,
 };
