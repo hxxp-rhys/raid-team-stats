@@ -13,9 +13,10 @@ import { applyVerification } from "@/server/guild-auth/verify";
  *
  *   - reads the user's own Battle.net OAuth token,
  *   - lists their characters + each character's guild (+ roster rank),
- *   - upserts Character rows, matches/creates Guild rows, records presence
- *     (which, via recordGuildPresence, enqueues the per-character stat sync),
- *   - auto-joins the user to their guilds as ACTIVE (verifiedOwnership=true),
+ *   - upserts Character rows, matches EXISTING Guild rows (never auto-creates
+ *     a guild — see createMissingGuilds), records presence (which, via
+ *     recordGuildPresence, enqueues the per-character stat sync),
+ *   - auto-joins the user to guilds already on the site as ACTIVE,
  *   - GM auto-claim + pending-asset transfer.
  *
  * Net effect for the user: after logging in with Battle.net their characters
@@ -60,6 +61,10 @@ export async function handleBattlenetDiscover(
     // ACTIVE, run the GM auto-claim + pending-asset sweep. recordGuildPresence
     // enqueues the immediate per-character sync, so no extra enqueue here.
     verifiedOwnership: true,
+    // Background login discovery is SITUATIONAL: auto-join only guilds already
+    // on the site; never auto-create a guild just because the user is in it.
+    // (The explicit "Add Guild" picker is the only create path.)
+    createMissingGuilds: false,
   });
 
   logger.info({ userId, ...result }, "battlenet-discover complete");

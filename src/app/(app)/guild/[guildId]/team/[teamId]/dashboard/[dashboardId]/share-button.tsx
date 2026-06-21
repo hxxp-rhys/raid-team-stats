@@ -3,6 +3,8 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ShareExpiryRadios } from "@/components/share-expiry-radios";
+import { DEFAULT_SHARE_EXPIRY_DAYS } from "@/lib/share-expiry";
 import { api } from "@/lib/trpc-client";
 
 export function ShareLinkButton({ dashboardId }: { dashboardId: string }) {
@@ -10,11 +12,15 @@ export function ShareLinkButton({ dashboardId }: { dashboardId: string }) {
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Link lifetime; null = never (the default).
+  const [expiryDays, setExpiryDays] = useState<number | null>(
+    DEFAULT_SHARE_EXPIRY_DAYS,
+  );
 
   const create = api.dashboard.createShareLink.useMutation({
     onSuccess: (data) => {
       setUrl(data.url);
-      setExpiresAt(new Date(data.expiresAt));
+      setExpiresAt(data.expiresAt ? new Date(data.expiresAt) : null);
       setCopied(false);
       setError(null);
     },
@@ -33,24 +39,29 @@ export function ShareLinkButton({ dashboardId }: { dashboardId: string }) {
   };
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-end gap-2">
+      <div className="bg-muted/30 max-w-md rounded-md border p-2 text-left">
+        <ShareExpiryRadios value={expiryDays} onChange={setExpiryDays} />
+      </div>
       <Button
         size="sm"
         variant="outline"
         disabled={create.isPending}
-        onClick={() => create.mutate({ dashboardId })}
+        onClick={() => create.mutate({ dashboardId, ttlDays: expiryDays })}
       >
         {create.isPending ? "Generating…" : url ? "New link" : "Share link"}
       </Button>
       {url && (
         <div className="bg-muted/30 mt-2 max-w-md rounded-md border p-2 text-xs">
           <p className="text-muted-foreground mb-1">
-            Expires {expiresAt?.toLocaleDateString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })}
-            . Anyone in your guild who signs in can open it.
+            {expiresAt
+              ? `Expires ${expiresAt.toLocaleDateString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                })}. `
+              : "Never expires. "}
+            Anyone in your guild who signs in can open it.
           </p>
           <div className="flex items-center gap-2">
             <code className="bg-background flex-1 truncate rounded px-2 py-1">
