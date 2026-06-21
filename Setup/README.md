@@ -294,6 +294,22 @@ default `:latest` is used.
 
 ---
 
+## License & source code (AGPL-3.0)
+
+This software is licensed under the **GNU AGPL-3.0-or-later**. Because it is
+served over a network, **AGPL section 13** requires that users who interact with
+it remotely be offered its *Corresponding Source*. The app does this with a
+"Source" link in the footer.
+
+- Running it **unmodified**? You're covered — the link points at the upstream
+  repository by default.
+- **Modified** the code (any change at all) and letting others use it over the
+  network? AGPL section 13 requires you to offer **your** users **your modified
+  source**. Set `SOURCE_REPO_URL` in `.env` to your fork's public URL so the
+  in-app "Source" link points at the source that is actually running.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

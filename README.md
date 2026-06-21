@@ -230,4 +230,9 @@ docs/         # design notes, runbooks, research
 
 ## License
 
-[MIT](./LICENSE.md).
+[GNU AGPL-3.0-or-later](./LICENSE.md). This is network-server software: if you
+run a modified version and let others use it over a network, AGPL section 13
+requires you to offer them your modified source.
+
+Releases up to and including **v1.0.35** were published under the MIT license and
+remain available under MIT; **all releases after v1.0.35 are AGPL-3.0-or-later.**
