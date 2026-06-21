@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { api } from "@/lib/trpc-client";
 import { SubmissionsModal } from "@/components/recruitment/submissions-modal";
+import { DangerZoneModal } from "@/components/ui/danger-zone-modal";
+import { Modal } from "@/components/ui/modal";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -54,12 +56,24 @@ function Inner({ params }: { params: Params }) {
     name: string;
     votingEnabled: boolean;
   } | null>(null);
+  const [delFor, setDelFor] = useState<{
+    id: string;
+    name: string;
+    count: number;
+  } | null>(null);
 
   const create = api.recruitment.createForm.useMutation({
     onSuccess: async (f) => {
       setName("");
       await utils.recruitment.listForms.invalidate({ guildId });
       router.push(`/guild/${guildId}/recruitment/${f.id}`);
+    },
+  });
+
+  const remove = api.recruitment.removeForm.useMutation({
+    onSuccess: async () => {
+      setDelFor(null);
+      await utils.recruitment.listForms.invalidate({ guildId });
     },
   });
 
@@ -169,6 +183,22 @@ function Inner({ params }: { params: Params }) {
                 >
                   Manage
                 </Link>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => {
+                    // Clear any stale error so a freshly opened dialog never
+                    // shows a previous attempt's failure.
+                    remove.reset();
+                    setDelFor({
+                      id: f.id,
+                      name: f.name,
+                      count: f._count.submissions,
+                    });
+                  }}
+                >
+                  Delete
+                </Button>
               </div>
             </li>
           ))}
@@ -183,6 +213,73 @@ function Inner({ params }: { params: Params }) {
           votingEnabled={subFor.votingEnabled}
           onClose={() => setSubFor(null)}
         />
+      )}
+
+      {/* Graduated confirmation: a form holding real applicant data demands the
+          type-the-name Danger Zone (matches guild/team deletion); an empty form
+          (nothing to lose) gets a single-click confirm so discarding a freshly
+          created draft isn't a chore. */}
+      {delFor && delFor.count > 0 && (
+        <DangerZoneModal
+          open
+          onClose={() => setDelFor(null)}
+          title={`Delete "${delFor.name}"`}
+          description={
+            <>
+              Permanently removes this recruitment form, its public application
+              link, and all {delFor.count} submission
+              {delFor.count === 1 ? "" : "s"} (plus every review) it has
+              received. This cannot be undone.
+            </>
+          }
+          expectedConfirm={delFor.name}
+          onConfirm={() => remove.mutate({ formId: delFor.id })}
+          isPending={remove.isPending}
+          errorMessage={remove.error?.message ?? null}
+          confirmLabel={`Delete "${delFor.name}"`}
+          submittingLabel="Deleting…"
+        />
+      )}
+
+      {delFor && delFor.count === 0 && (
+        <Modal
+          open
+          // Don't dismiss (and swallow an error) mid-delete.
+          onClose={() => {
+            if (!remove.isPending) setDelFor(null);
+          }}
+          title={`Delete "${delFor.name}"?`}
+          hideDefaultFooter
+          className="max-w-md"
+        >
+          <div className="space-y-4">
+            <p className="text-muted-foreground text-sm">
+              This form has no submissions. Deleting it also removes its public
+              application link. This cannot be undone.
+            </p>
+            {remove.error && (
+              <p className="text-destructive text-sm" role="alert">
+                {remove.error.message}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setDelFor(null)}
+                disabled={remove.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => remove.mutate({ formId: delFor.id })}
+                disabled={remove.isPending}
+              >
+                {remove.isPending ? "Deleting…" : "Delete"}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </main>
   );
