@@ -1,6 +1,6 @@
 # infra/
 
-Operational scripts for the production VPS. Source of truth — the live
+Operational scripts for the production server. Source of truth — the live
 copies are deployed out of band (not part of the Next build).
 
 ## cloudflare-firewall-sync.sh
@@ -57,13 +57,13 @@ GitHub Actions only — no runtime/prod impact.)
 
 **Encrypted backups** — `backup.sh`: `pg_dump` inside `rts-postgres`,
 `age`-encrypted with a **public** key (private key kept OFFLINE, never
-on the VPS — a host compromise can't decrypt them), timestamped,
+on the server — a host compromise can't decrypt them), timestamped,
 retained, optional off-host via rclone. Operator steps:
 
 ```
 # off-server, once:
 age-keygen -o rts-backup-key.txt          # store OFFLINE only
-# on the VPS:
+# on the server:
 apt-get install -y age
 install -m 0750 -o root -g root backup.sh /usr/local/sbin/
 # /etc/cron.d/rts-backup:

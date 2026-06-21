@@ -2,14 +2,14 @@
 # Encrypted Postgres backup (security finding L5).
 #
 # pg_dump (inside the rts-postgres container) -> age-encrypted with a
-# PUBLIC key (the matching private key stays OFFLINE, never on the VPS,
+# PUBLIC key (the matching private key stays OFFLINE, never on the server,
 # so a host compromise cannot read the backups) -> timestamped file ->
 # pruned -> optional off-host copy.
 #
 # Operator setup (one time, OFF the server):
 #   age-keygen -o rts-backup-key.txt        # keep this file OFFLINE
 #   # the "Public key: age1..." line -> RTS_BACKUP_AGE_RECIPIENT
-# On the VPS:
+# On the server:
 #   apt-get install -y age
 #   /etc/cron.d/rts-backup:
 #     RTS_BACKUP_AGE_RECIPIENT=age1xxxxxxxx

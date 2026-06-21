@@ -1147,7 +1147,7 @@ Two-column desktop / stacked mobile.
 Project cadence per phase: **dual-validate locally** (`tsc` with `.next` cleared,
 `next build`, `vitest`, `eslint` — `next build` does NOT gate eslint; CI on
 `development` only runs the security scan), commit on a branch, push, and run the
-**vps-deploy** runbook (a schema migration force-recreates `worker`; **purge
+**deploy** runbook (a schema migration force-recreates `worker`; **purge
 Cloudflare** once after any new `/uploader/*` path). After every change, `docker
 compose restart web worker` before testing (Turbopack ignores host edits).
 
@@ -1335,7 +1335,7 @@ headline are **not** in this bundle (they need the observed-presence layer, m4).
 - **DST re-derive (M7):** the materializer must re-derive `startsAt` in place
   (keyed on `occurrenceDate`), or a tz-rule change duplicates occurrences.
 - **Migration must force-recreate `worker`** or routes 404 (per the
-  docker-next-cache-prisma + vps-deploy notes).
+  docker-next-cache-prisma + deploy notes).
 - **Spec→role accuracy:** spec lives on `CharacterSnapshot.specName`/addon, not
   `Character`; a stale/missing snapshot mis-groups a name in the role columns.
 

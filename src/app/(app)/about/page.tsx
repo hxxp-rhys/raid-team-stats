@@ -10,17 +10,15 @@ import {
 } from "@/components/security-content";
 import { LicenseButton } from "./license-button";
 
-// Static page; the LICENSE.md read happens at build time so the full text is
-// baked in and the runtime image never needs the file on disk.
-export const dynamic = "force-static";
-
 export const metadata: Metadata = {
   title: "About",
   description: `About ${UPSTREAM.projectName} — what it is, how it protects your data, and its open-source license.`,
 };
 
-/** Full license text, read at build time. Empty string if unreadable (the
- *  license button then falls back to its summary + authoritative links). */
+/** Full license text. This page now lives under the app shell (top bar), so it
+ *  renders dynamically and reads LICENSE.md from the runtime image at request
+ *  time (the file is COPYed into the image); empty string if unreadable, in
+ *  which case the license button falls back to its summary + authoritative links. */
 function readLicense(): string {
   try {
     return readFileSync(join(process.cwd(), "LICENSE.md"), "utf8");
@@ -33,7 +31,10 @@ export default function AboutPage() {
   const licenseText = readLicense();
 
   return (
-    <article className="space-y-10">
+    // This page is under the (app) shell (which provides the top bar + footer
+    // but no width wrapper), so the article centers itself — mirroring the
+    // (public) layout's max-w-3xl container that /security still uses.
+    <article className="mx-auto max-w-3xl space-y-10 px-4 py-10">
       <header className="flex items-center gap-4">
         {/* The ORIGINAL project mark — credit is shown with the upstream brand,
             independent of any rebrand of this instance. */}

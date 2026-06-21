@@ -60,6 +60,10 @@ COPY --from=build --chown=app:app /app/tsconfig.json ./tsconfig.json
 # entrypoint can trigger with RUN_PII_BACKFILL=true). Only this one ships — the
 # dev/diagnostic scripts stay out of the runtime image.
 COPY --from=build --chown=app:app /app/scripts/backfill-pii-encryption.ts ./scripts/backfill-pii-encryption.ts
+# The /about page shows the project license; it now lives under the app shell
+# (top bar), so it renders dynamically and reads LICENSE.md at request time —
+# the file must therefore be present in the runtime image.
+COPY --from=build --chown=app:app /app/LICENSE.md ./LICENSE.md
 
 # Entrypoint applies pending migrations on start, then launches the CMD.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

@@ -52,7 +52,7 @@ const DEFAULT_FEATURES: ReadonlyArray<HomepageFeature> = [
   },
   {
     title: "Security-first",
-    body: "AES-256-GCM encryption at rest for all PII and OAuth tokens, optional TOTP MFA, full audit log, and a strict CSP. Self-hostable on a single VPS.",
+    body: "AES-256-GCM encryption at rest for all PII and OAuth tokens, optional TOTP MFA, full audit log, and a strict CSP. Self-hostable on a single server.",
   },
 ];
 

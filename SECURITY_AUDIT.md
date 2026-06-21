@@ -5,7 +5,7 @@
 **Auditor scope:** entire repository — application + worker code, Dockerfiles/compose, Caddy config, CI/CD, Prisma schema + migrations, scripts, and git history.
 **Method:** four parallel evidence-gathering passes (crypto/secrets, authN/Z, injection/leakage, infra/transport/CI/history); highest-impact findings independently re-verified against `file:line`.
 
-> **Stack-context correction.** The provided brief described an *"Azure-hosted, VMSS-based"* platform. That is **incorrect for this repo.** This is a **single-host Docker Compose** stack — Next.js 16 web + a BullMQ worker (both one image) behind **Caddy** (auto-TLS) and **Cloudflare**, with **PostgreSQL 16**, **Redis 7**, and **PgBouncer** as data-tier containers on a private bridge network, deployed to a VPS (the prod compose self-describes as Hetzner/Fly/DigitalOcean; project notes indicate Linode). No Azure, VMSS, autoscaling, or Kubernetes exists in the repo. Evidence: `docker-compose.prod.yml:1-5`.
+> **Stack-context correction.** The provided brief described an *"Azure-hosted, VMSS-based"* platform. That is **incorrect for this repo.** This is a **single-host Docker Compose** stack — Next.js 16 web + a BullMQ worker (both one image) behind **Caddy** (auto-TLS) and **Cloudflare**, with **PostgreSQL 16**, **Redis 7**, and **PgBouncer** as data-tier containers on a private bridge network, deployed to a single self-hosted server. No Azure, VMSS, autoscaling, or Kubernetes exists in the repo. Evidence: `docker-compose.prod.yml:1-5`.
 
 ---
 
@@ -54,7 +54,7 @@ Data is grouped by element. "At rest", "In transit", and "Keys/logs" state the v
 - **At rest:** stored as a JSON column **with no application-level encryption** — relies entirely on (unverified) database/disk encryption. Field-by-field whitelisted on write (no mass assignment), readable only by form officers. `src/server/api/routers/recruitment.ts`. Because forms can collect arbitrary PII, see **F11** + Gaps.
 
 ### Application secrets (AUTH_SECRET, TOKEN_ENCRYPTION_KEY, provider client secrets, SMTP_PASSWORD, POSTGRES_PASSWORD, METRICS_TOKEN)
-- **At rest:** plaintext in `.env` / `.env.prod` **files on the host** (no managed secret store / no cloud KMS / no Docker secrets). Standard for a single-VPS deployment, but worth noting. **Never committed** — git-history scan is clean (see F-history). `.env`/`.env.*` are git-ignored and `.dockerignore`-excluded, so they are not baked into image layers (`.dockerignore:25-27`). ✅ for source hygiene; ⚠️ no secret-store / rotation tooling.
+- **At rest:** plaintext in `.env` / `.env.prod` **files on the host** (no managed secret store / no cloud KMS / no Docker secrets). Standard for a single-server deployment, but worth noting. **Never committed** — git-history scan is clean (see F-history). `.env`/`.env.*` are git-ignored and `.dockerignore`-excluded, so they are not baked into image layers (`.dockerignore:25-27`). ✅ for source hygiene; ⚠️ no secret-store / rotation tooling.
 
 ### Backups
 - **At rest + in transit:** **age public-key encrypted**, streamed `pg_dump → age → rclone` (HTTPS) with **no intermediate plaintext file**. `scripts/backup.sh:38-46`. ✅ Excellent.
@@ -170,13 +170,13 @@ Data is grouped by element. "At rest", "In transit", and "Keys/logs" state the v
 These are the controls the audit **could not confirm from code/config**; several are load-bearing for "real users' personal data":
 
 1. **Disk / volume encryption at rest** — the single biggest unknown. Postgres data volume (`rts-pgdata-prod`), the **Redis AOF/RDB volume** (which holds service tokens — F1), the backup staging volume, and the brief's "mounted data disks" are all **host/cloud configuration**. `.env.example:31` *claims* DB disk encryption exists, but nothing in the repo proves it. **Confirm LUKS/cloud-disk encryption on every volume that persists data.**
-2. **Host/cloud firewall** — the compose correctly publishes only 80/443, but a manual `docker run -p`, a host iptables rule, or a cloud security-group could differ. **Confirm only 80/443 are reachable on the VPS, and 6379/5432/6432 are not.**
+2. **Host/cloud firewall** — the compose correctly publishes only 80/443, but a manual `docker run -p`, a host iptables rule, or a cloud security-group could differ. **Confirm only 80/443 are reachable on the server, and 6379/5432/6432 are not.**
 3. **Cloudflare origin settings** — whether TLS mode is **Full (strict)** (the companion docs claim it), WAF/rate rules, "Always Use HTTPS", and origin-cert validity. The app trusts `X-Forwarded-Proto`/origin headers from the proxy chain — verify Cloudflare/Caddy set them correctly and that the origin can't be reached directly bypassing Cloudflare.
 4. **Live cookie attributes** — confirm the production `Set-Cookie` for the session shows `__Secure-`/`__Host-`, `HttpOnly`, `Secure`, `SameSite=Lax` (depends on Auth.js v5 defaults + `NODE_ENV=production` at runtime).
 5. **`NODE_ENV=production` at runtime** — this is the only thing preventing tRPC from returning stack traces (F-info error handling) and ensuring secure cookies. Confirm the running containers have it (deploy docs indicate yes).
 6. **Real secret values** — strength/uniqueness of `AUTH_SECRET`, `TOKEN_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `METRICS_TOKEN`, Grafana creds (all live in `.env.prod`, correctly never committed). Confirm they are strong, unique, and not the `.env.example` placeholders.
 7. **Key-rotation procedure** — `CIPHER_VERSION` supports rotation, but **no rotation script exists** in `scripts/`. Document/automate rotation for `TOKEN_ENCRYPTION_KEY` and `AUTH_SECRET`.
-8. **Secret storage** — secrets live in plaintext `.env.prod` on the host (no KMS/managed secrets/Docker secrets). Acceptable for a single VPS, but consider Docker secrets or a managed store and ensure the file is `chmod 600`, root-owned, and excluded from backups.
+8. **Secret storage** — secrets live in plaintext `.env.prod` on the host (no KMS/managed secrets/Docker secrets). Acceptable for a single server, but consider Docker secrets or a managed store and ensure the file is `chmod 600`, root-owned, and excluded from backups.
 9. **`SKIP_ENV_VALIDATION` is never set on running containers** (build-only) — confirm it is not present in `.env.prod` or the runtime environment.
 10. **Dependency CVEs** — `npm audit`/Trivy run in CI but are **non-enforcing** (`continue-on-error`, `exit-code: 0`); a HIGH/CRITICAL CVE or a Trivy-detected secret will not block a merge. Review their latest output and consider gating `main`.
 

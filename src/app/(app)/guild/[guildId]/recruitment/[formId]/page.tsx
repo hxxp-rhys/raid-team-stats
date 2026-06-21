@@ -2,6 +2,8 @@
 
 import { Suspense, use, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import type { Route } from "next";
+import { useSearchParams } from "next/navigation";
 
 import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { Button } from "@/components/ui/button";
@@ -39,10 +41,10 @@ const HAS_OPTIONS = (t: FieldType) =>
   t === "SINGLE_SELECT" || t === "DROPDOWN" || t === "MULTI_SELECT";
 
 /**
- * The "add a field" buttons — orange (the default Button, matching "Save
- * questions") so they read as the primary build action. Shared by the fixed
- * left rail and the inline (narrow-screen) fallback; `vertical` gives them a
- * uniform width when stacked in the rail.
+ * The "add a field" buttons. Outline (not the bright primary) so a long rail of
+ * them blends into the page instead of being a distracting wall of orange, while
+ * staying clearly clickable. Shared by the fixed left rail and the inline
+ * (narrow-screen) fallback; `vertical` gives them a uniform width when stacked.
  */
 function FieldPalette({
   onAdd,
@@ -57,6 +59,7 @@ function FieldPalette({
         <Button
           key={t}
           size="sm"
+          variant="outline"
           onClick={() => onAdd(t)}
           className={vertical ? "w-32 justify-start" : ""}
         >
@@ -83,6 +86,11 @@ export default function RecruitmentFormPage({ params }: { params: Params }) {
 
 function Inner({ params }: { params: Params }) {
   const { guildId, formId } = use(params);
+  // Preserve the team context (?team) the dashboard opened recruitment with, so
+  // the "All forms" list keeps its "← Dashboard" back link instead of falling
+  // back to "← Guild".
+  const team = useSearchParams().get("team");
+  const teamQuery = team ? `?team=${team}` : "";
   const [tab, setTab] = useState<"build" | "settings">("build");
   const form = api.recruitment.getForm.useQuery({ formId });
 
@@ -90,7 +98,7 @@ function Inner({ params }: { params: Params }) {
     <main className="mx-auto max-w-4xl px-4 py-8">
       <div className="mb-4">
         <Link
-          href={`/guild/${guildId}/recruitment`}
+          href={`/guild/${guildId}/recruitment${teamQuery}` as Route}
           className="text-muted-foreground text-xs hover:underline"
         >
           ← All forms

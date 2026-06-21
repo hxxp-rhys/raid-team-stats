@@ -91,10 +91,10 @@ export function CalendarPanel({
     <main className="mx-auto max-w-5xl px-4 py-8">
       <header className="mb-5">
         <Link
-          href={"/guild" as Route}
+          href={`/guild/${guildId}/team/${teamId}` as Route}
           className="text-muted-foreground hover:text-foreground text-sm transition-colors"
         >
-          ← Guilds
+          ← Dashboard
         </Link>
         <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
           <div>
