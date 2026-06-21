@@ -4,9 +4,11 @@ import { TRPCError } from "@trpc/server";
 import {
   router,
   protectedProcedure,
+  publicProcedure,
   assertRaidTeamRole,
 } from "@/server/api/trpc";
 import type { ExtendedPrismaClient } from "@/lib/db";
+import { env } from "@/env";
 import { logger } from "@/lib/logger";
 import { audit } from "@/server/security/audit";
 import { inferRole } from "@/lib/wow";
@@ -28,6 +30,15 @@ import {
   type SeriesSpec,
 } from "@/lib/calendar/occurrence";
 import { reconcileSeries, type ReconcilePlan } from "@/lib/calendar/series";
+import {
+  deriveTargetArrays,
+  parseRaidTargetOrder,
+  raidTargetOrderSchema,
+} from "@/lib/calendar/raid-target";
+import {
+  createCalendarShareToken,
+  verifyCalendarShareToken,
+} from "@/server/security/calendar-share-token";
 import {
   MAX_LEAD_MINUTES,
   parseReminderConfig,
@@ -112,6 +123,7 @@ function eventSummary(e: {
   status: string;
   seriesId: string | null;
   notes: string | null;
+  targetOrder: unknown;
   targetZoneIds: number[];
   targetEncounterIds: number[];
   version: number;
@@ -130,15 +142,12 @@ function eventSummary(e: {
     status: e.status,
     seriesId: e.seriesId,
     notes: e.notes,
+    targetOrder: parseRaidTargetOrder(e.targetOrder),
     targetZoneIds: e.targetZoneIds,
     targetEncounterIds: e.targetEncounterIds,
     version: e.version,
   };
 }
-
-/** Targeting input shared by event/series create+update. */
-const targetZoneIdsSchema = z.array(z.number().int()).max(2);
-const targetEncounterIdsSchema = z.array(z.number().int()).max(40);
 
 const bydaySchema = z
   .array(z.string())
@@ -154,6 +163,14 @@ const reminderConfigSchema = z.object({
   // Multiple non-responder nudges, each at the lead's discretion. Bounded count
   // to keep the stored config + per-event mail volume sane.
   nudgeMinutes: z.array(z.number().int().min(5).max(MAX_LEAD_MINUTES)).max(6),
+  // Optional custom nudge email (subject + body with {{ placeholder }} tokens).
+  // Omitted/empty = built-in default copy. Caps mirror reminder-policy.
+  nudgeTemplate: z
+    .object({
+      subject: z.string().max(200).optional(),
+      body: z.string().max(4000).optional(),
+    })
+    .optional(),
 });
 
 /** Series fields the per-occurrence rows inherit (everything but the schedule). */
@@ -165,6 +182,7 @@ type SeriesFields = {
   raidSize: number | null;
   durationMin: number;
   notes: string | null;
+  targetOrder: unknown;
   targetZoneIds: number[];
   targetEncounterIds: number[];
   createdByUserId: string | null;
@@ -189,6 +207,9 @@ async function applySeriesPlan(
   series: SeriesFields,
   plan: ReconcilePlan,
 ): Promise<{ created: number; updated: number; cancelled: number; deleted: number }> {
+  // Authoritative ordered target list, copied to every occurrence alongside the
+  // derived flat arrays already stored on the series.
+  const seriesTargetOrder = parseRaidTargetOrder(series.targetOrder);
   let created = 0;
   let updated = 0;
   let cancelled = 0;
@@ -210,6 +231,7 @@ async function applySeriesPlan(
             localTime: o.localTime,
             occurrenceDate: o.occurrenceDate,
             notes: series.notes,
+            targetOrder: seriesTargetOrder,
             targetZoneIds: series.targetZoneIds,
             targetEncounterIds: series.targetEncounterIds,
             createdByUserId: series.createdByUserId,
@@ -241,6 +263,7 @@ async function applySeriesPlan(
           difficulty: series.difficulty,
           raidSize: series.raidSize,
           notes: series.notes,
+          targetOrder: seriesTargetOrder,
           targetZoneIds: series.targetZoneIds,
           targetEncounterIds: series.targetEncounterIds,
           durationMin: series.durationMin,
@@ -304,6 +327,74 @@ async function applySeriesPlan(
   }
 
   return { created, updated, cancelled, deleted };
+}
+
+/**
+ * Current tier's targetable raid zones (+ bosses + tile art). Shared by the
+ * raid-lead picker query and the public calendar-share shell.
+ */
+async function resolveTargetableZones() {
+  return Promise.all(
+    Object.entries(CURRENT_TIER_INSTANCES).map(
+      async ([name, blizzardInstanceId]) => ({
+        blizzardInstanceId,
+        name,
+        encounters: await getZoneEncounters(blizzardInstanceId).catch(() => []),
+        imageUrl: await getZoneArtUrl(blizzardInstanceId).catch(() => null),
+      }),
+    ),
+  );
+}
+
+/**
+ * Verify + authorize a calendar share token. Two-mode (mirrors the dashboard
+ * share): a PUBLIC calendar is readable by anyone holding a valid token; a
+ * private one only routes — the caller must still be a signed-in active member.
+ * Throws on a bad/expired token or denied access. Returns the resolved team
+ * plus the token's default view + expiry.
+ */
+async function resolveSharedCalendarTeam(
+  ctx: Parameters<typeof assertRaidTeamRole>[0],
+  token: string,
+) {
+  const verified = verifyCalendarShareToken(token);
+  if (!verified) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This share link is invalid or has expired.",
+    });
+  }
+  const team = await ctx.db.raidTeam.findUnique({
+    where: { id: verified.raidTeamId },
+    select: {
+      id: true,
+      name: true,
+      guildId: true,
+      timezone: true,
+      calendarShareIsPublic: true,
+    },
+  });
+  if (!team) throw new TRPCError({ code: "NOT_FOUND" });
+  if (!team.calendarShareIsPublic) {
+    // Private: the token only routes — require a signed-in active member.
+    if (!ctx.session?.user?.id) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message:
+          "This calendar isn't public. Sign in as a team member to view it.",
+      });
+    }
+    await assertRaidTeamRole(ctx, verified.raidTeamId, "MEMBER");
+  }
+  return {
+    raidTeamId: team.id,
+    name: team.name,
+    guildId: team.guildId,
+    timezone: team.timezone,
+    calendarShareIsPublic: team.calendarShareIsPublic,
+    expiresAt: verified.expiresAt,
+    view: verified.view,
+  };
 }
 
 export const calendarRouter = router({
@@ -573,19 +664,141 @@ export const calendarRouter = router({
       // (both static per patch + Redis-cached). This is what makes the picker
       // show the SELECTED raid's bosses — WCL lumps the whole tier into one
       // combined zone whose encounter list can't separate the raids.
-      const zones = await Promise.all(
-        Object.entries(CURRENT_TIER_INSTANCES).map(
-          async ([name, blizzardInstanceId]) => ({
-            blizzardInstanceId,
-            name,
-            encounters: await getZoneEncounters(blizzardInstanceId).catch(
-              () => [],
-            ),
-            imageUrl: await getZoneArtUrl(blizzardInstanceId).catch(() => null),
-          }),
-        ),
+      return { zones: await resolveTargetableZones() };
+    }),
+
+  // ─── Calendar sharing (read-only public links) ──────────────────────────
+
+  /** Issue a signed read-only share link for the team calendar. CO_LEADER+. */
+  createCalendarShareLink: protectedProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        view: z.enum(["agenda", "month"]),
+        ttlDays: z.number().int().min(1).max(366).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+      const { token, expiresAt } = createCalendarShareToken({
+        raidTeamId: input.raidTeamId,
+        view: input.view,
+        ttlDays: input.ttlDays ?? null,
+      });
+      const url = `${env.APP_URL}/share/calendar/${encodeURIComponent(token)}`;
+      logger.info(
+        { raidTeamId: input.raidTeamId, view: input.view, expiresAt },
+        "calendar: share link issued",
       );
-      return { zones };
+      return { token, url, expiresAt };
+    }),
+
+  /** Current calendar-share public flag. CO_LEADER+. */
+  calendarShareSettings: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+      const team = await ctx.db.raidTeam.findUnique({
+        where: { id: input.raidTeamId },
+        select: { calendarShareIsPublic: true },
+      });
+      if (!team) throw new TRPCError({ code: "NOT_FOUND" });
+      return { isPublic: team.calendarShareIsPublic };
+    }),
+
+  /** Toggle anonymous read access for valid share links. CO_LEADER+. */
+  setCalendarSharePublic: protectedProcedure
+    .input(z.object({ raidTeamId: z.string().cuid(), isPublic: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
+      await ctx.db.raidTeam.update({
+        where: { id: input.raidTeamId },
+        data: { calendarShareIsPublic: input.isPublic },
+      });
+      return { ok: true, isPublic: input.isPublic };
+    }),
+
+  /**
+   * PUBLIC: calendar shell for a share link — team name, timezone, the link's
+   * default view, and the zone art for month tiles. Token-authorized via
+   * resolveSharedCalendarTeam (public calendar → anyone; private → members).
+   */
+  shareMeta: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(2048) }))
+    .query(async ({ ctx, input }) => {
+      const team = await resolveSharedCalendarTeam(ctx, input.token);
+      return {
+        teamName: team.name,
+        guildId: team.guildId,
+        timezone: team.timezone ?? "UTC",
+        view: team.view,
+        isPublic: team.calendarShareIsPublic,
+        expiresAt: team.expiresAt,
+        zones: await resolveTargetableZones(),
+      };
+    }),
+
+  /**
+   * PUBLIC: events in [from,to] for a share link — read-only. NO per-user
+   * state (no myState, no signup identities); only aggregate present/responded
+   * counts. The window is bounded so a link can't pull an unbounded range.
+   */
+  shareEvents: publicProcedure
+    .input(
+      z.object({
+        token: z.string().min(1).max(2048),
+        from: z.date(),
+        to: z.date(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const team = await resolveSharedCalendarTeam(ctx, input.token);
+      if (input.to <= input.from) return { events: [] };
+      const MAX_RANGE_MS = 120 * 86_400_000;
+      const to =
+        input.to.getTime() - input.from.getTime() > MAX_RANGE_MS
+          ? new Date(input.from.getTime() + MAX_RANGE_MS)
+          : input.to;
+      const events = await ctx.db.raidEvent.findMany({
+        where: {
+          raidTeamId: team.raidTeamId,
+          startsAt: { gte: input.from, lt: to },
+        },
+        orderBy: { startsAt: "asc" },
+        include: { signups: { select: { state: true } } },
+      });
+      return {
+        events: events.map((e) => {
+          let present = 0;
+          let responded = 0;
+          for (const s of e.signups) {
+            if (s.state === "CONFIRM" || s.state === "LATE") present++;
+            if (
+              s.state === "CONFIRM" ||
+              s.state === "TENTATIVE" ||
+              s.state === "LATE" ||
+              s.state === "ABSENT"
+            ) {
+              responded++;
+            }
+          }
+          return {
+            id: e.id,
+            title: e.title,
+            difficulty: e.difficulty,
+            raidSize: e.raidSize,
+            startsAt: e.startsAt,
+            endsAt: endInstant(e.startsAt, e.durationMin),
+            durationMin: e.durationMin,
+            status: e.status,
+            seriesId: e.seriesId,
+            targetOrder: parseRaidTargetOrder(e.targetOrder),
+            targetZoneIds: e.targetZoneIds,
+            present,
+            responded,
+          };
+        }),
+      };
     }),
 
   // ─── Mutations ─────────────────────────────────────────────────────────
@@ -602,14 +815,15 @@ export const calendarRouter = router({
         difficulty: difficultySchema,
         raidSize: z.number().int().min(1).max(40).optional(),
         notes: z.string().max(4000).optional(),
-        targetZoneIds: targetZoneIdsSchema.optional(),
-        targetEncounterIds: targetEncounterIdsSchema.optional(),
+        targetOrder: raidTargetOrderSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       await assertRaidTeamRole(ctx, input.raidTeamId, "CO_LEADER");
       const { timezone } = await teamTz(ctx.db, input.raidTeamId);
       const startsAt = zonedWallClockToUtc(input.date, input.startTime, timezone);
+      const targetOrder = input.targetOrder ?? [];
+      const { targetZoneIds, targetEncounterIds } = deriveTargetArrays(targetOrder);
 
       const event = await ctx.db.$transaction(async (tx) => {
         const e = await tx.raidEvent.create({
@@ -624,8 +838,9 @@ export const calendarRouter = router({
             localTime: input.startTime,
             occurrenceDate: input.date,
             notes: input.notes ?? null,
-            targetZoneIds: input.targetZoneIds ?? [],
-            targetEncounterIds: input.targetEncounterIds ?? [],
+            targetOrder,
+            targetZoneIds,
+            targetEncounterIds,
             createdByUserId: ctx.session.user.id,
           },
         });
@@ -666,8 +881,7 @@ export const calendarRouter = router({
         difficulty: difficultySchema,
         raidSize: z.number().int().min(1).max(40).optional(),
         notes: z.string().max(4000).optional(),
-        targetZoneIds: targetZoneIdsSchema.optional(),
-        targetEncounterIds: targetEncounterIdsSchema.optional(),
+        targetOrder: raidTargetOrderSchema.optional(),
         startDate: z.string().regex(ISO_DATE),
         endDate: z.string().regex(ISO_DATE).nullable().optional(),
       }),
@@ -685,6 +899,8 @@ export const calendarRouter = router({
       const endsOn = input.endDate
         ? zonedWallClockToUtc(input.endDate, input.startTime, timezone)
         : null;
+      const targetOrder = input.targetOrder ?? [];
+      const { targetZoneIds, targetEncounterIds } = deriveTargetArrays(targetOrder);
 
       const series = await ctx.db.raidEventSeries.create({
         data: {
@@ -697,8 +913,9 @@ export const calendarRouter = router({
           timezone,
           raidSize: input.raidSize ?? null,
           notes: input.notes ?? null,
-          targetZoneIds: input.targetZoneIds ?? [],
-          targetEncounterIds: input.targetEncounterIds ?? [],
+          targetOrder,
+          targetZoneIds,
+          targetEncounterIds,
           startsOn,
           endsOn,
           createdByUserId: ctx.session.user.id,
@@ -740,8 +957,7 @@ export const calendarRouter = router({
         difficulty: difficultySchema.optional(),
         raidSize: z.number().int().min(1).max(40).nullable().optional(),
         notes: z.string().max(4000).nullable().optional(),
-        targetZoneIds: targetZoneIdsSchema.optional(),
-        targetEncounterIds: targetEncounterIdsSchema.optional(),
+        targetOrder: raidTargetOrderSchema.optional(),
         endDate: z.string().regex(ISO_DATE).nullable().optional(),
       }),
     )
@@ -767,8 +983,12 @@ export const calendarRouter = router({
       if (input.difficulty !== undefined) data.difficulty = input.difficulty;
       if (input.raidSize !== undefined) data.raidSize = input.raidSize;
       if (input.notes !== undefined) data.notes = input.notes;
-      if (input.targetZoneIds !== undefined) data.targetZoneIds = input.targetZoneIds;
-      if (input.targetEncounterIds !== undefined) data.targetEncounterIds = input.targetEncounterIds;
+      if (input.targetOrder !== undefined) {
+        const derived = deriveTargetArrays(input.targetOrder);
+        data.targetOrder = input.targetOrder;
+        data.targetZoneIds = derived.targetZoneIds;
+        data.targetEncounterIds = derived.targetEncounterIds;
+      }
       if (input.durationMin !== undefined) data.durationMin = input.durationMin;
       if (input.byday !== undefined) data.byday = input.byday.map((b) => b.toUpperCase());
       if (input.startTime !== undefined) data.startLocal = input.startTime;
@@ -818,6 +1038,7 @@ export const calendarRouter = router({
           raidSize: true,
           durationMin: true,
           notes: true,
+          targetOrder: true,
           targetZoneIds: true,
           targetEncounterIds: true,
           createdByUserId: true,
@@ -891,6 +1112,7 @@ export const calendarRouter = router({
           raidSize: true,
           durationMin: true,
           notes: true,
+          targetOrder: true,
           targetZoneIds: true,
           targetEncounterIds: true,
           createdByUserId: true,
@@ -949,8 +1171,7 @@ export const calendarRouter = router({
         difficulty: difficultySchema.optional(),
         raidSize: z.number().int().min(1).max(40).nullable().optional(),
         notes: z.string().max(4000).nullable().optional(),
-        targetZoneIds: targetZoneIdsSchema.optional(),
-        targetEncounterIds: targetEncounterIdsSchema.optional(),
+        targetOrder: raidTargetOrderSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -992,8 +1213,12 @@ export const calendarRouter = router({
       if (input.difficulty !== undefined) data.difficulty = input.difficulty;
       if (input.raidSize !== undefined) data.raidSize = input.raidSize;
       if (input.notes !== undefined) data.notes = input.notes;
-      if (input.targetZoneIds !== undefined) data.targetZoneIds = input.targetZoneIds;
-      if (input.targetEncounterIds !== undefined) data.targetEncounterIds = input.targetEncounterIds;
+      if (input.targetOrder !== undefined) {
+        const derived = deriveTargetArrays(input.targetOrder);
+        data.targetOrder = input.targetOrder;
+        data.targetZoneIds = derived.targetZoneIds;
+        data.targetEncounterIds = derived.targetEncounterIds;
+      }
       if (input.durationMin !== undefined) data.durationMin = input.durationMin;
 
       // Date/time change → re-resolve startsAt in the event's own timezone.

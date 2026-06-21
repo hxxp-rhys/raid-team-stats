@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
 import { Modal } from "@/components/ui/modal";
@@ -8,8 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DiscordSettings } from "./discord-settings";
+import {
+  DEFAULT_NUDGE_BODY,
+  DEFAULT_NUDGE_SUBJECT,
+  NUDGE_PLACEHOLDERS,
+  NUDGE_SAMPLE_VARS,
+  renderNudgeTemplate,
+} from "@/lib/calendar/email-template";
+import { NUDGE_BODY_MAX, NUDGE_SUBJECT_MAX } from "@/lib/calendar/reminder-policy";
 
-type ReminderCfg = { enabled: boolean; leadMinutes: number[]; nudgeMinutes: number[] };
+type ReminderCfg = {
+  enabled: boolean;
+  leadMinutes: number[];
+  nudgeMinutes: number[];
+  nudgeTemplate?: { subject?: string; body?: string };
+};
 type Current = {
   timezone: string;
   comp: { tanks: number; healers: number; dps: number };
@@ -100,6 +113,8 @@ function Body({
     remEnabled: current?.reminders.enabled ?? true,
     leads: current?.reminders.leadMinutes ?? [1440, 60],
     nudges: current?.reminders.nudgeMinutes ?? [720],
+    emailSubject: current?.reminders.nudgeTemplate?.subject ?? "",
+    emailBody: current?.reminders.nudgeTemplate?.body ?? "",
   }));
   const [tz, setTz] = useState(seed.tz);
   const [tanks, setTanks] = useState(seed.tanks);
@@ -111,6 +126,54 @@ function Body({
   const [addVal, setAddVal] = useState("");
   const [addUnit, setAddUnit] = useState<"m" | "h" | "d">("h");
   const [addErr, setAddErr] = useState("");
+  // Custom nudge email. The committed values drive the preview + the save; the
+  // editor lightbox works on a draft so Cancel discards cleanly.
+  const [emailSubject, setEmailSubject] = useState(seed.emailSubject);
+  const [emailBody, setEmailBody] = useState(seed.emailBody);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [draftSubject, setDraftSubject] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [focused, setFocused] = useState<"subject" | "body">("body");
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  const openEmailEditor = () => {
+    setDraftSubject(emailSubject);
+    setDraftBody(emailBody);
+    setFocused("body");
+    setEmailOpen(true);
+  };
+  // Insert {{ key }} at the caret of whichever field was last focused.
+  const insertPlaceholder = (key: string) => {
+    const token = `{{ ${key} }}`;
+    const el = focused === "subject" ? subjectRef.current : bodyRef.current;
+    const cur = focused === "subject" ? draftSubject : draftBody;
+    const set = focused === "subject" ? setDraftSubject : setDraftBody;
+    const start = el?.selectionStart ?? cur.length;
+    const end = el?.selectionEnd ?? start;
+    set(cur.slice(0, start) + token + cur.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      const pos = start + token.length;
+      el?.setSelectionRange(pos, pos);
+    });
+  };
+
+  // While the email lightbox is open, intercept Escape in the CAPTURE phase so
+  // it closes ONLY the lightbox. The shared settings Modal's own document-level
+  // Escape listener would otherwise also fire and close the settings modal,
+  // discarding unsaved edits.
+  useEffect(() => {
+    if (!emailOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setEmailOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [emailOpen]);
 
   const toggleLead = (min: number) =>
     setLeads((cur) =>
@@ -151,7 +214,9 @@ function Body({
     dps !== seed.dps ||
     remEnabled !== seed.remEnabled ||
     leads.join(",") !== seed.leads.join(",") ||
-    nudges.join(",") !== seed.nudges.join(",");
+    nudges.join(",") !== seed.nudges.join(",") ||
+    emailSubject !== seed.emailSubject ||
+    emailBody !== seed.emailBody;
 
   const save = api.calendar.setSettings.useMutation({
     onSuccess: async () => {
@@ -180,6 +245,13 @@ function Body({
                 enabled: remEnabled,
                 leadMinutes: leads,
                 nudgeMinutes: nudges,
+                nudgeTemplate:
+                  emailSubject.trim() || emailBody.trim()
+                    ? {
+                        subject: emailSubject.trim() || undefined,
+                        body: emailBody.trim() || undefined,
+                      }
+                    : undefined,
               },
             });
           }}
@@ -320,6 +392,15 @@ function Body({
                       Add
                     </Button>
                     <span className="text-muted-foreground text-xs">before start</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="ml-auto"
+                      onClick={openEmailEditor}
+                    >
+                      Customize email
+                    </Button>
                   </div>
                   {addErr && (
                     <p className="text-destructive text-xs" role="alert">
@@ -358,6 +439,29 @@ function Body({
                       ))}
                       </div>
                     )}
+                    {/* Preview of the nudge email (default or custom) rendered
+                        with sample data, so the leader sees what raiders get. */}
+                    <div className="space-y-1 pt-1.5">
+                      <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">
+                        Email preview (
+                        {emailSubject.trim() || emailBody.trim() ? "custom" : "default"})
+                      </p>
+                      <div className="border-border bg-muted/30 space-y-1 rounded-md border p-2 text-xs">
+                        <p className="font-medium">
+                          {renderNudgeTemplate(
+                            emailSubject.trim() || DEFAULT_NUDGE_SUBJECT,
+                            NUDGE_SAMPLE_VARS,
+                          )}
+                        </p>
+                        <hr className="border-border/60" />
+                        <p className="text-muted-foreground whitespace-pre-wrap">
+                          {renderNudgeTemplate(
+                            emailBody.trim() || DEFAULT_NUDGE_BODY,
+                            NUDGE_SAMPLE_VARS,
+                          )}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -388,6 +492,96 @@ function Body({
       onSaved={onClose}
       mainHasUnsavedEdits={mainDirty}
     />
+
+    {/* Email-customize lightbox. A self-contained overlay (not the shared Modal)
+        so its backdrop/escape can't also dismiss the settings modal underneath
+        and discard unsaved edits. Subject on top, body below, placeholder chips. */}
+    {emailOpen && (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Customize nudge email"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setEmailOpen(false);
+        }}
+      >
+        <div className="border-border bg-card max-h-[85vh] w-full max-w-xl space-y-3 overflow-y-auto rounded-lg border p-5 text-sm shadow-2xl">
+          <div>
+            <h2 className="text-base font-semibold">Customize nudge email</h2>
+            <p className="text-muted-foreground text-xs">
+              Sent to non-responders. Insert placeholders for per-recipient
+              details; leave both fields blank to use the default.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-muted-foreground mr-1 text-xs">Insert:</span>
+            {NUDGE_PLACEHOLDERS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                title={p.label}
+                onClick={() => insertPlaceholder(p.key)}
+                className="border-border text-muted-foreground hover:bg-muted rounded-md border px-1.5 py-0.5 font-mono text-[11px]"
+              >
+                {`{{ ${p.key} }}`}
+              </button>
+            ))}
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="nudge-subject" className="text-xs">
+              Subject
+            </Label>
+            <input
+              id="nudge-subject"
+              ref={subjectRef}
+              type="text"
+              value={draftSubject}
+              maxLength={NUDGE_SUBJECT_MAX}
+              placeholder={DEFAULT_NUDGE_SUBJECT}
+              onFocus={() => setFocused("subject")}
+              onChange={(e) => setDraftSubject(e.target.value)}
+              className="border-border bg-background h-8 w-full rounded-md border px-2 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="nudge-body" className="text-xs">
+              Body
+            </Label>
+            <textarea
+              id="nudge-body"
+              ref={bodyRef}
+              value={draftBody}
+              maxLength={NUDGE_BODY_MAX}
+              rows={9}
+              placeholder={DEFAULT_NUDGE_BODY}
+              onFocus={() => setFocused("body")}
+              onChange={(e) => setDraftBody(e.target.value)}
+              className="border-border bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs"
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">
+            Unknown placeholders render as blank. Times are shown in the team
+            timezone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setEmailOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setEmailSubject(draftSubject);
+                setEmailBody(draftBody);
+                setEmailOpen(false);
+              }}
+            >
+              Done
+            </Button>
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

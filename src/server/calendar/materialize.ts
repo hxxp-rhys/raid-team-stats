@@ -13,6 +13,7 @@
 import type { ExtendedPrismaClient } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { enumerateOccurrences, type SeriesSpec } from "@/lib/calendar/occurrence";
+import { parseRaidTargetOrder } from "@/lib/calendar/raid-target";
 import { appendOutbox, serverActionKey } from "@/server/calendar/sync";
 
 /** How far ahead we keep occurrences materialized. */
@@ -29,6 +30,7 @@ type SeriesRow = {
   timezone: string;
   raidSize: number | null;
   notes: string | null;
+  targetOrder: unknown;
   targetZoneIds: number[];
   targetEncounterIds: number[];
   startsOn: Date | null;
@@ -48,6 +50,7 @@ const SERIES_SELECT = {
   timezone: true,
   raidSize: true,
   notes: true,
+  targetOrder: true,
   targetZoneIds: true,
   targetEncounterIds: true,
   startsOn: true,
@@ -127,6 +130,7 @@ export async function materializeSeries(
             localTime: o.localTime,
             occurrenceDate: o.occurrenceDate,
             notes: s.notes,
+            targetOrder: parseRaidTargetOrder(s.targetOrder),
             targetZoneIds: s.targetZoneIds,
             targetEncounterIds: s.targetEncounterIds,
             createdByUserId: s.createdByUserId,

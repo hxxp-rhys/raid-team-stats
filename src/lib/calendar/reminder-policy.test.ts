@@ -44,6 +44,27 @@ describe("parseReminderConfig", () => {
     // legacy single-scalar form written by the pre-multi-nudge version
     expect(parseReminderConfig({ nudgeMinutes: 720 }).nudgeMinutes).toEqual([720]);
   });
+
+  it("preserves a custom nudge email template (trim) across the round-trip", () => {
+    const parsed = parseReminderConfig({
+      nudgeMinutes: [720],
+      nudgeTemplate: { subject: "  Hi {{ char_name }}  ", body: "  Body  " },
+    });
+    expect(parsed.nudgeTemplate).toEqual({ subject: "Hi {{ char_name }}", body: "Body" });
+    // a SECOND save (re-parse of the parsed output) is stable — not dropped
+    expect(parseReminderConfig(parsed).nudgeTemplate).toEqual({
+      subject: "Hi {{ char_name }}",
+      body: "Body",
+    });
+  });
+
+  it("drops an empty/whitespace-only template; absent → no key", () => {
+    expect(
+      parseReminderConfig({ nudgeTemplate: { subject: "   ", body: "" } }).nudgeTemplate,
+    ).toBeUndefined();
+    expect(parseReminderConfig({ nudgeTemplate: {} }).nudgeTemplate).toBeUndefined();
+    expect("nudgeTemplate" in parseReminderConfig({})).toBe(false);
+  });
 });
 
 describe("maxLookaheadMinutes", () => {
