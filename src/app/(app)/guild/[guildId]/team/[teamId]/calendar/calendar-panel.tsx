@@ -12,9 +12,11 @@ import { EventDetailModal } from "./event-detail-modal";
 import { EventFormModal } from "./event-form-modal";
 import { SettingsModal } from "./settings-modal";
 import { SeriesManagerModal } from "./series-manager-modal";
+import { CalendarShareModal } from "./calendar-share-modal";
 import { STATE_META, StatusControl } from "./parts";
 import type { AttendanceState } from "@/lib/calendar/roster";
 import { localDateInTz, zonedWallClockToUtc } from "@/lib/calendar/time";
+import { leadingZoneIds, type RaidTargetItem } from "@/lib/calendar/raid-target";
 
 const DIFF_COLOR: Record<string, string> = {
   Mythic: "border-l-orange-500",
@@ -70,6 +72,7 @@ export function CalendarPanel({
   const [editId, setEditId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [seriesOpen, setSeriesOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const canManage = meta.data?.role === "CO_LEADER" || meta.data?.role === "LEADER";
   const canLead = meta.data?.role === "LEADER";
@@ -115,20 +118,34 @@ export function CalendarPanel({
       </header>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="border-border inline-flex rounded-md border p-0.5 text-sm">
-          {(["agenda", "month"] as const).map((v) => (
-            <button
-              key={v}
+        <div className="flex items-center gap-2">
+          <div className="border-border inline-flex rounded-md border p-0.5 text-sm">
+            {(["agenda", "month"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={cn(
+                  "rounded px-3 py-1 font-medium capitalize transition-colors",
+                  view === v ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          {canManage && (
+            <Button
               type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded px-3 py-1 font-medium capitalize transition-colors",
-                view === v ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
+              size="sm"
+              variant="outline"
+              onClick={() => setShareOpen(true)}
+              title={`Share the ${view} view`}
+              aria-label="Share calendar"
             >
-              {v}
-            </button>
-          ))}
+              ↗ Share
+            </Button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {meta.data && (
@@ -195,6 +212,12 @@ export function CalendarPanel({
         canLead={canLead}
         open={seriesOpen}
         onClose={() => setSeriesOpen(false)}
+      />
+      <CalendarShareModal
+        raidTeamId={teamId}
+        view={view}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
       />
     </main>
   );
@@ -453,7 +476,9 @@ function MonthView({
         difficulty: string;
         startsAt: Date;
         status: string;
+        seriesId: string | null;
         myState: string | null;
+        targetOrder: RaidTargetItem[];
         targetZoneIds: number[];
       }[]
     >();
@@ -466,7 +491,9 @@ function MonthView({
         difficulty: e.difficulty,
         startsAt: new Date(e.startsAt),
         status: e.status,
+        seriesId: e.seriesId,
         myState: e.myState,
+        targetOrder: e.targetOrder ?? [],
         targetZoneIds: e.targetZoneIds ?? [],
       });
       m.set(key, arr);
@@ -521,7 +548,11 @@ function MonthView({
           // — one zone fills the cell, two split it diagonally.
           const tiles: string[] = [];
           for (const e of events) {
-            for (const zid of e.targetZoneIds) {
+            // First two ORDERED entries' raids drive the art (falling back to
+            // the flat zone list for pre-targetOrder events).
+            const zoneIds =
+              e.targetOrder.length > 0 ? leadingZoneIds(e.targetOrder) : e.targetZoneIds;
+            for (const zid of zoneIds) {
               const url = zoneArt.get(zid);
               if (url && !tiles.includes(url) && tiles.length < 2) tiles.push(url);
             }
@@ -543,7 +574,7 @@ function MonthView({
               {tiles.length === 1 && (
                 <div
                   aria-hidden
-                  className="absolute inset-0 bg-cover bg-center opacity-25"
+                  className="absolute inset-0 bg-cover bg-center opacity-50"
                   style={{ backgroundImage: `url("${tiles[0]}")` }}
                 />
               )}
@@ -551,7 +582,7 @@ function MonthView({
                 <>
                   <div
                     aria-hidden
-                    className="absolute inset-0 bg-cover bg-center opacity-25"
+                    className="absolute inset-0 bg-cover bg-center opacity-50"
                     style={{
                       backgroundImage: `url("${tiles[0]}")`,
                       clipPath: "polygon(0 0, 100% 0, 0 100%)",
@@ -559,7 +590,7 @@ function MonthView({
                   />
                   <div
                     aria-hidden
-                    className="absolute inset-0 bg-cover bg-center opacity-25"
+                    className="absolute inset-0 bg-cover bg-center opacity-50"
                     style={{
                       backgroundImage: `url("${tiles[1]}")`,
                       clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
@@ -568,7 +599,7 @@ function MonthView({
                 </>
               )}
               {tiles.length > 0 && (
-                <div aria-hidden className="from-background/70 absolute inset-0 bg-gradient-to-t to-transparent" />
+                <div aria-hidden className="from-background/60 absolute inset-0 bg-gradient-to-t to-transparent" />
               )}
 
               <div className="relative z-10 flex h-full flex-col">
@@ -589,14 +620,33 @@ function MonthView({
                       type="button"
                       onClick={() => onOpen(e.id)}
                       className={cn(
-                        "block w-full truncate rounded border-l-2 bg-muted/50 px-1 py-0.5 text-left text-[10px] hover:bg-muted",
+                        "block w-full rounded border-l-2 bg-background/85 px-1 py-0.5 text-left text-[10px] hover:bg-muted",
                         DIFF_COLOR[e.difficulty] ?? "border-l-border",
                         e.status === "CANCELLED" && "line-through opacity-60",
                       )}
                       title={e.title}
                     >
-                      {e.myState && <span aria-hidden>{STATE_META[e.myState as AttendanceState]?.glyph} </span>}
-                      {new Date(e.startsAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} {e.title}
+                      {/* Two lines: title (with my-status glyph), then the time
+                          plus a recurring marker when it belongs to a series. */}
+                      <span className="block truncate font-medium">
+                        {e.myState && (
+                          <span aria-hidden>
+                            {STATE_META[e.myState as AttendanceState]?.glyph}{" "}
+                          </span>
+                        )}
+                        {e.title}
+                      </span>
+                      <span className="text-muted-foreground flex items-center gap-0.5">
+                        {new Date(e.startsAt).toLocaleTimeString(undefined, {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                        {e.seriesId && (
+                          <span aria-hidden title="Recurring">
+                            ↻
+                          </span>
+                        )}
+                      </span>
                     </button>
                   ))}
                   {overflow > 0 && (

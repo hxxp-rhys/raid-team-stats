@@ -18,29 +18,29 @@ datasource db {
 // ──────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id            String    @id @default(cuid())
+  id                    String    @id @default(cuid())
   // Nullable: a user who signs up via Battle.net has no email (Battle.net's
   // OAuth exposes only `sub` + `battle_tag`). They can add + verify an email
   // later for password login. Postgres permits multiple NULLs under a unique
   // index, so email-less Battle.net users don't collide.
   // Encrypted at rest (AES-256-GCM via the @/lib/db extension). Random IV per
   // write means you can't look up by `email` directly — use `emailIndex`.
-  email         String?
+  email                 String?
   // Blind index for exact-match email lookups: a keyed HMAC of the normalized
   // email (server/auth/email-index.ts), auto-derived on every write by the db
   // extension. The UNIQUE here replaces the old @unique on `email`.
-  emailIndex    String?   @unique
-  emailVerified DateTime?
-  displayName   String?
-  avatarUrl     String?
-  mfaEnabled    Boolean   @default(false)
+  emailIndex            String?   @unique
+  emailVerified         DateTime?
+  displayName           String?
+  avatarUrl             String?
+  mfaEnabled            Boolean   @default(false)
   // Platform-wide admin flag. Authoritative source for "always admin" along
   // with env.ADMIN_USER_IDS / env.ADMIN_EMAILS (see isPlatformAdmin).
-  isAdmin       Boolean   @default(false)
+  isAdmin               Boolean   @default(false)
   // Bearer token the companion uploader / addon-export endpoint uses to
   // authenticate without a browser session. Null until the user generates
   // one on the setup page; regenerable (invalidates the old one).
-  uploadToken   String?   @unique
+  uploadToken           String?   @unique
   // Rolling token rotation for the companion uploader: on each successful
   // upload the server mints a new token, demotes the old one to `Prev` (honored
   // once as a grace window so a dropped response self-heals), and records when
@@ -48,8 +48,8 @@ model User {
   uploadTokenPrev       String?   @unique
   uploadTokenRotatedAt  DateTime?
   uploadTokenLastUsedAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   accounts       Account[]
   sessions       Session[]
@@ -301,28 +301,28 @@ model Character {
   lastSyncedAt        DateTime @default(now())
   createdAt           DateTime @default(now())
 
-  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  guildLinks         GuildCharacterLink[]
-  raidMemberships    RaidTeamMembership[]
-  characterSnapshots CharacterSnapshot[]
-  equipmentSnapshots EquipmentSnapshot[]
-  mplusSnapshots     MplusSnapshot[]
-  raidSnapshots      RaidSnapshot[]
-  vaultSnapshots     VaultSnapshot[]
-  wclParseSnapshots  WclParseSnapshot[]
-  professionSnapshots ProfessionSnapshot[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guildLinks            GuildCharacterLink[]
+  raidMemberships       RaidTeamMembership[]
+  characterSnapshots    CharacterSnapshot[]
+  equipmentSnapshots    EquipmentSnapshot[]
+  mplusSnapshots        MplusSnapshot[]
+  raidSnapshots         RaidSnapshot[]
+  vaultSnapshots        VaultSnapshot[]
+  wclParseSnapshots     WclParseSnapshot[]
+  professionSnapshots   ProfessionSnapshot[]
   // Pending-ownership back-references. Filled when the team/dashboard's
   // current owner has departed the guild and there is no on-site successor —
   // the first user to claim this character via Battle.net verification gets
   // ownership transferred (see applyVerification → claimPendingAssets).
-  pendingRaidTeams   RaidTeam[]           @relation("RaidTeamPendingLeader")
-  pendingDashboards  DashboardConfig[]    @relation("DashboardPendingOwner")
-  addonUpload        AddonUpload?
-  wclReportActors    WclReportActor[]
-  wclFightDeaths     WclFightDeath[]
-  wclAvoidableDamage WclAvoidableDamage[]
+  pendingRaidTeams      RaidTeam[]             @relation("RaidTeamPendingLeader")
+  pendingDashboards     DashboardConfig[]      @relation("DashboardPendingOwner")
+  addonUpload           AddonUpload?
+  wclReportActors       WclReportActor[]
+  wclFightDeaths        WclFightDeath[]
+  wclAvoidableDamage    WclAvoidableDamage[]
   raidNightObservations RaidNightObservation[]
-  eventSignups       EventSignup[]
+  eventSignups          EventSignup[]
 
   @@unique([region, realmSlug, name])
   @@index([userId])
@@ -346,15 +346,15 @@ model Guild {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  claimedBy      User?                @relation("GuildClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
-  memberships    GuildMembership[]
-  characterLinks GuildCharacterLink[]
-  raidTeams      RaidTeam[]
-  wclReports     WclReport[]
-  wclAvoidableDamage WclAvoidableDamage[]
-  wclAvoidableState  WclAvoidableState[]
+  claimedBy             User?                  @relation("GuildClaimedBy", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+  memberships           GuildMembership[]
+  characterLinks        GuildCharacterLink[]
+  raidTeams             RaidTeam[]
+  wclReports            WclReport[]
+  wclAvoidableDamage    WclAvoidableDamage[]
+  wclAvoidableState     WclAvoidableState[]
   raidNightObservations RaidNightObservation[]
-  recruitmentForms RecruitmentForm[]
+  recruitmentForms      RecruitmentForm[]
 
   // Identity is region+realm+guild slug ONLY. A guild is a single faction;
   // keeping `faction` in this key let a per-character faction misread mint
@@ -403,10 +403,10 @@ model GuildCharacterLink {
 }
 
 model RaidTeam {
-  id           String             @id @default(cuid())
-  guildId      String
-  name         String
-  slug         String
+  id                       String             @id @default(cuid())
+  guildId                  String
+  name                     String
+  slug                     String
   // Optional — null when the team's leader has departed the guild and the
   // platform has no on-site account to transfer leadership to. In that case
   // `pendingLeaderCharacterId` points to the Blizzard character that SHOULD
@@ -414,49 +414,55 @@ model RaidTeam {
   // verification) inherits leadership.
   leaderUserId             String?
   pendingLeaderCharacterId String?
-  visibility   RaidTeamVisibility @default(TEAM)
+  visibility               RaidTeamVisibility @default(TEAM)
   // Team-self-service refresh: when true, any active team member can trigger
   // a fresh Tier-A sync via the in-dashboard data_refresh widget. When false,
   // only LEADER/CO_LEADER (or guild OWNER/OFFICER) can refresh.
-  memberCanRefresh Boolean        @default(false)
+  memberCanRefresh         Boolean            @default(false)
   // Recurring auto-refresh policy. JSON shapes:
   //   { kind: "interval", hours: 4|6|12|24|28|72 }
   //   { kind: "weekly", dayOfWeek: 0..6, hour: 0..23, minute: 0..59 }
   // null = no auto-refresh (Tier A still runs hourly globally for tracked
   // members; this is a per-team additional opt-in trigger).
-  refreshSchedule Json?
+  refreshSchedule          Json?
   // Per-team Warcraft Logs source override. Null = inherit the guild's
   // resolved WCL guild (Guild.wclGuildId). Set when a team logs under a
   // different WCL guild (e.g. a team-specific WCL guild entity). The name
   // is captured at save time from the validation probe, for display.
-  wclGuildId   Int?
-  wclGuildName String?
-  lastRefreshAt   DateTime?
+  wclGuildId               Int?
+  wclGuildName             String?
+  lastRefreshAt            DateTime?
   // Calendar: team home timezone (IANA, e.g. "Europe/London"). Series/events
   // store wall-clock + this tz so a 19:00 raid stays 19:00 local across DST.
-  timezone     String?            @default("UTC")
+  timezone                 String?            @default("UTC")
   // Optional saved comp target for the readiness meter, e.g.
   //   { "tanks": 2, "healers": 5, "melee": 7, "ranged": 6 }
-  compTemplate Json?
+  compTemplate             Json?
   // Calendar auto-reminders. JSON shape:
   //   { "enabled": true, "leadMinutes": [1440, 60], "nudgeMinutes": [720, 360] }
   // leadMinutes  = minutes-before-start to remind people who are GOING;
   // nudgeMinutes = LIST of minutes-before to nudge non-responders ([] = none).
   // A legacy scalar nudgeMinutes (number|null) from the pre-multi-nudge version
   // is still accepted and coerced by parseReminderConfig. null column = defaults.
-  reminderConfig Json?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  reminderConfig           Json?
+  // When true, a valid calendar share link serves this team's calendar
+  // READ-ONLY to anonymous visitors (no sign-in required). Off by default:
+  // links route, they don't grant access. Flipping it off re-locks every
+  // outstanding link instantly (checked fresh at resolve time). Distinct from
+  // DashboardConfig.shareIsPublic — the calendar share is its own subsystem.
+  calendarShareIsPublic    Boolean            @default(false)
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
 
-  guild         Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
-  leader        User?                @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
-  pendingLeader Character?           @relation("RaidTeamPendingLeader", fields: [pendingLeaderCharacterId], references: [id], onDelete: SetNull)
-  memberships   RaidTeamMembership[]
-  dashboards    DashboardConfig[]
-  raidEventSeries RaidEventSeries[]
-  raidEvents      RaidEvent[]
+  guild              Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  leader             User?                @relation("RaidTeamLeader", fields: [leaderUserId], references: [id], onDelete: SetNull)
+  pendingLeader      Character?           @relation("RaidTeamPendingLeader", fields: [pendingLeaderCharacterId], references: [id], onDelete: SetNull)
+  memberships        RaidTeamMembership[]
+  dashboards         DashboardConfig[]
+  raidEventSeries    RaidEventSeries[]
+  raidEvents         RaidEvent[]
   discordIntegration DiscordIntegration?
-  recruitmentForms RecruitmentForm[]
+  recruitmentForms   RecruitmentForm[]
 
   @@unique([guildId, slug])
   @@index([leaderUserId])
@@ -571,30 +577,30 @@ model ProfessionSnapshot {
 }
 
 model MplusSnapshot {
-  id            String         @id @default(cuid())
-  characterId   String
-  capturedAt    DateTime       @default(now())
-  source        SnapshotSource
-  sourceHash    String
-  seasonId      Int
-  currentRating Decimal?       @db.Decimal(8, 2)
-  weeklyHighest Int?
+  id                   String         @id @default(cuid())
+  characterId          String
+  capturedAt           DateTime       @default(now())
+  source               SnapshotSource
+  sourceHash           String
+  seasonId             Int
+  currentRating        Decimal?       @db.Decimal(8, 2)
+  weeklyHighest        Int?
   // Exact count of M+ completions since the weekly reset (repeats included),
   // capped-accurate in the 0–8 band that drives Great Vault slot unlocks.
   // null = not yet computed (pre-migration rows).
-  weeklyRunCount Int?
+  weeklyRunCount       Int?
   // Raider.IO current-season M+ score breakdown (the canonical community
   // number): { all, dps, healer, tank, spec_0.. } — null if RIO unavailable.
-  rioScore      Json?
+  rioScore             Json?
   // Raider.IO PREVIOUS-season overall score + its season slug — the
   // season-over-season churn signal for the engagement_pulse widget. Slug
   // kept because "previous" can cross an expansion boundary (TWW S3 →
   // Midnight S1), where lower scores are structural, not disengagement.
-  previousSeasonRating Decimal? @db.Decimal(8, 2)
+  previousSeasonRating Decimal?       @db.Decimal(8, 2)
   previousSeasonSlug   String?
-  runsThisWeek  Json
-  rawPayload    Json
-  createdAt     DateTime       @default(now())
+  runsThisWeek         Json
+  rawPayload           Json
+  createdAt            DateTime       @default(now())
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
@@ -603,20 +609,20 @@ model MplusSnapshot {
 }
 
 model RaidSnapshot {
-  id          String         @id @default(cuid())
-  characterId String
-  capturedAt  DateTime       @default(now())
-  source      SnapshotSource
-  sourceHash  String
-  expansionId Int?
-  tierId      Int?
-  completions Json
+  id             String         @id @default(cuid())
+  characterId    String
+  capturedAt     DateTime       @default(now())
+  source         SnapshotSource
+  sourceHash     String
+  expansionId    Int?
+  tierId         Int?
+  completions    Json
   // Raider.IO season-cumulative raid_progression for the current raid:
   // { summary, total_bosses, normal_bosses_killed, heroic_bosses_killed,
   //   mythic_bosses_killed } — distinct from `completions` (weekly lockout).
   seasonProgress Json?
-  rawPayload  Json
-  createdAt   DateTime       @default(now())
+  rawPayload     Json
+  createdAt      DateTime       @default(now())
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
@@ -641,23 +647,23 @@ model VaultSnapshot {
 }
 
 model WclParseSnapshot {
-  id          String         @id @default(cuid())
-  characterId String
-  capturedAt  DateTime       @default(now())
-  source      SnapshotSource
-  sourceHash  String
-  zoneId        Int
-  encounterId   Int
-  encounterName String?
-  difficulty    Int
+  id               String         @id @default(cuid())
+  characterId      String
+  capturedAt       DateTime       @default(now())
+  source           SnapshotSource
+  sourceHash       String
+  zoneId           Int
+  encounterId      Int
+  encounterName    String?
+  difficulty       Int
   // Season/partition best percentile for this (encounter,difficulty) —
   // powers the heatmap (current-tier best per boss).
-  percentile    Int?
+  percentile       Int?
   // Best percentile among kills logged in the CURRENT raid week, plus the
   // epoch of that kill's report. Null when there's no logged kill this
   // week. Powers the "current week only" parses widget.
-  weekPercentile  Int?
-  reportStartTime DateTime?
+  weekPercentile   Int?
+  reportStartTime  DateTime?
   // Consistency numbers (parse_consistency widget). Per-encounter season
   // MEDIAN percentile, plus the zone-level best/median performance averages
   // — fetched in the same zoneRankings response we always paid for but
@@ -665,10 +671,10 @@ model WclParseSnapshot {
   medianPercentile Float?
   bestAvg          Float?
   medianAvg        Float?
-  metric        String?
-  reportCode    String?
-  rawPayload    Json
-  createdAt     DateTime       @default(now())
+  metric           String?
+  reportCode       String?
+  rawPayload       Json
+  createdAt        DateTime       @default(now())
 
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
@@ -682,30 +688,30 @@ model WclParseSnapshot {
 // tables at request time. Reports re-fetch while `revision` keeps changing
 // or until 48h after the report ends, then freeze forever.
 model WclReport {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  guildId   String
+  id              String    @id @default(cuid())
+  code            String    @unique
+  guildId         String
   // The report's own zone id (from Report.zone) — never hard-coded so a
   // mid-season raid addition (e.g. Sporefall, possibly a NEW zone id) keeps
   // working without a code change.
-  zoneId    Int?
+  zoneId          Int?
   // The WCL guild id this report was DISCOVERED under (the team/guild log
   // source). Null = member-parse-swept (found via a member's rank report
   // codes, not a guild listing) — those are shared guild-wide and gated to
   // teams by roster participation at read time.
-  wclGuildId Int?
-  title     String?
-  startTime DateTime
-  endTime   DateTime
-  revision  Int
-  frozen    Boolean  @default(false)
-  fetchedAt DateTime
+  wclGuildId      Int?
+  title           String?
+  startTime       DateTime
+  endTime         DateTime
+  revision        Int
+  frozen          Boolean   @default(false)
+  fetchedAt       DateTime
   // When the deaths layer was last fetched for this report (any result, incl.
   // zero deaths). Null = never attempted — distinguishes a genuinely
   // death-free report from an un-backfilled one so the backfill sweep doesn't
   // re-fetch death-free reports forever.
   deathsFetchedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   guild  Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
   fights WclFight[]
@@ -719,25 +725,25 @@ model WclReport {
 // (killType: Encounters + keystoneLevel filter). Fight rows are replaced
 // wholesale whenever their report is re-fetched (live logs grow).
 model WclFight {
-  id          String   @id @default(cuid())
-  reportCode  String
-  fightId     Int
-  encounterId Int
-  difficulty  Int
-  kill        Boolean
-  size        Int?
+  id                      String   @id @default(cuid())
+  reportCode              String
+  fightId                 Int
+  encounterId             Int
+  difficulty              Int
+  kill                    Boolean
+  size                    Int?
   // Boss HP % remaining at the end of the pull (0 on kills).
-  bossPct     Float?
+  bossPct                 Float?
   // Overall fight % remaining incl. phase weighting — the default Y axis.
-  fightPct    Float?
-  lastPhase   Int?
+  fightPct                Float?
+  lastPhase               Int?
   lastPhaseIsIntermission Boolean?
   // Absolute wall-clock pull window (report epoch + fight offsets).
-  startAt    DateTime
-  endAt      DateTime
-  durationMs Int
+  startAt                 DateTime
+  endAt                   DateTime
+  durationMs              Int
   // Report-local actor ids present in the pull (joins to WclReportActor).
-  friendlyPlayerIds Int[] @default([])
+  friendlyPlayerIds       Int[]    @default([])
 
   report WclReport @relation(fields: [reportCode], references: [code], onDelete: Cascade)
 
@@ -770,38 +776,38 @@ model WclReportActor {
 // with its parent report, exactly like WclFight (live logs grow). Ordering
 // within a (reportCode, fightId) by `deathOrder` gives first/early-death rank.
 model WclFightDeath {
-  id          String  @id @default(cuid())
-  reportCode  String
-  fightId     Int
-  encounterId Int
-  difficulty  Int
+  id                        String    @id @default(cuid())
+  reportCode                String
+  fightId                   Int
+  encounterId               Int
+  difficulty                Int
   // The fight's kill status — kill-pull deaths are kept separate from wipes.
-  kill        Boolean
+  kill                      Boolean
   // Report-local actor ids (join WclReportActor.actorId); characterId is the
   // resolved roster join (null = unmatched, mirrors WclReportActor).
-  targetActorId        Int
-  characterId          String?
-  killerActorId        Int?
-  killingAbilityGameId Int?
+  targetActorId             Int
+  characterId               String?
+  killerActorId             Int?
+  killingAbilityGameId      Int?
   // Killing-ability display name from the table drill-down (nullable: the
   // table call is best-effort and never blocks the events spine).
-  killingAbilityName   String?
+  killingAbilityName        String?
   // Absolute wall-clock (report epoch + event timestamp) + the 0-based index
   // within the pull by ascending timestamp (precomputed so the read is pure).
-  deathAt     DateTime
-  deathOrder  Int
+  deathAt                   DateTime
+  deathOrder                Int
   // Overkill (killing blow minus remaining HP) from the table; null if
   // unmatched. BigInt — overkill can exceed 2^31 on big hits.
-  overkill    BigInt?
+  overkill                  BigInt?
   // Battle-rez (combat resurrection) economy: if this death was followed by a
   // rez of the SAME target later in the SAME pull, when + who cast it + which
   // rez spell. Null = stayed dead. Set by the GRS rez pass matching each
   // `events(dataType: Casts)` combat-rez to the most-recent prior unmatched
   // death of its target. A rez with no later re-death of that target = a
   // SUCCESSFUL rez (the brez-efficiency signal), tracked at read time.
-  rezzedAt         DateTime?
-  rezzerActorId    Int?
-  rezAbilityGameId Int?
+  rezzedAt                  DateTime?
+  rezzerActorId             Int?
+  rezAbilityGameId          Int?
   // Cooldown-usage layer (cooldown_usage widget). For each death we record
   // whether the dying player had a PERSONAL defensive buff active at the moment
   // of death, and the most-recent personal defensive CAST before the death this
@@ -956,21 +962,21 @@ model SyncRun {
 // ──────────────────────────────────────────────────────────────────────────────
 
 model DashboardConfig {
-  id          String             @id @default(cuid())
-  raidTeamId  String
+  id                      String             @id @default(cuid())
+  raidTeamId              String
   ownerUserId             String?
   pendingOwnerCharacterId String?
-  name        String
-  slug        String
-  visibility  RaidTeamVisibility @default(TEAM)
+  name                    String
+  slug                    String
+  visibility              RaidTeamVisibility @default(TEAM)
   // When true, a valid share link serves this dashboard READ-ONLY to
   // anonymous visitors (no sign-in / guild membership required). Off by
   // default: share links route, they don't grant access. Flipping it off
   // re-locks every outstanding link instantly (checked at resolve time).
-  shareIsPublic Boolean          @default(false)
-  layout      Json
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  shareIsPublic           Boolean            @default(false)
+  layout                  Json
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
   raidTeam     RaidTeam   @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
   owner        User?      @relation("DashboardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -1028,27 +1034,30 @@ enum OutboxStatus {
 /// across DST. A daily materializer turns this into concrete RaidEvent rows for
 /// a rolling window.
 model RaidEventSeries {
-  id              String    @id @default(cuid())
-  raidTeamId      String
-  title           String
-  difficulty      String // "Mythic" | "Heroic" | "Normal" | "LFR"
-  byday           String[] // RFC5545 BYDAY, e.g. ["TU","WE"]
-  startLocal      String // wall-clock "19:00" in `timezone`
-  durationMin     Int
-  timezone        String // IANA, e.g. "Europe/London"
-  raidSize        Int?
-  notes           String?
-  // Raid-lead targeting: which raid ZONES (Blizzard journal-instance ids, max
-  // 2) + optional bosses (encounter ids) this series aims at. Drives the
-  // month-view zone-art day backgrounds. Empty = untargeted.
-  targetZoneIds      Int[] @default([])
-  targetEncounterIds Int[] @default([])
-  startsOn        DateTime?
-  endsOn          DateTime? // null = open-ended; materializer caps to window
-  createdByUserId String?
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  raidTeamId         String
+  title              String
+  difficulty         String // "Mythic" | "Heroic" | "Normal" | "LFR"
+  byday              String[] // RFC5545 BYDAY, e.g. ["TU","WE"]
+  startLocal         String // wall-clock "19:00" in `timezone`
+  durationMin        Int
+  timezone           String // IANA, e.g. "Europe/London"
+  raidSize           Int?
+  notes              String?
+  // Raid-lead targeting. `targetOrder` (JSON ordered list of {type,id,zoneId})
+  // is authoritative: the planned kill order of whole zones and/or single
+  // bosses. The flat arrays below are DERIVED from it for back-compat; null
+  // targetOrder = a pre-migration row (readers fall back to the arrays). Drives
+  // the month-view zone-art (first two entries). Empty = untargeted.
+  targetOrder        Json?
+  targetZoneIds      Int[]     @default([])
+  targetEncounterIds Int[]     @default([])
+  startsOn           DateTime?
+  endsOn             DateTime? // null = open-ended; materializer caps to window
+  createdByUserId    String?
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   raidTeam RaidTeam    @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
   events   RaidEvent[]
@@ -1059,30 +1068,33 @@ model RaidEventSeries {
 /// A concrete raid occurrence — owns a stable id that signups, a Discord
 /// message id, an outbox stream and a version hang off.
 model RaidEvent {
-  id           String          @id @default(cuid())
-  raidTeamId   String
-  seriesId     String? // null = one-off
-  title        String
-  difficulty   String
-  raidSize     Int? // Mythic-Flex 15–25 (optional)
-  startsAt     DateTime        @db.Timestamptz(6) // resolved UTC instant (sort/display/conflict)
-  durationMin  Int
-  timezone     String // resolved-from tz (so DST changes can re-derive)
-  localTime    String // "19:00" wall-clock the occurrence was derived from
-  occurrenceDate String // "2026-06-16" local date — STABLE re-derive/materialize key
-  notes        String?
-  // Raid-lead targeting: which raid ZONES (Blizzard journal-instance ids, max
-  // 2) + optional bosses (encounter ids) this occurrence aims at. Drives the
-  // month-view zone-art day backgrounds. Empty = untargeted.
-  targetZoneIds      Int[] @default([])
-  targetEncounterIds Int[] @default([])
-  status       RaidEventStatus @default(PLANNED)
-  rosterLockedAt DateTime?
+  id                 String          @id @default(cuid())
+  raidTeamId         String
+  seriesId           String? // null = one-off
+  title              String
+  difficulty         String
+  raidSize           Int? // Mythic-Flex 15–25 (optional)
+  startsAt           DateTime        @db.Timestamptz(6) // resolved UTC instant (sort/display/conflict)
+  durationMin        Int
+  timezone           String // resolved-from tz (so DST changes can re-derive)
+  localTime          String // "19:00" wall-clock the occurrence was derived from
+  occurrenceDate     String // "2026-06-16" local date — STABLE re-derive/materialize key
+  notes              String?
+  // Raid-lead targeting. `targetOrder` (JSON ordered list of {type,id,zoneId})
+  // is authoritative: the planned kill order of whole zones and/or single
+  // bosses. The flat arrays below are DERIVED from it for back-compat; null
+  // targetOrder = a pre-migration row (readers fall back to the arrays). Drives
+  // the month-view zone-art (first two entries). Empty = untargeted.
+  targetOrder        Json?
+  targetZoneIds      Int[]           @default([])
+  targetEncounterIds Int[]           @default([])
+  status             RaidEventStatus @default(PLANNED)
+  rosterLockedAt     DateTime?
   // When true this occurrence was edited (or cancelled) for itself alone — the
   // materializer and series-level edits MUST NOT overwrite or resurrect it.
   // One-off events (seriesId = null) are unaffected by this flag.
-  seriesOverride Boolean        @default(false)
-  createdByUserId String?
+  seriesOverride     Boolean         @default(false)
+  createdByUserId    String?
 
   // Per-surface delivery linkage (Discord edit-in-place; filled in Phase 2)
   discordGuildId    String?
@@ -1094,9 +1106,9 @@ model RaidEvent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  raidTeam RaidTeam         @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
-  series   RaidEventSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
-  signups  EventSignup[]
+  raidTeam  RaidTeam         @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  series    RaidEventSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  signups   EventSignup[]
   reminders SentReminder[]
 
   @@unique([seriesId, occurrenceDate]) // stable materialization key (NOT startsAt)
@@ -1351,9 +1363,9 @@ model RecruitmentForm {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
-  guild       Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
-  raidTeam    RaidTeam?        @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
-  createdBy   User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  guild       Guild                         @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  raidTeam    RaidTeam?                     @relation(fields: [raidTeamId], references: [id], onDelete: Cascade)
+  createdBy   User?                         @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   submissions FormSubmission[]
   reviewers   FormReviewer[]
   notifyPrefs RecruitmentNotificationPref[]
@@ -1364,31 +1376,31 @@ model RecruitmentForm {
 }
 
 model FormSubmission {
-  id              String                  @id @default(cuid())
-  formId          String
+  id               String                  @id @default(cuid())
+  formId           String
   // Which schema version rendered this submission (stable inbox rendering).
-  schemaVersion   Int
-  status          RecruitSubmissionStatus @default(NEW)
+  schemaVersion    Int
+  status           RecruitSubmissionStatus @default(NEW)
   // A DRAFT (browser save-and-resume) is never reviewed and never notifies.
-  isDraft         Boolean                 @default(false)
+  isDraft          Boolean                 @default(false)
   // Anonymous applicants have null; a signed-in/Discord-linked applicant is
   // attributed.
-  applicantUserId String?
+  applicantUserId  String?
   // Denormalized answers snapshot (rendered against schemaVersion) for the
   // single-view; FormAnswer rows power the inbox table/filter/export.
-  answersJson     Json
+  answersJson      Json
   // A short label (applicant name/BattleTag) pulled from a designated field,
   // for inbox lists + notifications.
-  applicantLabel  String?
+  applicantLabel   String?
   // Hashed submitter IP for rate-limit / soft-dedup — never the raw IP.
-  ipHash          String?
-  submittedAt     DateTime?
+  ipHash           String?
+  submittedAt      DateTime?
   // Discord relay linkage — the per-applicant embed + (when voting is on) the
   // vote buttons, edited in place (mirrors RaidEvent's discordMessageId).
   discordChannelId String?
   discordMessageId String?
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   form      RecruitmentForm     @relation(fields: [formId], references: [id], onDelete: Cascade)
   applicant User?               @relation(fields: [applicantUserId], references: [id], onDelete: SetNull)
@@ -1537,15 +1549,15 @@ model AdminSettings {
   id String @id @default("singleton")
 
   // Retention — DB-enforced by the runRetentionPrune() worker sweep:
-  auditLogRetentionDays Int? @default(90) // AuditLog (security/audit trail)
-  syncRunRetentionDays  Int? @default(14) // SyncRun (ingestion job history)
+  auditLogRetentionDays  Int? @default(90) // AuditLog (security/audit trail)
+  syncRunRetentionDays   Int? @default(14) // SyncRun (ingestion job history)
   // Retention — Loki Caddy access/traffic logs: enforced immediately via Loki's
   // delete API + written into the Loki config so the compactor takes over on
   // next restart (then the API call is skipped):
   accessLogRetentionDays Int? @default(30)
   // Retention — Prometheus metrics: written to config for next deploy (startup
   // flag; no runtime API):
-  metricsRetentionDays Int? @default(15)
+  metricsRetentionDays   Int? @default(15)
 
   // Security-tab thresholds (what counts as a concerning spike to highlight):
   loginFailureAlertThreshold Int @default(20) // failures within the window

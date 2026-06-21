@@ -25,16 +25,27 @@ const LOOKAHEAD_MINUTES = REMINDER_LOOKAHEAD_MINUTES;
 
 const GOING_STATES = new Set(["CONFIRM", "TENTATIVE", "LATE"]);
 
-/** Active team members, by user id (a person, not a character). */
-async function teamMemberUserIds(
+/**
+ * Active team members → their character name, keyed by user id (a person).
+ * One name per user: the FIRST active membership ordered by membership id —
+ * the SAME "primary character" tie-break resolveCharacterId uses in calendar.ts
+ * — so {{ char_name }} greets a raider by the name the rest of the calendar
+ * treats as theirs. The keys also serve as the team's member-user-id set.
+ */
+async function teamMemberCharMap(
   db: ExtendedPrismaClient,
   raidTeamId: string,
-): Promise<Set<string>> {
+): Promise<Map<string, string>> {
   const ms = await db.raidTeamMembership.findMany({
     where: { raidTeamId, isActive: true },
-    select: { character: { select: { userId: true } } },
+    select: { character: { select: { userId: true, name: true } } },
+    orderBy: { id: "asc" },
   });
-  return new Set(ms.map((m) => m.character.userId));
+  const map = new Map<string, string>();
+  for (const m of ms) {
+    if (!map.has(m.character.userId)) map.set(m.character.userId, m.character.name);
+  }
+  return map;
 }
 
 export async function runReminderSweep(
@@ -62,11 +73,24 @@ export async function runReminderSweep(
     },
   });
 
+  // Per-run memo of each team's user→character-name map (one query per team,
+  // reused across that team's events + every due reminder).
+  const teamMapCache = new Map<string, Map<string, string>>();
+  const getTeamMap = async (raidTeamId: string): Promise<Map<string, string>> => {
+    let m = teamMapCache.get(raidTeamId);
+    if (!m) {
+      m = await teamMemberCharMap(db, raidTeamId);
+      teamMapCache.set(raidTeamId, m);
+    }
+    return m;
+  };
+
   let sent = 0;
   for (const e of events) {
     const cfg = parseReminderConfig(e.raidTeam.reminderConfig);
     const due = dueReminders(cfg, e.startsAt.getTime(), now.getTime());
     if (due.length === 0) continue;
+    const teamMap = await getTeamMap(e.raidTeamId);
 
     for (const d of due) {
       // Resolve the audience to a set of user ids.
@@ -76,9 +100,8 @@ export async function runReminderSweep(
           e.signups.filter((s) => GOING_STATES.has(s.state)).map((s) => s.userId),
         );
       } else {
-        const members = await teamMemberUserIds(db, e.raidTeamId);
         const responded = new Set(e.signups.map((s) => s.userId));
-        recipientIds = new Set([...members].filter((u) => !responded.has(u)));
+        recipientIds = new Set([...teamMap.keys()].filter((u) => !responded.has(u)));
       }
       if (recipientIds.size === 0) continue;
 
@@ -110,6 +133,9 @@ export async function runReminderSweep(
             timezone: e.timezone,
             audience: d.audience,
             eventUrl: `${env.APP_URL}/guild/${e.raidTeam.guildId}/team/${e.raidTeam.id}/calendar?event=${e.id}`,
+            charName: teamMap.get(u.id),
+            nudgeSubjectTemplate: cfg.nudgeTemplate?.subject,
+            nudgeBodyTemplate: cfg.nudgeTemplate?.body,
           });
           sent++;
         } catch (err) {

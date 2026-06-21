@@ -16,7 +16,17 @@ export type ReminderConfig = {
   leadMinutes: number[];
   /** Minutes-before to nudge non-responders. Empty = no nudges. */
   nudgeMinutes: number[];
+  /**
+   * Optional custom nudge email. Omitted (or empty fields) = use the built-in
+   * default copy (see src/lib/calendar/email-template.ts). Subject/body may
+   * contain {{ placeholder }} tokens resolved at send time.
+   */
+  nudgeTemplate?: { subject?: string; body?: string };
 };
+
+/** Caps for the custom nudge email (also enforced server-side in zod). */
+export const NUDGE_SUBJECT_MAX = 200;
+export const NUDGE_BODY_MAX = 4000;
 
 export const DEFAULT_REMINDER_CONFIG: ReminderConfig = {
   enabled: true,
@@ -80,7 +90,28 @@ export function parseReminderConfig(raw: unknown): ReminderConfig {
       : typeof r.nudgeMinutes === "number" && Number.isFinite(r.nudgeMinutes) && r.nudgeMinutes > 0
         ? [Math.round(r.nudgeMinutes)]
         : []; // null or garbage → no nudges
-  return { enabled, leadMinutes, nudgeMinutes };
+  // PRESERVE the custom nudge email across normalization (this function is the
+  // round-trip on every settings save; an un-preserved key would silently
+  // vanish). Trim + length-cap; drop entirely if both fields are empty.
+  const nudgeTemplate = parseNudgeTemplate(r.nudgeTemplate);
+  return nudgeTemplate
+    ? { enabled, leadMinutes, nudgeMinutes, nudgeTemplate }
+    : { enabled, leadMinutes, nudgeMinutes };
+}
+
+/** Coerce a stored/user template into a clean {subject?,body?} or undefined. */
+function parseNudgeTemplate(
+  raw: unknown,
+): { subject?: string; body?: string } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  const subject =
+    typeof t.subject === "string" ? t.subject.trim().slice(0, NUDGE_SUBJECT_MAX) : "";
+  const body = typeof t.body === "string" ? t.body.trim().slice(0, NUDGE_BODY_MAX) : "";
+  const out: { subject?: string; body?: string } = {};
+  if (subject) out.subject = subject;
+  if (body) out.body = body;
+  return out.subject || out.body ? out : undefined;
 }
 
 export type DueReminder =

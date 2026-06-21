@@ -1,14 +1,53 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { RaidTargetItem } from "@/lib/calendar/raid-target";
 
 type Difficulty = "Mythic" | "Heroic" | "Normal" | "LFR";
+
+/** A targetable raid as returned by `calendar.targetableZones`. */
+type TargetZone = {
+  blizzardInstanceId: number;
+  name: string;
+  encounters: { id: number; name: string }[];
+};
+
+/**
+ * Rebuild an ordered target list from the legacy flat arrays — for editing an
+ * event saved BEFORE `targetOrder` existed. Needs the zone dataset to map a
+ * boss to its raid. A targeted zone with no selected boss becomes a whole-raid
+ * entry; zones keep their array order, bosses their in-raid order.
+ */
+function synthesizeOrder(
+  zoneIds: number[],
+  encounterIds: number[],
+  zones: TargetZone[],
+): RaidTargetItem[] {
+  const items: RaidTargetItem[] = [];
+  const encSet = new Set(encounterIds);
+  for (const zid of zoneIds) {
+    const zone = zones.find((z) => z.blizzardInstanceId === zid);
+    const bosses = zone?.encounters.filter((b) => encSet.has(b.id)) ?? [];
+    if (bosses.length > 0) {
+      for (const b of bosses) items.push({ type: "encounter", id: b.id, zoneId: zid });
+    } else {
+      items.push({ type: "zone", id: zid, zoneId: zid });
+    }
+  }
+  // Defensive: a selected boss whose zone wasn't listed in zoneIds.
+  for (const eid of encounterIds) {
+    if (items.some((it) => it.type === "encounter" && it.id === eid)) continue;
+    const zone = zones.find((z) => z.encounters.some((b) => b.id === eid));
+    if (zone) items.push({ type: "encounter", id: eid, zoneId: zone.blizzardInstanceId });
+  }
+  return items;
+}
 
 const WEEKDAYS: { token: string; label: string }[] = [
   { token: "MO", label: "Mon" },
@@ -35,6 +74,9 @@ type Initial = {
   durationMin: number;
   difficulty: Difficulty;
   notes: string;
+  // Authoritative ordered target list. The legacy flat arrays are kept so a
+  // pre-`targetOrder` event can be re-hydrated into the order on edit.
+  targetOrder: RaidTargetItem[];
   targetZoneIds: number[];
   targetEncounterIds: number[];
 };
@@ -46,6 +88,7 @@ const EMPTY: Initial = {
   durationMin: 180,
   difficulty: "Mythic",
   notes: "",
+  targetOrder: [],
   targetZoneIds: [],
   targetEncounterIds: [],
 };
@@ -124,6 +167,7 @@ function Loader({
       durationMin: e.durationMin,
       difficulty: e.difficulty as Difficulty,
       notes: e.notes ?? "",
+      targetOrder: e.targetOrder ?? [],
       targetZoneIds: e.targetZoneIds ?? [],
       targetEncounterIds: e.targetEncounterIds ?? [],
     };
@@ -180,24 +224,101 @@ function Fields({
   const [durationMin, setDurationMin] = useState(initial.durationMin);
   const [difficulty, setDifficulty] = useState<Difficulty>(initial.difficulty);
   const [notes, setNotes] = useState(initial.notes);
-  // Raid-lead targeting: up to 2 zones; selecting one reveals its boss list.
-  const [targetZoneIds, setTargetZoneIds] = useState<number[]>(initial.targetZoneIds);
-  const [targetEncounterIds, setTargetEncounterIds] = useState<number[]>(
-    initial.targetEncounterIds,
-  );
+  // Raid-lead targeting: an ORDERED list of whole raids and/or single bosses
+  // (the planned kill order). Built via the "Add raid" lightbox below.
   const zonesQ = api.calendar.targetableZones.useQuery({ raidTeamId });
   const zones = zonesQ.data?.zones ?? [];
+  const [order, setOrder] = useState<RaidTargetItem[]>(initial.targetOrder);
 
-  const toggleZone = (id: number) =>
-    setTargetZoneIds((cur) => {
-      if (cur.includes(id)) return cur.filter((z) => z !== id);
-      if (cur.length >= 2) return cur; // cap at 2
-      return [...cur, id];
-    });
-  const toggleEncounter = (id: number) =>
-    setTargetEncounterIds((cur) =>
-      cur.includes(id) ? cur.filter((e) => e !== id) : [...cur, id],
+  // Re-hydrate a pre-`targetOrder` event: synthesize the order from its legacy
+  // flat arrays once the zone dataset (needed to map a boss → its raid) loads.
+  // `hydrated` starts true when the event already had an order, so this only
+  // ever fires for old events and runs once.
+  const [legacyZoneIds] = useState(initial.targetZoneIds);
+  const [legacyEncounterIds] = useState(initial.targetEncounterIds);
+  const [hydrated, setHydrated] = useState(initial.targetOrder.length > 0);
+  // Hydrate a pre-`targetOrder` event the first render after the zone dataset
+  // loads, by adjusting state DURING render (React's sanctioned "derive from
+  // changed inputs" pattern — avoids a setState-in-effect cascade). Guarded by
+  // `hydrated`, so it runs at most once.
+  if (!hydrated && zones.length > 0) {
+    setHydrated(true);
+    if (
+      order.length === 0 &&
+      (legacyZoneIds.length > 0 || legacyEncounterIds.length > 0)
+    ) {
+      setOrder(synthesizeOrder(legacyZoneIds, legacyEncounterIds, zones));
+    }
+  }
+
+  // "Add raid" picker — a self-contained lightbox (the email-editor pattern): a
+  // nested shared Modal's backdrop/Escape would also dismiss this whole form.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickZone, setPickZone] = useState<number | null>(null);
+  const [pickBosses, setPickBosses] = useState<number[]>([]);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setPickerOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [pickerOpen]);
+
+  const openPicker = () => {
+    setPickZone(null);
+    setPickBosses([]);
+    setPickerOpen(true);
+  };
+  const togglePickBoss = (id: number) =>
+    setPickBosses((cur) =>
+      cur.includes(id) ? cur.filter((b) => b !== id) : [...cur, id],
     );
+  const confirmPick = () => {
+    if (pickZone === null) return;
+    const zone = zones.find((z) => z.blizzardInstanceId === pickZone);
+    setOrder((cur) => {
+      const next = [...cur];
+      if (pickBosses.length === 0) {
+        // Whole raid — a single entry (deduped).
+        if (!next.some((it) => it.type === "zone" && it.zoneId === pickZone)) {
+          next.push({ type: "zone", id: pickZone, zoneId: pickZone });
+        }
+      } else {
+        // Selected bosses in the raid's own encounter order (deduped).
+        for (const b of zone?.encounters ?? []) {
+          if (!pickBosses.includes(b.id)) continue;
+          if (next.some((it) => it.type === "encounter" && it.id === b.id)) continue;
+          next.push({ type: "encounter", id: b.id, zoneId: pickZone });
+        }
+      }
+      return next;
+    });
+    setPickerOpen(false);
+  };
+
+  const moveItem = (idx: number, dir: -1 | 1) =>
+    setOrder((cur) => {
+      const j = idx + dir;
+      if (j < 0 || j >= cur.length) return cur;
+      const next = [...cur];
+      [next[idx], next[j]] = [next[j]!, next[idx]!];
+      return next;
+    });
+  const removeItem = (idx: number) =>
+    setOrder((cur) => cur.filter((_, i) => i !== idx));
+
+  // Human label for an ordered entry, resolved from the zone dataset.
+  const labelFor = (item: RaidTargetItem): string => {
+    const zone = zones.find((z) => z.blizzardInstanceId === item.zoneId);
+    const zoneName = zone?.name ?? `Raid ${item.zoneId}`;
+    if (item.type === "zone") return `${zoneName} — whole raid`;
+    const boss = zone?.encounters.find((b) => b.id === item.id);
+    return `${zoneName}: ${boss?.name ?? `Boss ${item.id}`}`;
+  };
 
   // Recurrence (create-only). Editing a single occurrence never recurs.
   const [repeat, setRepeat] = useState(false);
@@ -257,19 +378,6 @@ function Fields({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !date) return;
-    // Keep only boss selections that belong to a currently-targeted raid —
-    // deselecting a raid must not strand its bosses on the event.
-    const validEncounterIds = new Set(
-      targetZoneIds.flatMap(
-        (zid) =>
-          zones
-            .find((z) => z.blizzardInstanceId === zid)
-            ?.encounters.map((e) => e.id) ?? [],
-      ),
-    );
-    const encounters = targetEncounterIds.filter((id) =>
-      validEncounterIds.has(id),
-    );
     if (editEventId) {
       update.mutate({
         eventId: editEventId,
@@ -279,8 +387,12 @@ function Fields({
         durationMin,
         difficulty,
         notes: notes.trim() || null,
-        targetZoneIds,
-        targetEncounterIds: encounters,
+        // Only send targetOrder once the order has HYDRATED. Editing a
+        // pre-targetOrder event before the zone dataset loads (or when it's
+        // unavailable — unreleased tier / API down) leaves `order` empty; the
+        // server leaves targets untouched when targetOrder is omitted, so this
+        // prevents a save from silently wiping the event's existing targets.
+        ...(hydrated ? { targetOrder: order } : {}),
       });
     } else if (recurring) {
       if (byday.length === 0) return;
@@ -294,8 +406,7 @@ function Fields({
         notes: notes.trim() || undefined,
         startDate: date,
         endDate: endDate || null,
-        targetZoneIds,
-        targetEncounterIds: encounters,
+        targetOrder: order,
       });
     } else {
       create.mutate({
@@ -306,8 +417,7 @@ function Fields({
         durationMin,
         difficulty,
         notes: notes.trim() || undefined,
-        targetZoneIds,
-        targetEncounterIds: encounters,
+        targetOrder: order,
       });
     }
   };
@@ -377,67 +487,58 @@ function Fields({
       {zones.length > 0 && (
         <div className="border-border space-y-2 rounded-md border p-3">
           <div className="flex items-center justify-between">
-            <Label>Target raid {targetZoneIds.length > 0 ? "" : "(optional)"}</Label>
-            <span className="text-muted-foreground text-xs">pick up to 2</span>
+            <Label>Target raid {order.length > 0 ? "" : "(optional)"}</Label>
+            <Button type="button" size="sm" variant="outline" onClick={openPicker}>
+              ＋ Add raid
+            </Button>
           </div>
-          <div className="flex flex-wrap gap-1">
-            {zones.map((z) => {
-              const on = targetZoneIds.includes(z.blizzardInstanceId);
-              const atCap = !on && targetZoneIds.length >= 2;
-              return (
-                <button
-                  key={z.blizzardInstanceId}
-                  type="button"
-                  onClick={() => toggleZone(z.blizzardInstanceId)}
-                  aria-pressed={on}
-                  disabled={atCap}
-                  className={
-                    "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 " +
-                    (on
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border text-muted-foreground hover:bg-muted")
-                  }
+          {order.length === 0 ? (
+            <p className="text-muted-foreground text-xs">
+              No target set. Add a raid (or specific bosses) to set the planned
+              order — the first two entries drive the month-view art.
+            </p>
+          ) : (
+            <ol className="space-y-1">
+              {order.map((item, idx) => (
+                <li
+                  key={`${item.type}-${item.id}-${idx}`}
+                  className="border-border bg-muted/30 flex items-center gap-2 rounded-md border px-2 py-1 text-xs"
                 >
-                  {z.name}
-                </button>
-              );
-            })}
-          </div>
-          {targetZoneIds.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-muted-foreground text-xs">Bosses (optional)</p>
-              {/* One boss group per TARGETED raid — each raid shows only its
-                  own bosses (labelled when more than one raid is targeted). */}
-              {targetZoneIds.map((zid) => {
-                const zone = zones.find((z) => z.blizzardInstanceId === zid);
-                if (!zone || zone.encounters.length === 0) return null;
-                return (
-                  <div key={zid} className="space-y-0.5">
-                    {targetZoneIds.length > 1 && (
-                      <p className="text-muted-foreground text-[10px] font-medium uppercase">
-                        {zone.name}
-                      </p>
-                    )}
-                    <div className="flex flex-wrap gap-x-3 gap-y-1">
-                      {zone.encounters.map((b) => (
-                        <label
-                          key={b.id}
-                          className="flex items-center gap-1.5 text-xs"
-                        >
-                          <input
-                            type="checkbox"
-                            className="accent-primary h-3.5 w-3.5"
-                            checked={targetEncounterIds.includes(b.id)}
-                            onChange={() => toggleEncounter(b.id)}
-                          />
-                          {b.name}
-                        </label>
-                      ))}
-                    </div>
+                  <span className="text-muted-foreground w-5 shrink-0 tabular-nums">
+                    {idx + 1}.
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{labelFor(item)}</span>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => moveItem(idx, -1)}
+                      disabled={idx === 0}
+                      aria-label="Move up"
+                      className="border-border hover:bg-muted rounded border px-1 leading-none disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveItem(idx, 1)}
+                      disabled={idx === order.length - 1}
+                      aria-label="Move down"
+                      className="border-border hover:bg-muted rounded border px-1 leading-none disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(idx)}
+                      aria-label="Remove"
+                      className="border-border hover:bg-destructive/10 hover:text-destructive rounded border px-1 leading-none"
+                    >
+                      ✕
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                </li>
+              ))}
+            </ol>
           )}
         </div>
       )}
@@ -536,6 +637,102 @@ function Fields({
                 : "Schedule raid"}
         </Button>
       </div>
+
+      {/* "Add raid" lightbox: pick one raid, then optionally specific bosses.
+          Self-contained overlay (z above the form Modal) with a capture-phase
+          Escape so closing it never dismisses the underlying form. */}
+      {pickerOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add a target raid"
+          onMouseDown={(ev) => {
+            if (ev.target === ev.currentTarget) setPickerOpen(false);
+          }}
+        >
+          <div className="border-border bg-card max-h-[85vh] w-full max-w-md space-y-3 overflow-y-auto rounded-lg border p-4 text-sm shadow-2xl">
+            <div>
+              <h2 className="text-base font-semibold">Add a target raid</h2>
+              <p className="text-muted-foreground text-xs">
+                Pick a raid, then optionally tick specific bosses. Leave bosses
+                unticked to target the whole raid.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-muted-foreground text-xs font-medium uppercase">
+                Raid
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {zones.map((z) => {
+                  const on = pickZone === z.blizzardInstanceId;
+                  return (
+                    <button
+                      key={z.blizzardInstanceId}
+                      type="button"
+                      onClick={() => {
+                        setPickZone(z.blizzardInstanceId);
+                        setPickBosses([]);
+                      }}
+                      aria-pressed={on}
+                      className={
+                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors " +
+                        (on
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-muted")
+                      }
+                    >
+                      {z.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {pickZone !== null &&
+              (() => {
+                const zone = zones.find((z) => z.blizzardInstanceId === pickZone);
+                if (!zone || zone.encounters.length === 0) return null;
+                return (
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground text-xs font-medium uppercase">
+                      Bosses (optional)
+                    </p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {zone.encounters.map((b) => (
+                        <label
+                          key={b.id}
+                          className="flex items-center gap-1.5 text-xs"
+                        >
+                          <input
+                            type="checkbox"
+                            className="accent-primary h-3.5 w-3.5"
+                            checked={pickBosses.includes(b.id)}
+                            onChange={() => togglePickBoss(b.id)}
+                          />
+                          {b.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPickerOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={confirmPick} disabled={pickZone === null}>
+                {pickBosses.length > 0
+                  ? `Add ${pickBosses.length} boss${pickBosses.length === 1 ? "" : "es"}`
+                  : "Add raid"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 }

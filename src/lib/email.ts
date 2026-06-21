@@ -4,6 +4,11 @@ import { env } from "@/env";
 import { siteConfig } from "@/lib/site-config";
 import { logger } from "@/lib/logger";
 import { redis } from "@/lib/redis";
+import {
+  DEFAULT_NUDGE_BODY,
+  DEFAULT_NUDGE_SUBJECT,
+  renderNudgeTemplate,
+} from "@/lib/calendar/email-template";
 
 /**
  * SMTP transport built once from env. In dev with no SMTP configured the
@@ -163,6 +168,11 @@ export const sendRaidReminderEmail = async (args: {
   timezone: string;
   audience: "going" | "no-response";
   eventUrl: string;
+  /** Recipient's character name, for the {{ char_name }} placeholder (nudge). */
+  charName?: string;
+  /** Team's custom nudge subject/body; falls back to the built-in default. */
+  nudgeSubjectTemplate?: string;
+  nudgeBodyTemplate?: string;
 }): Promise<void> => {
   let whenLocal: string;
   try {
@@ -178,17 +188,30 @@ export const sendRaidReminderEmail = async (args: {
     whenLocal = args.startsAt.toISOString();
   }
   const isNudge = args.audience === "no-response";
-  const subject = isNudge
-    ? `Please sign up: ${args.title} — ${args.teamName}`
-    : `Reminder: ${args.title} — ${whenLocal}`;
-  const lead = isNudge
-    ? `You haven't responded to an upcoming raid yet — let your team know if you can make it.`
-    : `This is a reminder for your upcoming raid.`;
+  if (isNudge) {
+    // Nudges use the team's custom template (or the built-in default), with
+    // {{ placeholder }} tokens resolved here so the settings preview matches.
+    const vars = {
+      char_name: args.charName ?? "",
+      raid_title: args.title,
+      team_name: args.teamName,
+      local_time: whenLocal,
+      timezone: args.timezone,
+      event_url: args.eventUrl,
+    } as const;
+    await sendMail({
+      to: args.to,
+      subject: renderNudgeTemplate(args.nudgeSubjectTemplate || DEFAULT_NUDGE_SUBJECT, vars),
+      text: renderNudgeTemplate(args.nudgeBodyTemplate || DEFAULT_NUDGE_BODY, vars),
+    });
+    return;
+  }
+  // "Going" reminders keep their fixed copy (not customizable).
   await sendMail({
     to: args.to,
-    subject,
+    subject: `Reminder: ${args.title} — ${whenLocal}`,
     text:
-      `${lead}\n\n` +
+      `This is a reminder for your upcoming raid.\n\n` +
       `${args.title} — ${args.teamName}\n` +
       `When: ${whenLocal} (${args.timezone})\n\n` +
       `Set your attendance here:\n${args.eventUrl}\n`,
