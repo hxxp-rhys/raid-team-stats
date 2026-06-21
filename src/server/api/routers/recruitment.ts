@@ -6,6 +6,7 @@ import { z } from "zod";
 import { env } from "@/env";
 import { redis } from "@/lib/redis";
 import { logger } from "@/lib/logger";
+import { audit } from "@/server/security/audit";
 import {
   formStructureSchema,
   themeSchema,
@@ -279,6 +280,23 @@ export const recruitmentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { form } = await requireFormOfficer(ctx, input.formId);
       await ctx.db.recruitmentForm.delete({ where: { id: form.id } });
+      // Append-only audit trail — a destructive action that cascades away
+      // applicant data. audit() never throws, so a log failure can't break
+      // the delete the user already confirmed.
+      await audit({
+        event: "RECRUITMENT_FORM_DELETED",
+        actorUserId: ctx.session!.user.id,
+        subjectType: "recruitmentForm",
+        subjectId: form.id,
+        ip: ctx.ip ?? null,
+        metadata: {
+          guildId: form.guildId,
+          name: form.name,
+          slug: form.slug,
+          status: form.status,
+          ...(form.raidTeamId ? { raidTeamId: form.raidTeamId } : {}),
+        },
+      });
       return { ok: true };
     }),
 
