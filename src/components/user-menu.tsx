@@ -44,6 +44,7 @@ export function UserMenu({
     { kind: "link", label: "Themes", href: "/settings" },
     { kind: "link", label: "Account", href: "/account" },
     ...(isAdmin ? ([{ kind: "link", label: "Admin", href: "/admin" }] as const) : []),
+    { kind: "link", label: "About", href: "/about" },
     { kind: "divider" },
     {
       kind: "action",
