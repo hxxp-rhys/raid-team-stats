@@ -23,6 +23,21 @@ import {
 
 type Answers = Record<string, unknown>;
 
+/** Compute the form background CSS from its theme (color / image+overlay /
+ *  gradient). Shared by the live applicant form and the in-builder preview. */
+function bgFromTheme(theme: FormTheme): string | undefined {
+  const bgOverlay = theme.background?.overlayOpacity ?? 0.45;
+  if (theme.background?.kind === "image" && theme.background.imageUrl) {
+    // dark overlay layered over the cover image so form text stays legible
+    return `linear-gradient(rgba(0,0,0,${bgOverlay}), rgba(0,0,0,${bgOverlay})), url("${theme.background.imageUrl}") center/cover no-repeat`;
+  }
+  if (theme.background?.kind === "color") return theme.background.color;
+  if (theme.background?.kind === "gradient" && theme.background.gradient) {
+    return `linear-gradient(${theme.background.gradient.angle}deg, ${theme.background.gradient.from}, ${theme.background.gradient.to})`;
+  }
+  return undefined;
+}
+
 export function PublicForm({ guildId, slug }: { guildId: string; slug: string }) {
   const q = api.recruitment.getPublic.useQuery({ guildId, slug });
   const submit = api.recruitment.submit.useMutation();
@@ -57,16 +72,7 @@ export function PublicForm({ guildId, slug }: { guildId: string; slug: string })
     );
   }
 
-  const bgOverlay = theme.background?.overlayOpacity ?? 0.45;
-  const bg =
-    theme.background?.kind === "image" && theme.background.imageUrl
-      ? // dark overlay layered over the cover image so form text stays legible
-        `linear-gradient(rgba(0,0,0,${bgOverlay}), rgba(0,0,0,${bgOverlay})), url("${theme.background.imageUrl}") center/cover no-repeat`
-      : theme.background?.kind === "color"
-        ? theme.background.color
-        : theme.background?.kind === "gradient" && theme.background.gradient
-          ? `linear-gradient(${theme.background.gradient.angle}deg, ${theme.background.gradient.from}, ${theme.background.gradient.to})`
-          : undefined;
+  const bg = bgFromTheme(theme);
   const primary = theme.colors?.primary ?? "#c8a04f";
   const fontFamily = theme.font?.family;
 
@@ -468,6 +474,94 @@ function Card({
       style={{ borderTopColor: primary, borderTopWidth: 3 }}
     >
       {children}
+    </div>
+  );
+}
+
+/**
+ * In-builder PREVIEW of a form, rendered from the CURRENT (possibly unsaved)
+ * structure + theme — NOT fetched from the server. Reuses the exact applicant
+ * Card + FieldInput so the preview matches the live form. Fields are
+ * interactive (so the lead can try them) but submit is inert (visual only).
+ * Renders a CONTAINED shell (no min-h-screen) so it fits inside a modal.
+ */
+export function FormPreview({
+  structure,
+  theme: rawTheme,
+  name,
+}: {
+  structure: FormStructure;
+  theme: unknown;
+  name: string;
+}) {
+  const [answers, setAnswers] = useState<Answers>({});
+  const setAnswer = (id: string, v: unknown) =>
+    setAnswers((a) => ({ ...a, [id]: v }));
+  const theme: FormTheme = useMemo(() => {
+    const r = themeSchema.safeParse(rawTheme ?? {});
+    return r.success ? r.data : {};
+  }, [rawTheme]);
+
+  const bg = bgFromTheme(theme);
+  const primary = theme.colors?.primary ?? "#c8a04f";
+  const fontFamily = theme.font?.family;
+  const fields = structure.pages.flatMap((p) => p.fields);
+
+  return (
+    <div
+      className="flex flex-col items-center rounded-md px-4 py-6"
+      style={{ background: bg, fontFamily }}
+    >
+      {theme.coverImageUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={theme.coverImageUrl}
+          alt=""
+          className="mb-4 max-h-40 w-full max-w-2xl rounded-xl object-cover"
+        />
+      )}
+      <Card primary={primary}>
+        {theme.logoUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={theme.logoUrl} alt="" className="mb-4 h-14 w-auto" />
+        )}
+        <h1 className="text-xl font-semibold" style={{ color: theme.colors?.questionText }}>
+          {theme.welcome?.title ?? name}
+        </h1>
+        {theme.welcome?.body && (
+          <p className="text-muted-foreground mt-1 text-sm">{theme.welcome.body}</p>
+        )}
+        <div className="mt-5 space-y-5">
+          {fields.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              No questions yet — add fields to see them here.
+            </p>
+          ) : (
+            fields.map((f) =>
+              evaluateVisible(f, answers) ? (
+                <FieldInput
+                  key={f.id}
+                  field={f}
+                  value={answers[f.id]}
+                  onChange={(v) => setAnswer(f.id, v)}
+                  primary={primary}
+                />
+              ) : null,
+            )
+          )}
+          <button
+            type="button"
+            disabled
+            className="w-full cursor-default rounded-md px-4 py-2.5 text-sm font-semibold opacity-70"
+            style={{
+              backgroundColor: theme.colors?.button ?? primary,
+              color: theme.colors?.buttonText ?? "#0b0e14",
+            }}
+          >
+            {theme.welcome?.buttonText ?? "Submit application"}
+          </button>
+        </div>
+      </Card>
     </div>
   );
 }

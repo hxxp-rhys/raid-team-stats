@@ -6,6 +6,8 @@ import Link from "next/link";
 import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { FormPreview } from "@/components/recruitment/public-form";
 import {
   FIELD_TYPES,
   formStructureSchema,
@@ -36,6 +38,35 @@ const FIELD_TYPE_LABEL: Record<FieldType, string> = {
 const HAS_OPTIONS = (t: FieldType) =>
   t === "SINGLE_SELECT" || t === "DROPDOWN" || t === "MULTI_SELECT";
 
+/**
+ * The "add a field" buttons — orange (the default Button, matching "Save
+ * questions") so they read as the primary build action. Shared by the fixed
+ * left rail and the inline (narrow-screen) fallback; `vertical` gives them a
+ * uniform width when stacked in the rail.
+ */
+function FieldPalette({
+  onAdd,
+  vertical,
+}: {
+  onAdd: (t: FieldType) => void;
+  vertical?: boolean;
+}) {
+  return (
+    <>
+      {FIELD_TYPES.map((t) => (
+        <Button
+          key={t}
+          size="sm"
+          onClick={() => onAdd(t)}
+          className={vertical ? "w-32 justify-start" : ""}
+        >
+          + {FIELD_TYPE_LABEL[t]}
+        </Button>
+      ))}
+    </>
+  );
+}
+
 export default function RecruitmentFormPage({ params }: { params: Params }) {
   return (
     <Suspense
@@ -52,7 +83,7 @@ export default function RecruitmentFormPage({ params }: { params: Params }) {
 
 function Inner({ params }: { params: Params }) {
   const { guildId, formId } = use(params);
-  const [tab, setTab] = useState<"build" | "inbox">("build");
+  const [tab, setTab] = useState<"build" | "settings">("build");
   const form = api.recruitment.getForm.useQuery({ formId });
 
   return (
@@ -70,7 +101,7 @@ function Inner({ params }: { params: Params }) {
       </div>
 
       <div className="border-border mb-5 flex gap-1 border-b">
-        {(["build", "inbox"] as const).map((t) => (
+        {(["build", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -80,7 +111,7 @@ function Inner({ params }: { params: Params }) {
                 : "text-muted-foreground"
             }`}
           >
-            {t === "build" ? "Build & settings" : "Notifications"}
+            {t === "build" ? "Build" : "Settings"}
           </button>
         ))}
       </div>
@@ -90,24 +121,22 @@ function Inner({ params }: { params: Params }) {
       ) : form.error ? (
         <p className="text-destructive text-sm">{form.error.message}</p>
       ) : tab === "build" ? (
-        <Builder guildId={guildId} formId={formId} form={form.data} />
+        <BuildTab formId={formId} form={form.data} />
       ) : (
-        <NotificationsTab formId={formId} />
+        <SettingsTab guildId={guildId} formId={formId} form={form.data} />
       )}
     </main>
   );
 }
 
-// ── Build & settings ────────────────────────────────────────────────────────
+// ── Build (questions) ───────────────────────────────────────────────────────
 
 type FormData = RouterOutputs["recruitment"]["getForm"];
 
-function Builder({
-  guildId,
+function BuildTab({
   formId,
   form,
 }: {
-  guildId: string;
   formId: string;
   form: FormData;
 }) {
@@ -125,8 +154,6 @@ function Builder({
 
   // Edit a single flattened field list (v1 = one page).
   const [fields, setFields] = useState<Field[]>(initial.pages.flatMap((p) => p.fields));
-  const [status, setStatus] = useState(form.status);
-  const [slug, setSlug] = useState(form.slug);
   // Monotonic id source for new fields/options, seeded past any existing
   // `nf<n>` ids so it stays collision-free across reloads (no Math.random,
   // which the purity lint rule forbids in component scope).
@@ -137,6 +164,7 @@ function Builder({
     }, 0),
   );
   const genId = (prefix: string) => `${prefix}${idSeq.current++}`;
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const saveStructure = () => {
     const structure = {
@@ -176,6 +204,171 @@ function Builder({
       [next[i], next[j]] = [next[j]!, next[i]!];
       return next;
     });
+
+  return (
+    <>
+      {/* Add-field RAIL — fixed in the left gutter on wide screens, anchored to
+          the vertical center of the viewport so it follows scrolling. Pinned by
+          its RIGHT edge just left of the centered content, so when the viewport
+          is too short the buttons wrap into ADDITIONAL columns that grow
+          leftward into the gutter (never over the content). */}
+      <aside className="border-border bg-card/90 fixed top-1/2 right-[calc(50%_+_29rem)] z-30 hidden max-h-[85vh] max-w-[calc(50%_-_30rem)] -translate-y-1/2 flex-col gap-2 overflow-auto rounded-lg border p-2 shadow-md backdrop-blur xl:flex">
+        <p className="text-muted-foreground px-1 text-[11px] font-medium tracking-wide uppercase">
+          Add a field
+        </p>
+        {/* max-w (= gutter width) keeps the rail's left edge ≥1rem on-screen even
+            when it wraps; columns grow leftward into the gutter. Multi-column
+            wrapping only kicks in at 2xl, where the gutter is wide enough for a
+            second column; at xl a too-tall list scrolls (overflow-auto) so every
+            field stays reachable. */}
+        <div className="flex flex-col gap-1.5 2xl:max-h-[72vh] 2xl:flex-wrap">
+          <FieldPalette onAdd={addField} vertical />
+        </div>
+      </aside>
+
+      <div className="space-y-6">
+        {/* Inline add-field palette — shown on narrower screens with no gutter
+            for the fixed rail, so adding fields stays accessible. */}
+        <div className="xl:hidden">
+          <p className="text-muted-foreground mb-1.5 text-[11px] font-medium tracking-wide uppercase">
+            Add a field
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <FieldPalette onAdd={addField} />
+          </div>
+        </div>
+
+        {/* Questions */}
+        <section className="border-border rounded-lg border p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Questions</h2>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={saveStructure} disabled={update.isPending}>
+                {update.isPending ? "Saving…" : "Save questions"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPreviewOpen(true)}
+              >
+                Preview
+              </Button>
+            </div>
+          </div>
+
+          <ul className="space-y-3">
+            {fields.map((f, i) => (
+              <li key={f.id} className="border-border rounded-md border p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    value={f.label}
+                    onChange={(e) => patchField(i, { label: e.target.value })}
+                    className="h-8 flex-1"
+                    placeholder="Question label"
+                  />
+                  <select
+                    className="border-border bg-background h-8 rounded-md border px-2 text-xs"
+                    value={f.type}
+                    onChange={(e) => patchField(i, { type: e.target.value as FieldType })}
+                  >
+                    {FIELD_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {FIELD_TYPE_LABEL[t]}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={!!f.required}
+                      onChange={(e) => patchField(i, { required: e.target.checked })}
+                    />
+                    Required
+                  </label>
+                  <button
+                    className="text-muted-foreground px-1 text-sm"
+                    onClick={() => move(i, -1)}
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className="text-muted-foreground px-1 text-sm"
+                    onClick={() => move(i, 1)}
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    className="text-destructive px-1 text-xs"
+                    onClick={() => removeField(i)}
+                  >
+                    Remove
+                  </button>
+                </div>
+                {HAS_OPTIONS(f.type) && (
+                  <OptionsEditor
+                    field={f}
+                    onChange={(options) => patchField(i, { options })}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <Modal
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          title="Form preview"
+          description="How applicants will see this form, using your current questions."
+          showCloseIcon
+          hideDefaultFooter
+          className="max-w-3xl"
+        >
+          {previewOpen && (
+            <FormPreview
+              structure={{
+                ...initial,
+                pages: [
+                  {
+                    id: initial.pages[0]?.id ?? "p1",
+                    title: initial.pages[0]?.title,
+                    fields,
+                  },
+                ],
+              }}
+              theme={form.theme}
+              name={form.name}
+            />
+          )}
+        </Modal>
+
+        {update.error && (
+          <p className="text-destructive text-sm">{update.error.message}</p>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── Settings ────────────────────────────────────────────────────────────────
+
+function SettingsTab({
+  guildId,
+  formId,
+  form,
+}: {
+  guildId: string;
+  formId: string;
+  form: FormData;
+}) {
+  const utils = api.useUtils();
+  const update = api.recruitment.updateForm.useMutation({
+    onSuccess: () => utils.recruitment.getForm.invalidate({ formId }),
+  });
+  const [status, setStatus] = useState(form.status);
+  const [slug, setSlug] = useState(form.slug);
 
   return (
     <div className="space-y-6">
@@ -256,89 +449,21 @@ function Builder({
         </label>
       </section>
 
-      {/* Theme (basic) */}
+      {/* Branding */}
       <ThemeEditor formId={formId} form={form} update={update} />
 
-      {/* Fields */}
-      <section className="border-border rounded-lg border p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Questions</h2>
-          <Button size="sm" onClick={saveStructure} disabled={update.isPending}>
-            {update.isPending ? "Saving…" : "Save questions"}
-          </Button>
+      {/* Notifications — merged into Settings, under Branding. */}
+      <section className="border-border space-y-3 rounded-lg border p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Notifications</h2>
+          <p className="text-muted-foreground text-xs">
+            Choose how you want to be alerted about new applications. To read and
+            review the applications themselves, use the{" "}
+            <span className="text-foreground font-medium">Submissions</span>{" "}
+            button on the Recruitment page.
+          </p>
         </div>
-
-        <ul className="space-y-3">
-          {fields.map((f, i) => (
-            <li key={f.id} className="border-border rounded-md border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  value={f.label}
-                  onChange={(e) => patchField(i, { label: e.target.value })}
-                  className="h-8 flex-1"
-                  placeholder="Question label"
-                />
-                <select
-                  className="border-border bg-background h-8 rounded-md border px-2 text-xs"
-                  value={f.type}
-                  onChange={(e) => patchField(i, { type: e.target.value as FieldType })}
-                >
-                  {FIELD_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {FIELD_TYPE_LABEL[t]}
-                    </option>
-                  ))}
-                </select>
-                <label className="flex items-center gap-1 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={!!f.required}
-                    onChange={(e) => patchField(i, { required: e.target.checked })}
-                  />
-                  Required
-                </label>
-                <button
-                  className="text-muted-foreground px-1 text-sm"
-                  onClick={() => move(i, -1)}
-                  title="Move up"
-                >
-                  ↑
-                </button>
-                <button
-                  className="text-muted-foreground px-1 text-sm"
-                  onClick={() => move(i, 1)}
-                  title="Move down"
-                >
-                  ↓
-                </button>
-                <button
-                  className="text-destructive px-1 text-xs"
-                  onClick={() => removeField(i)}
-                >
-                  Remove
-                </button>
-              </div>
-              {HAS_OPTIONS(f.type) && (
-                <OptionsEditor
-                  field={f}
-                  onChange={(options) => patchField(i, { options })}
-                />
-              )}
-            </li>
-          ))}
-        </ul>
-
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {FIELD_TYPES.map((t) => (
-            <button
-              key={t}
-              onClick={() => addField(t)}
-              className="border-border rounded-md border px-2 py-1 text-xs"
-            >
-              + {FIELD_TYPE_LABEL[t]}
-            </button>
-          ))}
-        </div>
+        <NotifyOptIn formId={formId} />
       </section>
 
       {update.error && (
@@ -613,20 +738,6 @@ function ThemeEditor({
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
-function NotificationsTab({ formId }: { formId: string }) {
-  return (
-    <div className="space-y-4">
-      <NotifyOptIn formId={formId} />
-      <p className="text-muted-foreground text-sm">
-        Choose how you want to be alerted about new applications. To read and
-        review the applications themselves, use the{" "}
-        <span className="text-foreground font-medium">Submissions</span> button
-        on the Recruitment page.
-      </p>
-    </div>
-  );
-}
-
 function NotifyOptIn({ formId }: { formId: string }) {
   const utils = api.useUtils();
   const prefs = api.recruitment.myNotificationPrefs.useQuery({ formId });
@@ -637,7 +748,7 @@ function NotifyOptIn({ formId }: { formId: string }) {
     !!prefs.data?.some((p) => p.channel === ch);
 
   return (
-    <div className="border-border text-muted-foreground flex flex-wrap items-center gap-3 rounded-lg border px-4 py-2 text-xs">
+    <div className="text-muted-foreground bg-muted/30 flex flex-wrap items-center gap-3 rounded-md px-3 py-2 text-xs">
       <span className="font-medium">Notify me of new applications:</span>
       {(["EMAIL", "DISCORD_DM"] as const).map((ch) => (
         <label key={ch} className="flex cursor-pointer items-center gap-1">

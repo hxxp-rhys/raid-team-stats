@@ -1,14 +1,37 @@
 import type { Metadata } from "next";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { siteConfig, UPSTREAM } from "@/lib/site-config";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  ResponsibleDisclosure,
+  SecuritySections,
+} from "@/components/security-content";
+import { LicenseButton } from "./license-button";
+
+// Static page; the LICENSE.md read happens at build time so the full text is
+// baked in and the runtime image never needs the file on disk.
+export const dynamic = "force-static";
 
 export const metadata: Metadata = {
   title: "About",
-  description: `About ${UPSTREAM.projectName} — the open-source raid-team analytics project this site is built on.`,
+  description: `About ${UPSTREAM.projectName} — what it is, how it protects your data, and its open-source license.`,
 };
 
+/** Full license text, read at build time. Empty string if unreadable (the
+ *  license button then falls back to its summary + authoritative links). */
+function readLicense(): string {
+  try {
+    return readFileSync(join(process.cwd(), "LICENSE.md"), "utf8");
+  } catch {
+    return "";
+  }
+}
+
 export default function AboutPage() {
+  const licenseText = readLicense();
+
   return (
     <article className="space-y-10">
       <header className="flex items-center gap-4">
@@ -56,6 +79,20 @@ export default function AboutPage() {
         </p>
       </section>
 
+      <section className="space-y-4">
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold tracking-tight">
+            Security &amp; your data
+          </h2>
+          <p className="text-muted-foreground text-sm leading-relaxed">
+            {siteConfig.appName} keeps a guild&apos;s data private and protected.
+            In broad terms, the safeguards the software provides:
+          </p>
+        </div>
+        <SecuritySections />
+        <ResponsibleDisclosure />
+      </section>
+
       <section className="space-y-3">
         <h2 className="text-lg font-semibold tracking-tight">Credits &amp; source</h2>
         <p className="text-muted-foreground leading-relaxed">
@@ -80,6 +117,22 @@ export default function AboutPage() {
           as free, open-source software — you are welcome to read, self-host, and
           modify it.
         </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold tracking-tight">License</h2>
+        <p className="text-muted-foreground leading-relaxed">
+          {UPSTREAM.projectName} is released under the{" "}
+          <span className="text-foreground font-medium">{siteConfig.license}</span>{" "}
+          — a copyleft license that guarantees it stays free and open source,
+          including for anyone who runs it as a network service.
+        </p>
+        <LicenseButton
+          licenseName={siteConfig.license}
+          licenseText={licenseText}
+          repoUrl={UPSTREAM.repoUrl}
+          fullTextUrl="https://www.gnu.org/licenses/agpl-3.0.html"
+        />
       </section>
 
       <section className="border-border bg-muted/30 space-y-4 rounded-lg border p-5">
