@@ -94,16 +94,11 @@ export default function AdminAuditPage() {
                     </span>
                   </div>
                   <p className="text-muted-foreground">
-                    Actor:{" "}
-                    {row.actor
-                      ? row.actor.displayName ?? row.actor.email
-                      : row.actorUserId
-                      ? `(${row.actorUserId.slice(0, 8)})`
-                      : "system"}
+                    Actor: {row.actor}
                     {row.subjectType ? (
                       <>
                         {" · "}Subject: {row.subjectType}
-                        {row.subjectId ? ` ${row.subjectId.slice(0, 8)}` : ""}
+                        {row.subject ? ` — ${row.subject}` : ""}
                       </>
                     ) : null}
                   </p>

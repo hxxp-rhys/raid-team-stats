@@ -287,7 +287,9 @@ export const adminRouter = router({
 
       const target = await ctx.db.user.findUnique({
         where: { id: input.userId },
-        select: { id: true, email: true, isAdmin: true },
+        // No email select — the audit subject already identifies the target by
+        // name, and the target's email (PII) must never enter the audit log.
+        select: { isAdmin: true },
       });
       if (!target) throw new TRPCError({ code: "NOT_FOUND" });
       if (target.isAdmin === input.isAdmin) {
@@ -303,8 +305,9 @@ export const adminRouter = router({
         event: input.isAdmin ? "ADMIN_USER_PROMOTED" : "ADMIN_USER_DEMOTED",
         actorUserId: ctx.session.user.id,
         subjectType: "user",
+        // The subject (target user) resolves to a display name in the viewer;
+        // we deliberately do NOT store the target's email (PII) here.
         subjectId: input.userId,
-        metadata: { targetEmail: target.email },
       });
 
       return { ok: true, unchanged: false };
@@ -370,7 +373,7 @@ export const adminRouter = router({
     )
     .query(async ({ ctx, input }) => {
       await assertAdmin(ctx.session.user.id);
-      return ctx.db.auditLog.findMany({
+      const rows = await ctx.db.auditLog.findMany({
         where: input.event
           ? {
               event:
@@ -387,9 +390,229 @@ export const adminRouter = router({
           subjectId: true,
           createdAt: true,
           metadata: true,
-          actor: { select: { email: true, displayName: true } },
         },
       });
+
+      // Resolve every opaque id to a human-readable, NON-PII label so an admin
+      // can trace an action to a real account / guild / character. We never
+      // surface email (PII) or a raw cuid; an id that no longer resolves (a
+      // deleted row) renders as "(unknown …)". Metadata id-fields are resolved
+      // by their KEY at the TOP level only — nested Discord snowflakes and
+      // external WCL ids are deliberately left alone. (See the audit() call-site
+      // inventory: actorUserId + subjectType→entity + the id-bearing meta keys.)
+      const USER_META_KEYS = [
+        "newLeaderUserId",
+        "departingUserId",
+        "previousOwnerUserId",
+        "newOwnerUserId",
+        "grantedTo",
+      ] as const;
+      const CHAR_META_KEYS = ["characterId", "pendingLeaderCharacterId"] as const;
+      // Defense-in-depth: scrub emails (PII) from the displayed metadata blob.
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      const asMeta = (m: unknown): Record<string, unknown> | null =>
+        m && typeof m === "object" && !Array.isArray(m)
+          ? (m as Record<string, unknown>)
+          : null;
+
+      const userIds = new Set<string>();
+      const guildIds = new Set<string>();
+      const charIds = new Set<string>();
+      const teamIds = new Set<string>();
+      const dashIds = new Set<string>();
+      const formIds = new Set<string>();
+      const eventIds = new Set<string>();
+      const seriesIds = new Set<string>();
+
+      for (const r of rows) {
+        if (r.actorUserId) userIds.add(r.actorUserId);
+        if (r.subjectId && r.subjectType) {
+          switch (r.subjectType) {
+            case "user":
+              userIds.add(r.subjectId);
+              break;
+            case "guild":
+              guildIds.add(r.subjectId);
+              break;
+            case "character":
+              charIds.add(r.subjectId);
+              break;
+            case "raidTeam":
+              // One audit event (departure cascade) stores a comma-joined list.
+              for (const id of r.subjectId.split(",")) teamIds.add(id.trim());
+              break;
+            case "dashboard":
+              dashIds.add(r.subjectId);
+              break;
+            case "recruitmentForm":
+              formIds.add(r.subjectId);
+              break;
+            case "raidEvent":
+              eventIds.add(r.subjectId);
+              break;
+            case "raidEventSeries":
+              seriesIds.add(r.subjectId);
+              break;
+          }
+        }
+        const m = asMeta(r.metadata);
+        if (m) {
+          if (typeof m.guildId === "string") guildIds.add(m.guildId);
+          if (typeof m.raidTeamId === "string") teamIds.add(m.raidTeamId);
+          if (Array.isArray(m.raidTeamsRemoved))
+            for (const x of m.raidTeamsRemoved)
+              if (typeof x === "string") teamIds.add(x);
+          for (const k of CHAR_META_KEYS)
+            if (typeof m[k] === "string") charIds.add(m[k] as string);
+          for (const k of USER_META_KEYS)
+            if (typeof m[k] === "string") userIds.add(m[k] as string);
+        }
+      }
+
+      const pick = <T>(s: Set<string>, fn: () => Promise<T[]>): Promise<T[]> =>
+        s.size ? fn() : Promise.resolve([]);
+      const [users, guilds, chars, teams, dashes, forms, events, series] =
+        await Promise.all([
+          pick(userIds, () =>
+            ctx.db.user.findMany({
+              where: { id: { in: [...userIds] } },
+              select: { id: true, displayName: true },
+            }),
+          ),
+          pick(guildIds, () =>
+            ctx.db.guild.findMany({
+              where: { id: { in: [...guildIds] } },
+              select: { id: true, name: true, realmSlug: true },
+            }),
+          ),
+          pick(charIds, () =>
+            ctx.db.character.findMany({
+              where: { id: { in: [...charIds] } },
+              select: { id: true, name: true, realmSlug: true },
+            }),
+          ),
+          pick(teamIds, () =>
+            ctx.db.raidTeam.findMany({
+              where: { id: { in: [...teamIds] } },
+              select: { id: true, name: true },
+            }),
+          ),
+          pick(dashIds, () =>
+            ctx.db.dashboardConfig.findMany({
+              where: { id: { in: [...dashIds] } },
+              select: { id: true, name: true },
+            }),
+          ),
+          pick(formIds, () =>
+            ctx.db.recruitmentForm.findMany({
+              where: { id: { in: [...formIds] } },
+              select: { id: true, name: true },
+            }),
+          ),
+          pick(eventIds, () =>
+            ctx.db.raidEvent.findMany({
+              where: { id: { in: [...eventIds] } },
+              select: { id: true, title: true },
+            }),
+          ),
+          pick(seriesIds, () =>
+            ctx.db.raidEventSeries.findMany({
+              where: { id: { in: [...seriesIds] } },
+              select: { id: true, title: true },
+            }),
+          ),
+        ]);
+
+      // displayName is the account name (NOT email — email is PII). A user with
+      // no display name shows "Unnamed user", never an id.
+      const userLabel = new Map(
+        users.map((u) => [u.id, u.displayName ?? "Unnamed user"]),
+      );
+      const guildLabel = new Map(
+        guilds.map((g) => [g.id, `${g.name} (${g.realmSlug})`]),
+      );
+      const charLabel = new Map(
+        chars.map((c) => [c.id, `${c.name}-${c.realmSlug}`]),
+      );
+      const teamLabel = new Map(teams.map((t) => [t.id, t.name]));
+      const dashLabel = new Map(dashes.map((d) => [d.id, d.name]));
+      const formLabel = new Map(forms.map((f) => [f.id, f.name]));
+      const eventLabel = new Map(events.map((e) => [e.id, e.title]));
+      const seriesLabel = new Map(series.map((s) => [s.id, s.title]));
+
+      const resolveMeta = (m: unknown): Record<string, unknown> | null => {
+        const o = asMeta(m);
+        if (!o) return null;
+        const out: Record<string, unknown> = { ...o };
+        if (typeof out.guildId === "string")
+          out.guildId = guildLabel.get(out.guildId) ?? "(unknown guild)";
+        if (typeof out.raidTeamId === "string")
+          out.raidTeamId = teamLabel.get(out.raidTeamId) ?? "(unknown team)";
+        if (Array.isArray(out.raidTeamsRemoved))
+          out.raidTeamsRemoved = out.raidTeamsRemoved.map((x) =>
+            typeof x === "string" ? (teamLabel.get(x) ?? "(unknown team)") : x,
+          );
+        for (const k of CHAR_META_KEYS)
+          if (typeof out[k] === "string")
+            out[k] = charLabel.get(out[k] as string) ?? "(unknown character)";
+        for (const k of USER_META_KEYS)
+          if (typeof out[k] === "string")
+            out[k] = userLabel.get(out[k] as string) ?? "(unknown user)";
+        // Never surface an email (PII) — covers older rows + any future caller
+        // that puts an email-valued field in metadata.
+        for (const k of Object.keys(out))
+          if (
+            typeof out[k] === "string" &&
+            EMAIL_RE.test((out[k] as string).trim())
+          )
+            out[k] = "(redacted email)";
+        return out;
+      };
+
+      const subjectName = (
+        type: string | null,
+        id: string | null,
+      ): string | null => {
+        if (!type || !id) return null;
+        switch (type) {
+          case "user":
+            return userLabel.get(id) ?? "(unknown user)";
+          case "guild":
+            return guildLabel.get(id) ?? "(unknown guild)";
+          case "character":
+            return charLabel.get(id) ?? "(unknown character)";
+          case "raidTeam":
+            return id
+              .split(",")
+              .map((x) => teamLabel.get(x.trim()) ?? "(unknown team)")
+              .join(", ");
+          case "dashboard":
+            return dashLabel.get(id) ?? "(unknown dashboard)";
+          case "recruitmentForm":
+            return formLabel.get(id) ?? "(unknown form)";
+          case "raidEvent":
+            return eventLabel.get(id) ?? "(unknown event)";
+          case "raidEventSeries":
+            return seriesLabel.get(id) ?? "(unknown series)";
+          default:
+            // Non-entity subjects ("settings"=singleton, "policy"=<name>) are
+            // human-readable already — not opaque ids.
+            return id;
+        }
+      };
+
+      return rows.map((r) => ({
+        id: r.id,
+        event: r.event,
+        createdAt: r.createdAt,
+        actor: r.actorUserId
+          ? (userLabel.get(r.actorUserId) ?? "(unknown user)")
+          : "System",
+        subjectType: r.subjectType,
+        subject: subjectName(r.subjectType, r.subjectId),
+        metadata: resolveMeta(r.metadata),
+      }));
     }),
 
   // ────────────────────────────────────────────────────────────────────────
