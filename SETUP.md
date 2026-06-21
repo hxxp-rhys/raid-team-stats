@@ -26,7 +26,7 @@ There are three pieces. Only the first is required:
   Desktop on Windows/macOS, or Docker Engine on Linux).
 - **[Git](https://git-scm.com/downloads)** to clone the repo.
 - **`openssl`** to generate secrets (bundled with macOS/Linux and Git for Windows).
-- For a *public* instance: a small VPS (Hetzner / DigitalOcean / Fly.io) and a
+- For a *public* instance: a small server (Hetzner / DigitalOcean / Fly.io) and a
   **domain name** you control. For just trying it out, none of that is needed.
 
 ---

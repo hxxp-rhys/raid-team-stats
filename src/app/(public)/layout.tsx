@@ -4,9 +4,10 @@ import { siteConfig } from "@/lib/site-config";
 import { SiteFooter } from "@/components/site-footer";
 
 /**
- * Layout for the public information pages (/about, /security). Mirrors the
- * landing page's width + the auth layout's back-link, and renders the shared
- * (un-removable) site footer.
+ * Layout for the public information page (/security). Mirrors the landing page's
+ * width + the auth layout's back-link, and renders the shared (un-removable)
+ * site footer. (/about moved under the (app) shell so signed-in users get the
+ * full top bar — user menu + My guilds — and no back-link arrow.)
  */
 export default function PublicLayout({
   children,

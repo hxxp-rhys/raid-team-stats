@@ -13,7 +13,7 @@ export const SECURITY_SECTIONS: ReadonlyArray<{ title: string; body: string }> =
   },
   {
     title: "Encryption at rest",
-    body: "Sensitive fields are encrypted in the database by the application itself using authenticated AES-256-GCM: account email addresses, third-party (OAuth) access tokens, two-factor-authentication secrets, display names and avatars, and recruitment-form answers. Each value gets a fresh random IV and an authentication tag, so it cannot be read or altered without the key. (Email uses a separate keyed blind index so you can still sign in without the address ever being stored in the clear.)",
+    body: "Sensitive fields are encrypted in the database by the application itself using authenticated AES-256-GCM: account email addresses, third-party (OAuth) access tokens, two-factor-authentication secrets, display names and avatars, and recruitment-form answers (numeric ratings and scores are additionally kept as plain numbers so reviewers can sort by them). Each value gets a fresh random IV and an authentication tag, so it cannot be read or altered without the key. (Email uses a separate keyed blind index so you can still sign in without the address ever being stored in the clear.)",
   },
   {
     title: "Passwords & tokens",
@@ -25,7 +25,7 @@ export const SECURITY_SECTIONS: ReadonlyArray<{ title: string; body: string }> =
   },
   {
     title: "Hardening & logging",
-    body: "The app enforces a strict, nonce-based Content-Security-Policy, rate-limits sign-in and other sensitive endpoints, and records an append-only audit log of privileged actions. In the shipped setup it runs as a non-root container with Linux capabilities dropped and privilege-escalation disabled. Personal data and secrets — including email addresses and tokens — are stripped from the application's logs.",
+    body: "The app enforces a strict, nonce-based Content-Security-Policy, rate-limits sign-in and other sensitive endpoints, and keeps an audit log of privileged actions that is only ever appended to — entries are never altered after the fact, though old ones may age out under a configurable retention policy. In the shipped setup it runs as a non-root container with Linux capabilities dropped and privilege-escalation disabled. Personal data and secrets — including email addresses and tokens — are stripped from the application's logs.",
   },
   {
     title: "What's collected — and what isn't",

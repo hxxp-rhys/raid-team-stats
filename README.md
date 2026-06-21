@@ -131,7 +131,7 @@ The app field-encrypts the most sensitive data and ships hardened containers,
 but a few protections live in the **hosting environment**, not the code. They
 matter most because you're handling real people's data (logins, emails,
 recruitment applications). Here's what to do and *why*, for **AWS**, **Azure**,
-and a **self-hosted** VPS.
+and a **self-hosted** server.
 
 > **Rule of thumb:** only **80/443** should ever be reachable from the internet.
 > The database, cache, pooler, metrics, and dashboards all stay private.

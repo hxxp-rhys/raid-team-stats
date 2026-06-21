@@ -2,6 +2,7 @@
 
 import { Suspense, use, useState } from "react";
 import Link from "next/link";
+import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { api } from "@/lib/trpc-client";
@@ -48,6 +49,10 @@ function Inner({ params }: { params: Params }) {
   // When opened from a team dashboard the link carries ?team=<id>, so the back
   // link returns there; otherwise it falls back to the guild page.
   const team = searchParams.get("team");
+  // Thread the team context into links to the form builder so its "All forms"
+  // back link returns here WITH ?team — keeping the "← Dashboard" back link
+  // instead of degrading to "← Guild".
+  const teamQuery = team ? `?team=${team}` : "";
   const utils = api.useUtils();
   const forms = api.recruitment.listForms.useQuery({ guildId });
   const [name, setName] = useState("");
@@ -66,7 +71,7 @@ function Inner({ params }: { params: Params }) {
     onSuccess: async (f) => {
       setName("");
       await utils.recruitment.listForms.invalidate({ guildId });
-      router.push(`/guild/${guildId}/recruitment/${f.id}`);
+      router.push(`/guild/${guildId}/recruitment/${f.id}${teamQuery}` as Route);
     },
   });
 
@@ -136,7 +141,7 @@ function Inner({ params }: { params: Params }) {
             <li key={f.id} className="flex items-center justify-between gap-3 p-4">
               <div className="min-w-0">
                 <Link
-                  href={`/guild/${guildId}/recruitment/${f.id}`}
+                  href={`/guild/${guildId}/recruitment/${f.id}${teamQuery}` as Route}
                   className="font-medium hover:underline"
                 >
                   {f.name}
@@ -178,7 +183,7 @@ function Inner({ params }: { params: Params }) {
                   )}
                 </Button>
                 <Link
-                  href={`/guild/${guildId}/recruitment/${f.id}`}
+                  href={`/guild/${guildId}/recruitment/${f.id}${teamQuery}` as Route}
                   className={buttonVariants({ size: "sm", variant: "outline" })}
                 >
                   Manage
