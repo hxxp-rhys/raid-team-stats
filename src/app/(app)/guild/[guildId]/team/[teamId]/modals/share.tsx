@@ -4,11 +4,17 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
+import { ShareExpiryRadios } from "@/components/share-expiry-radios";
+import {
+  DEFAULT_SHARE_EXPIRY_DAYS,
+  shareExpiryLabel,
+} from "@/lib/share-expiry";
 import { api } from "@/lib/trpc-client";
 
 /**
  * Share modal: view-only link to the dashboard (issued on demand, signed
- * token, 7-day TTL) with a copy button that flashes "Copied ✓".
+ * token, caller-chosen expiry — default never) with a copy button that
+ * flashes "Copied ✓".
  *
  * Viewer-refresh is NOT configured here — the "Data refresh" widget on the
  * dashboard is the single source of truth for who can refresh.
@@ -56,6 +62,10 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
   // Tabs the link will expose. `null` = "all tabs" (the default, and the state
   // before the tab list loads); a Set = an explicit subset the creator picked.
   const [selectedTabs, setSelectedTabs] = useState<Set<string> | null>(null);
+  // How long the generated link stays valid; null = never (the default).
+  const [expiryDays, setExpiryDays] = useState<number | null>(
+    DEFAULT_SHARE_EXPIRY_DAYS,
+  );
   const tabs = settings.data?.tabs ?? [];
   const toggleTab = (id: string) =>
     setSelectedTabs((cur) => {
@@ -84,7 +94,7 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
     const allowedTabIds =
       tabs.length > 0 && picked.length < tabs.length ? picked : undefined;
     createShare.mutate(
-      { dashboardId, ttlDays: 7, allowedTabIds },
+      { dashboardId, ttlDays: expiryDays, allowedTabIds },
       { onSuccess: (r) => setShareUrl(r.url) },
     );
   };
@@ -136,6 +146,9 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
                 <p className="text-destructive text-xs">Pick at least one tab.</p>
               )}
             </div>
+          )}
+          {!shareUrl && (
+            <ShareExpiryRadios value={expiryDays} onChange={setExpiryDays} />
           )}
           {!shareUrl ? (
             <Button
@@ -204,10 +217,12 @@ function ShareBody({ dashboardId }: { dashboardId: string | null }) {
           )}
 
           <p className="text-muted-foreground text-xs">
-            Links expire after{" "}
+            {expiryDays == null
+              ? "This link never expires. "
+              : `This link expires in ${shareExpiryLabel(expiryDays).toLowerCase()}. `}
             {settings.data?.shareIsPublic
-              ? "7 days. Anyone holding the link can view until then (or until you turn public viewing off)."
-              : "7 days. The viewer has to be signed in and a member of the guild — share links route, they don't grant access."}
+              ? "Anyone holding it can view, read-only, until you turn public viewing off."
+              : "The viewer must be signed in and a member of the guild — share links route, they don't grant access."}
           </p>
         </section>
       )}

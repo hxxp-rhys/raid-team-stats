@@ -60,6 +60,17 @@ type ApplyVerificationInput = {
    * the on-link discover) leave this false so departure detection is intact.
    */
   skipAbsenceSweep?: boolean;
+  /**
+   * When true, CREATE a Guild row for an observed guild that isn't on the site
+   * yet — used ONLY by the explicit "Add Guild" picker, where the user
+   * deliberately chooses to add their guild. When false (the default — the
+   * background login discovery, the bulk "discover my guilds" action, and the
+   * roster sync), guilds are matched EXISTING-ONLY: an observed guild with no
+   * row on the site is skipped entirely (no create, no membership, no claim).
+   * This makes guild auto-assignment situational — a user is auto-joined only
+   * to guilds that already exist on the site.
+   */
+  createMissingGuilds?: boolean;
 };
 
 type ApplyVerificationResult = {
@@ -132,27 +143,37 @@ export async function applyVerification(
     const guildSlug = normalizeGuildSlug(obs.guild.name);
     if (!guildRealmSlug || !guildSlug) continue;
 
-    const guild = await db.guild.upsert({
-      where: {
-        region_realmSlug_guildSlug: {
-          region: obs.region,
-          realmSlug: guildRealmSlug,
-          guildSlug,
-        },
-      },
-      create: {
+    // Situational guild resolution. The explicit "Add Guild" picker
+    // (createMissingGuilds) creates a missing guild row; every automatic /
+    // bulk path matches EXISTING-ONLY and skips guilds not yet on the site —
+    // no auto-create, and therefore no auto-assign for those guilds.
+    const guildWhere = {
+      region_realmSlug_guildSlug: {
         region: obs.region,
         realmSlug: guildRealmSlug,
         guildSlug,
-        name: obs.guild.name,
-        faction: obs.guild.faction,
       },
-      // Never re-derive faction here: a single flaky per-character read
-      // must not flip (or, pre-fix, fork) an established guild's faction.
-      update: {
-        name: obs.guild.name,
-      },
-    });
+    };
+    const guild = input.createMissingGuilds
+      ? await db.guild.upsert({
+          where: guildWhere,
+          create: {
+            region: obs.region,
+            realmSlug: guildRealmSlug,
+            guildSlug,
+            name: obs.guild.name,
+            faction: obs.guild.faction,
+          },
+          // Never re-derive faction here: a single flaky per-character read
+          // must not flip (or, pre-fix, fork) an established guild's faction.
+          update: {
+            name: obs.guild.name,
+          },
+        })
+      : await db.guild.findUnique({ where: guildWhere });
+    // Guild not on the site (and not the explicit create path) → do NOT
+    // auto-create it and do NOT assign the user to it.
+    if (!guild) continue;
     guildMatches++;
 
     await recordGuildPresence({

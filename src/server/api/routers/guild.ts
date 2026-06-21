@@ -442,6 +442,10 @@ export const guildRouter = router({
       // OAuth proved the caller owns these characters → re-attribute any
       // existing Character rows and run the pending-asset claim sweep.
       verifiedOwnership: true,
+      // Bulk auto-discover: assign the user to guilds that ALREADY exist on the
+      // site, but never auto-create a guild just because they're in it. Creating
+      // a guild is a deliberate action via the "Add Guild" picker.
+      createMissingGuilds: false,
     });
 
     await audit({
@@ -612,6 +616,10 @@ export const guildRouter = router({
         verifiedOwnership: true,
         // CRITICAL: filtered subset — never run the absence sweep here.
         skipAbsenceSweep: true,
+        // This is the EXPLICIT "Add Guild" picker: the user deliberately chose
+        // these guilds, so create any that aren't on the site yet. (Every
+        // automatic/bulk discover path leaves this false: existing-only.)
+        createMissingGuilds: true,
       });
 
       // Kick off a FULL roster + data sync for each freshly-added guild so it

@@ -132,7 +132,7 @@ function Inner({ params }: { params: Params }) {
     DESKTOP_GRID_COLS,
     SHARE_DEFAULTS,
   );
-  const expires = new Date(expiresAt);
+  const expires = expiresAt ? new Date(expiresAt) : null;
 
   return (
     <main className="mx-auto max-w-[1400px] space-y-4 px-4 py-8">
@@ -142,12 +142,14 @@ function Inner({ params }: { params: Params }) {
         </h1>
         <p className="text-muted-foreground text-sm">
           Shared view · {totalWidgets} widget
-          {totalWidgets === 1 ? "" : "s"} · expires{" "}
-          {expires.toLocaleDateString(undefined, {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-          })}
+          {totalWidgets === 1 ? "" : "s"} ·{" "}
+          {expires
+            ? `expires ${expires.toLocaleDateString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}`
+            : "never expires"}
         </p>
       </header>
 

@@ -40,6 +40,9 @@ vi.mock("@/lib/db", () => ({
     },
     guild: {
       upsert: vi.fn(async () => ({ id: "guild-1", claimStatus: "UNCLAIMED" })),
+      // The existing-only paths (default createMissingGuilds=false) resolve via
+      // findUnique; a returned row = guild is on the site, null = absent.
+      findUnique: vi.fn(async () => ({ id: "guild-1", claimStatus: "UNCLAIMED" })),
     },
     guildCharacterLink: {
       findMany: vi.fn(async () => [unobservedLink]),
@@ -59,6 +62,7 @@ vi.mock("@/server/guild-auth/claim", () => ({ claimByGm }));
 vi.mock("@/server/guild-auth/ownership", () => ({ claimPendingAssetsForUser }));
 
 import { applyVerification } from "./verify";
+import { db } from "@/lib/db";
 
 // One observed character in a DIFFERENT guild than the unobserved link, so
 // the sweep (when it runs) has a genuine absence to record.
@@ -82,6 +86,8 @@ const observation = {
 beforeEach(() => {
   recordGuildAbsence.mockClear();
   recordGuildPresence.mockClear();
+  vi.mocked(db.guild.upsert).mockClear();
+  vi.mocked(db.guild.findUnique).mockClear();
 });
 
 describe("applyVerification — skipAbsenceSweep", () => {
@@ -92,6 +98,8 @@ describe("applyVerification — skipAbsenceSweep", () => {
       characters: [observation],
       verifiedOwnership: true,
       skipAbsenceSweep: true,
+      // The selective "Add Guild" path is the only create path.
+      createMissingGuilds: true,
     });
     // The user has an ACTIVE link to a guild absent from this batch, but the
     // add path must NOT touch it — that's the roster-corruption guard.
@@ -110,5 +118,37 @@ describe("applyVerification — skipAbsenceSweep", () => {
     });
     // The unobserved ACTIVE link gets an absence increment, as before.
     expect(recordGuildAbsence).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("applyVerification — createMissingGuilds (situational auto-assign)", () => {
+  it("skips an observed guild that isn't on the site (no create, no assign)", async () => {
+    // Default createMissingGuilds (false) → existing-only resolution. The guild
+    // has no row on the site (findUnique → null), so it is skipped entirely:
+    // no presence recorded, nothing assigned, and no guild ever created.
+    vi.mocked(db.guild.findUnique).mockResolvedValueOnce(null as never);
+    await applyVerification({
+      userId: "user-1",
+      observedAt: new Date(0),
+      characters: [observation],
+      verifiedOwnership: true,
+      skipAbsenceSweep: true,
+    });
+    expect(recordGuildPresence).not.toHaveBeenCalled();
+    expect(db.guild.upsert).not.toHaveBeenCalled();
+  });
+
+  it("assigns the user to an EXISTING guild on the bulk/auto path", async () => {
+    // findUnique returns a row (guild is on the site) → presence is recorded,
+    // via findUnique (NOT upsert — the bulk/auto path never creates).
+    await applyVerification({
+      userId: "user-1",
+      observedAt: new Date(0),
+      characters: [observation],
+      verifiedOwnership: true,
+      skipAbsenceSweep: true,
+    });
+    expect(recordGuildPresence).toHaveBeenCalledTimes(1);
+    expect(db.guild.upsert).not.toHaveBeenCalled();
   });
 });

@@ -31,13 +31,14 @@ import { env } from "@/env";
  */
 
 const VERSION = "v1";
-const MAX_TTL_DAYS = 30;
-const DEFAULT_TTL_DAYS = 7;
+// The longest selectable expiry is one year; "never" omits the expiry claim
+// entirely (the default). A positive ttlDays is clamped to this ceiling.
+const MAX_TTL_DAYS = 366;
 
 type Payload = {
   d: string; // dashboardId
   r: string; // raidTeamId (for the resolver's authorization fast-path)
-  e: number; // expiresAt (ms since epoch)
+  e?: number; // expiresAt (ms since epoch). OMITTED = never expires.
   t?: string[]; // allowed tab ids (omitted = every tab is shared)
 };
 
@@ -60,8 +61,11 @@ function sign(message: string): string {
 export type CreateShareTokenInput = {
   dashboardId: string;
   raidTeamId: string;
-  /** Defaults to 7 days. Clamped to MAX_TTL_DAYS. */
-  ttlDays?: number;
+  /**
+   * Link lifetime in days. `null`/`undefined` = NEVER expires (the default).
+   * A positive number is clamped to [1, MAX_TTL_DAYS] (one year).
+   */
+  ttlDays?: number | null;
   /**
    * If set, the link only exposes these dashboard tab ids. Omitted/empty =
    * every tab is shared (back-compat with tokens minted before this existed).
@@ -71,14 +75,26 @@ export type CreateShareTokenInput = {
 
 export function createShareToken(input: CreateShareTokenInput): {
   token: string;
-  expiresAt: Date;
+  /** null when the link never expires. */
+  expiresAt: Date | null;
 } {
-  const ttl = Math.min(Math.max(1, input.ttlDays ?? DEFAULT_TTL_DAYS), MAX_TTL_DAYS);
-  const expiresAt = new Date(Date.now() + ttl * 24 * 60 * 60 * 1000);
+  // null/undefined ttlDays → never expires (no `e` claim). A positive number
+  // is clamped to [1, MAX_TTL_DAYS].
+  const expiresAt =
+    input.ttlDays == null
+      ? null
+      : new Date(
+          Date.now() +
+            Math.min(Math.max(1, Math.floor(input.ttlDays)), MAX_TTL_DAYS) *
+              24 *
+              60 *
+              60 *
+              1000,
+        );
   const payload: Payload = {
     d: input.dashboardId,
     r: input.raidTeamId,
-    e: expiresAt.getTime(),
+    ...(expiresAt ? { e: expiresAt.getTime() } : {}),
     ...(input.allowedTabIds && input.allowedTabIds.length > 0
       ? { t: input.allowedTabIds }
       : {}),
@@ -93,7 +109,8 @@ export function createShareToken(input: CreateShareTokenInput): {
 export type VerifiedShareToken = {
   dashboardId: string;
   raidTeamId: string;
-  expiresAt: Date;
+  /** null when the link never expires. */
+  expiresAt: Date | null;
   /** Allowed tab ids, or undefined when the link shares every tab. */
   allowedTabIds?: string[];
 };
@@ -120,13 +137,17 @@ export function verifyShareToken(token: string): VerifiedShareToken | null {
     !payload ||
     typeof payload !== "object" ||
     typeof (payload as Payload).d !== "string" ||
-    typeof (payload as Payload).r !== "string" ||
-    typeof (payload as Payload).e !== "number"
+    typeof (payload as Payload).r !== "string"
   ) {
     return null;
   }
   const p = payload as Payload;
-  if (p.e < Date.now()) return null;
+  // Expiry is OPTIONAL (omitted = never expires). When present it must be a
+  // number and must still be in the future.
+  if (p.e !== undefined) {
+    if (typeof p.e !== "number") return null;
+    if (p.e < Date.now()) return null;
+  }
   // `t` is optional; only honor it when it's an array of strings (old tokens
   // lack it → undefined → every tab is shared).
   const allowedTabIds =
@@ -136,7 +157,7 @@ export function verifyShareToken(token: string): VerifiedShareToken | null {
   return {
     dashboardId: p.d,
     raidTeamId: p.r,
-    expiresAt: new Date(p.e),
+    expiresAt: p.e !== undefined ? new Date(p.e) : null,
     ...(allowedTabIds ? { allowedTabIds } : {}),
   };
 }

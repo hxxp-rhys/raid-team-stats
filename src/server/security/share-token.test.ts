@@ -48,14 +48,49 @@ describe("share-token", () => {
     expect(verifyShareToken("v2.foo.bar")).toBeNull();
   });
 
-  it("clamps ttlDays to the 30-day maximum", () => {
+  it("clamps ttlDays to the one-year (366-day) maximum", () => {
     const { expiresAt } = createShareToken({
       dashboardId,
       raidTeamId,
       ttlDays: 9999,
     });
-    const days = (expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
-    expect(days).toBeLessThanOrEqual(30);
-    expect(days).toBeGreaterThan(29);
+    const days =
+      (expiresAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    expect(days).toBeLessThanOrEqual(366);
+    expect(days).toBeGreaterThan(365);
+  });
+
+  it("never expires when ttlDays is omitted (the default)", () => {
+    const { token, expiresAt } = createShareToken({ dashboardId, raidTeamId });
+    expect(expiresAt).toBeNull();
+    const verified = verifyShareToken(token);
+    expect(verified).not.toBeNull();
+    expect(verified!.expiresAt).toBeNull();
+    expect(verified!.dashboardId).toBe(dashboardId);
+  });
+
+  it("never expires when ttlDays is null", () => {
+    const { expiresAt } = createShareToken({
+      dashboardId,
+      raidTeamId,
+      ttlDays: null,
+    });
+    expect(expiresAt).toBeNull();
+  });
+
+  it("honors a one-year expiry", () => {
+    const { token, expiresAt } = createShareToken({
+      dashboardId,
+      raidTeamId,
+      ttlDays: 365,
+    });
+    expect(expiresAt).not.toBeNull();
+    const verified = verifyShareToken(token);
+    expect(verified).not.toBeNull();
+    expect(verified!.expiresAt).not.toBeNull();
+    const days =
+      (verified!.expiresAt!.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+    expect(days).toBeGreaterThan(364);
+    expect(days).toBeLessThanOrEqual(365);
   });
 });

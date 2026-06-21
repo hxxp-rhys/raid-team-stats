@@ -168,16 +168,20 @@ export const dashboardRouter = router({
     }),
 
   /**
-   * Generates a short-lived shareable URL. Tokens are HMAC-signed against
-   * AUTH_SECRET; resolving still goes through `getByShareToken` which
-   * re-verifies guild membership at access time. Officer+ on the raid team
+   * Generates a shareable URL. The caller chooses the link's expiry (default:
+   * never; capped at one year). Tokens are HMAC-signed against
+   * SHARE_TOKEN_SECRET (falling back to AUTH_SECRET); resolving still goes
+   * through `getByShareToken`, which re-verifies guild membership at access
+   * time unless the dashboard is publicly viewable. Officer+ on the raid team
    * may create.
    */
   createShareLink: protectedProcedure
     .input(
       z.object({
         dashboardId: z.string().cuid(),
-        ttlDays: z.number().int().min(1).max(30).optional(),
+        // Link lifetime in days; null/omitted = never expires (the default).
+        // Capped at one year (366) to match the share-token ceiling.
+        ttlDays: z.number().int().min(1).max(366).nullable().optional(),
         // When set, the link only exposes these tab ids (a presentation
         // boundary — see getByShareToken). Omitted/empty = share every tab.
         allowedTabIds: z.array(z.string()).optional(),
@@ -215,7 +219,10 @@ export const dashboardRouter = router({
         actorUserId: ctx.session.user.id,
         subjectType: "dashboard",
         subjectId: input.dashboardId,
-        metadata: { kind: "share_link_issued", expiresAt },
+        metadata: {
+          kind: "share_link_issued",
+          expiresAt: expiresAt ? expiresAt.toISOString() : null,
+        },
       });
 
       return { token, url, expiresAt };
