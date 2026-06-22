@@ -73,12 +73,12 @@ acceptable. Revisit on every dependency review.
 
 - **Advisory:** GHSA-92pp-h63x-v22m.
 - **Why we accept:** Pulled in transitively by `@prisma/dev`, which we do not
-  use (we use a real Postgres via docker-compose for dev). The Prisma 7 CLI
-  embeds `@prisma/dev` as a default optional path for users running
+  use (dev runs against a real Postgres, not Prisma's embedded dev server). The
+  Prisma 7 CLI embeds `@prisma/dev` as a default optional path for users running
   `prisma dev`.
-- **Mitigation:** Do not run `prisma dev`. Our dev workflow is
-  `docker compose up` + `npx prisma migrate dev`, which does not load
-  `@prisma/dev`.
+- **Mitigation:** Do not run `prisma dev`. Our dev workflow runs a real Postgres
+  and applies migrations with `npm run db:migrate` (Prisma `migrate dev`), which
+  does not load `@prisma/dev`.
 - **Re-check:** when Prisma 7 patches the transitive dep, or if we adopt
   `prisma dev` for any workflow.
 

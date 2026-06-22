@@ -35,12 +35,14 @@ There are three pieces. Only the first is required:
 
 ```bash
 git clone https://github.com/hxxp-rhys/raid-team-stats.git
-cd raid-team-stats
+cd raid-team-stats/Setup
 cp .env.example .env
 ```
 
-You'll edit `.env` in the next steps. The app validates every value at boot and
-**refuses to start in production** if a required one is missing or malformed.
+Everything you run lives in the self-contained **[`Setup/`](./Setup/)** package —
+one Compose file that pulls the pre-built image. You'll edit `Setup/.env` in the
+next steps; the app validates every value at boot and **refuses to start in
+production** if a required one is missing or malformed.
 
 ---
 
@@ -62,7 +64,7 @@ into `.env`. Take them one at a time.
    BLIZZARD_REGION=us            # us | eu | kr | tw — match your guild's region
    ```
 
-### 3b. Warcraft Logs — **required for parse & coaching widgets**
+### 3b. Warcraft Logs — **required** (powers parse & coaching widgets)
 
 1. Go to <https://www.warcraftlogs.com/api/clients/> and create a client.
 2. Set its redirect URI to `http://localhost:3000/wcl-callback` (and your prod
@@ -91,24 +93,37 @@ Leave all three blank to disable Discord entirely; nothing else is affected.
 3. Set the **Interactions Endpoint URL** to `<APP_URL>/uploader/discord/interactions`.
 4. Invite the bot with scopes `bot applications.commands` (it does **not** need Administrator).
 
-### 3e. Email (SMTP) — **optional** (account verification, reminders)
+### 3e. Email (SMTP) — **required** (account verification, reminders)
 
 For account-verification emails, password resets, and raid auto-reminders, point
 `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` at any SMTP
-provider. Without it, you can still verify accounts using the dev token script
-(see Troubleshooting).
+provider. The Setup stack runs `NODE_ENV=production`, which **requires** these —
+the app refuses to boot without them — so configure an SMTP provider before you
+bring the stack up.
 
 ---
 
 ## 4. Generate the app secrets
 
-Run these and paste each result into the matching `.env` key:
+From the `Setup/` folder, run the bundled script — it generates every secret and
+password and writes them into `Setup/.env` (re-run safe; it never overwrites a
+value you already set):
+
+```bash
+./generate-secrets.sh
+```
+
+That fills in `AUTH_SECRET`, `SHARE_TOKEN_SECRET`, `TOKEN_ENCRYPTION_KEY`,
+`METRICS_TOKEN`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`. To do it by hand
+instead, generate each and paste it into the matching key:
 
 ```bash
 openssl rand -base64 48     # -> AUTH_SECRET           (session signing)
 openssl rand -base64 48     # -> SHARE_TOKEN_SECRET    (signs dashboard share links — recommended)
 openssl rand -base64 32     # -> TOKEN_ENCRYPTION_KEY  (encrypts stored OAuth tokens; must decode to 32 bytes)
 openssl rand -hex 32        # -> METRICS_TOKEN         (REQUIRED in production)
+openssl rand -hex 24        # -> POSTGRES_PASSWORD
+openssl rand -hex 24        # -> REDIS_PASSWORD
 ```
 
 `SHARE_TOKEN_SECRET` is optional: if you skip it, share links are signed with
@@ -124,23 +139,30 @@ set this to the email you'll sign in with:
 ADMIN_EMAILS=you@example.com
 ```
 
-The database and cache defaults in `.env` already match the Docker Compose
-services, so you don't need to touch `DATABASE_URL` or `REDIS_URL` for local use.
+You don't assemble `DATABASE_URL` / `REDIS_URL` yourself — the Compose file builds
+them from `POSTGRES_PASSWORD` / `REDIS_PASSWORD` (which `./generate-secrets.sh`
+fills in), so just set those passwords.
 
 ---
 
 ## 5. Run it (local)
 
+For a local instance (self-signed cert, no DNS) set these in `Setup/.env`:
+`APP_HOST=localhost`, `APP_URL=https://localhost`, `AUTH_URL=https://localhost`,
+`TLS_MODE=internal`. Then from the `Setup/` folder:
+
 ```bash
-docker compose up -d
+./init-storage.sh        # one-time: create the data dirs
+docker compose up -d     # pulls the image, runs migrations, starts the stack
 ```
 
-The first boot builds the image (~2 minutes); after that it's seconds. The
-container automatically runs `prisma generate` and `prisma migrate deploy`, so
-the database schema is set up for you.
+The first boot pulls the pre-built image (no build step); after that it's
+seconds. The container automatically runs `prisma migrate deploy`, so the
+database schema is set up for you.
 
-Open **<http://localhost:3000>**. Health checks live at `/api/health` and
-`/api/ready`. View logs with `docker compose logs -f web`.
+Open **<https://localhost>** (accept the self-signed cert) and sign up with email
++ password. Health checks live at `/api/health` and `/api/ready`. View logs with
+`docker compose logs -f web`.
 
 ---
 
@@ -203,24 +225,21 @@ docker compose up -d                             # launch
 
 The complete walkthrough — DNS records, production OAuth redirect URIs, the
 monitoring opt-out, backups, and updates — is in
-**[`Setup/README.md`](./Setup/README.md)**. That folder is the authoritative
-production path; the rest of this page (steps 1–7) covers local development.
+**[`Setup/README.md`](./Setup/README.md)**. It's the same Setup package you ran
+in steps 2–5, just pointed at your real domain (set `APP_HOST` to it and
+`TLS_MODE=acme`, or `custom` behind Cloudflare).
 
 ---
 
 ## 9. Updating
 
 ```bash
-# local development (builds from source):
-git pull
-docker compose up -d --build
-
-# production (from the Setup/ folder — pulls the new image, no build):
+# from the Setup/ folder — pulls the new image, no build:
 cd Setup && docker compose pull && docker compose up -d
 ```
 
 Database migrations run automatically on container start, so a routine update is
-just a pull + recreate (local dev rebuilds the image first).
+just a pull + recreate.
 
 ### One-time steps for the PII-encryption release
 
@@ -269,8 +288,8 @@ an empty database needs neither):
 | App won't start in production, logs mention a missing env var | A required value in `.env` is blank/malformed. The error names the key. |
 | Battle.net or WCL login fails with `redirect_uri` / `invalid_grant` / `400 callback URL is not valid` | The redirect URI in the provider console must match **exactly** — scheme, host, **and** path. Battle.net = `/api/auth/callback/battlenet`; WCL = `/wcl-callback`. Register both the localhost and the production URLs. |
 | Addon-only widgets are blank (vault World row, tier, professions…) | Install the StatSmith addon **and** run the companion uploader (Step 7). `/reload` in-game after enabling the addon. |
-| Can't receive the verification email | Configure SMTP, **or** mint a token locally: `docker compose exec web npx tsx scripts/dev-issue-verify-token.ts verify_email you@example.com` |
-| First `docker compose up` is slow | Normal — the initial image build is ~2 minutes; later boots are seconds. |
+| Can't receive the verification email | Configure SMTP so the app can send it (Step 3e). |
+| First `docker compose up` is slow | Normal — it pulls the image on first boot; later boots are seconds. |
 | Mythic+ rating looks off | Raider.IO is optional; without it the app uses Blizzard's M+ data, which can lag a fresh run. |
 
 ---
@@ -279,8 +298,8 @@ an empty database needs neither):
 
 Rebrand the site and tailor the landing page **without editing code or
 rebuilding the image** — every setting is an optional **server** environment
-variable, read at runtime. Set any of them in your `.env` (root `.env` for local
-dev, or `Setup/.env` for production); unset values fall back to sensible defaults.
+variable, read at runtime. Set any of them in `Setup/.env`; unset values fall
+back to sensible defaults.
 
 | Variable | What it changes |
 |---|---|

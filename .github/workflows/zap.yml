@@ -1,6 +1,13 @@
 name: ZAP baseline
 
-# OWASP ZAP baseline scan against an ephemeral docker-compose stack.
+# OWASP ZAP baseline scan against an ephemeral stack.
+#
+# There is no longer a root docker-compose file (Setup/docker-compose.yml is the
+# single DEPLOY compose, and it pulls the published image rather than building).
+# So this workflow writes a small CI-only compose that BUILDS the current source
+# into the production image and runs it with Postgres + Redis over plain HTTP for
+# the scan. It is NOT a tracked root compose — it's created at run time only.
+#
 # Manual or weekly — not on every PR, since the scan takes ~10 minutes.
 
 on:
@@ -20,30 +27,71 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Prepare .env for compose
+      - name: Write CI-only compose (builds current source; no root compose exists)
         run: |
-          cat > .env <<'EOF'
-          NODE_ENV=development
-          APP_URL=http://localhost:3000
-          LOG_LEVEL=warn
-          DATABASE_URL=postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
-          REDIS_URL=redis://redis:6379
-          AUTH_SECRET=ci-only-auth-secret-not-for-production-use-must-be-32-chars
-          TOKEN_ENCRYPTION_KEY=dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWFhYWE=
-          BLIZZARD_REGION=us
-          WCL_HOURLY_POINTS_BUDGET=17000
-          WCL_REDIRECT_URI=http://localhost:3000/wcl-callback
-          SMTP_PORT=587
-          RATE_LIMIT_TRUST_PROXY=false
-          NEXT_PUBLIC_APP_NAME=Raid Team Stats
-          EOF
+          cat > docker-compose.ci.yml <<'YAML'
+          name: rts-ci
+          services:
+            postgres:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: raid_team_stats
+                POSTGRES_PASSWORD: dev_password_change_me
+                POSTGRES_DB: raid_team_stats
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U raid_team_stats"]
+                interval: 5s
+                timeout: 3s
+                retries: 20
+            redis:
+              image: redis:7-alpine
+              command: ["redis-server", "--requirepass", "dev_redis_change_me"]
+              healthcheck:
+                test: ["CMD", "redis-cli", "-a", "dev_redis_change_me", "--no-auth-warning", "ping"]
+                interval: 5s
+                timeout: 3s
+                retries: 20
+            web:
+              build:
+                context: .
+                dockerfile: Dockerfile
+              environment:
+                NODE_ENV: production
+                RUN_MIGRATIONS: "true"
+                DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
+                MIGRATE_DATABASE_URL: postgresql://raid_team_stats:dev_password_change_me@postgres:5432/raid_team_stats?schema=public
+                REDIS_URL: redis://:dev_redis_change_me@redis:6379
+                AUTH_SECRET: ci-only-auth-secret-not-for-production-use-1234567890
+                TOKEN_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWFhYWE=
+                METRICS_TOKEN: ci-only-metrics-token
+                APP_URL: http://localhost:3000
+                # Dummy provider creds so the production env validator (env.ts)
+                # passes; the ZAP baseline only hits unauthenticated pages, so
+                # these need not actually work.
+                BLIZZARD_CLIENT_ID: ci-dummy
+                BLIZZARD_CLIENT_SECRET: ci-dummy
+                WCL_CLIENT_ID: ci-dummy
+                WCL_CLIENT_SECRET: ci-dummy
+                SMTP_HOST: smtp.example.com
+                SMTP_USER: ci-dummy
+                SMTP_PASSWORD: ci-dummy
+                SMTP_FROM: ci@example.com
+                NEXT_PUBLIC_APP_NAME: Raid Team Stats
+              ports:
+                - "3000:3000"
+              depends_on:
+                postgres:
+                  condition: service_healthy
+                redis:
+                  condition: service_healthy
+          YAML
 
-      - name: Boot stack
-        run: docker compose up -d --wait
+      - name: Boot stack (build + run)
+        run: docker compose -f docker-compose.ci.yml up -d --build
 
       - name: Wait for web container to be healthy
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 72); do
             if curl -fsS http://localhost:3000/api/health > /dev/null; then
               echo "web is ready"
               exit 0
@@ -51,7 +99,7 @@ jobs:
             sleep 5
           done
           echo "web never became ready" >&2
-          docker compose logs web | tail -100
+          docker compose -f docker-compose.ci.yml logs web | tail -200
           exit 1
 
       - name: Run ZAP baseline scan
@@ -65,4 +113,4 @@ jobs:
 
       - name: Tear down stack
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.ci.yml down -v

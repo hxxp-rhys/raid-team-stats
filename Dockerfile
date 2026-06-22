@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build for production. Run with docker-compose.prod.yml.
+# Multi-stage build for the production image (published to GHCR by
+# .github/workflows/docker-publish.yml and run by Setup/docker-compose.yml).
 
 # ─── deps ─────────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS deps
