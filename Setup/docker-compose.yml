@@ -3,10 +3,10 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #
 #  You should NOT need to edit this file. Every per-deployment value comes from
-#  the .env file beside it. The whole deploy is three commands:
+#  the .env file beside it. The whole deploy is:
 #
-#      cp .env.example .env      # then edit .env (and run ./generate-secrets.sh)
-#      ./init-storage.sh         # create the data dirs with correct permissions
+#      ./init.sh                 # create .env, generate secrets, prepare storage
+#      $EDITOR .env              # set APP_HOST/APP_URL/AUTH_URL + your API keys
 #      docker compose up -d      # pulls the image, runs DB migrations, starts up
 #
 #  Monitoring (Prometheus + Loki + Promtail + Grafana) is ON by default.
@@ -222,7 +222,7 @@ services:
       # Baked into the scrape config at START (via entrypoint.sh). After changing
       # METRICS_TOKEN you must RECREATE this container (docker compose up -d
       # prometheus), not just restart it.
-      METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required — run ./generate-secrets.sh}
+      METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required — run ./init.sh}
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/prometheus/entrypoint.sh:/etc/prometheus/entrypoint.sh:ro
@@ -239,7 +239,7 @@ services:
     container_name: rts-loki
     restart: unless-stopped
     profiles: ["monitoring"]
-    # Pin Loki's default uid so it matches the ownership init-storage.sh sets.
+    # Pin Loki's default uid so it matches the ownership init.sh sets.
     user: "10001:10001"
     command: ["-config.file=/etc/loki/loki-config.yml"]
     volumes:
@@ -267,12 +267,12 @@ services:
     container_name: rts-grafana
     restart: unless-stopped
     profiles: ["monitoring"]
-    # Pin Grafana's default uid so it matches the ownership init-storage.sh sets.
+    # Pin Grafana's default uid so it matches the ownership init.sh sets.
     user: "472:472"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       # No fail-closed guard here so opting OUT of monitoring never forces you to
-      # set it. generate-secrets.sh fills this in; set a strong value if you
+      # set it. init.sh fills this in; set a strong value if you
       # run monitoring. Grafana is localhost-only (SSH tunnel to reach it).
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-before-exposing}
       GF_AUTH_ANONYMOUS_ENABLED: "false"

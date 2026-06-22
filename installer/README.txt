@@ -17,8 +17,9 @@ Installed by the setup:
  - the addon           copied into <WoW>\_retail_\Interface\AddOns\StatSmith
 
 Using it:
- 1. In WoW, enable the "Raid Team Stats" addon and log in. It writes its data
-    file automatically within ~60s (no /reload needed).
+ 1. In WoW, enable the "Raid Team Stats" addon and log in. It collects your data
+    as you play; WoW saves it to disk when you /reload, log out, or quit, and
+    the companion uploads it on its next check.
  2. If you chose "run at startup", it's registered as a normal Windows
     startup app (NOT a scheduled task or service): it starts in your
     session at every sign-in and syncs hidden in the background every few
@@ -36,6 +37,8 @@ Upgrading:
 
 In-game commands (type these in WoW chat; /raidteamstats works the same as /rts):
  - /rts now      collect a fresh snapshot now (the uploader sends it for you)
+ - /rts export   collect a fresh snapshot and open a copy/paste window
+                 (manual upload fallback if you don't run the companion)
  - /rts status   show when your data was last collected
  - /rts version  show the installed addon version
  - /rts help     list the commands

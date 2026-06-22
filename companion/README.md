@@ -17,6 +17,9 @@ API for it).
    - `token` — your upload token from the website **Account** page
    - `wowPath` — your WoW install folder (the one containing `_retail_`)
    - `api` — your Raid Stats site address (e.g. `https://raid.example.com`)
+   - `autoUpdateAddon` *(optional, default `false`)* — set `true` to let the
+     companion update the addon for you when WoW is closed (the new bundle is
+     SHA-256 verified before it's applied)
 2. In WoW: install the addon, log in, and `/reload` (or log out once) so the
    game writes the SavedVariables file.
 
@@ -41,6 +44,7 @@ Type these in WoW chat (`/raidteamstats` works the same as `/rts`):
 | Command | What it does |
 |---|---|
 | `/rts now` | collect a fresh snapshot now — the companion uploads it for you |
+| `/rts export` | collect a fresh snapshot and open a copy/paste window (manual upload if you don't run this companion) |
 | `/rts status` | show when the last snapshot was taken |
 | `/rts version` | show the installed addon version |
 | `/rts help` | list the commands |

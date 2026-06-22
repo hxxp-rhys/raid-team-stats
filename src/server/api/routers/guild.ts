@@ -721,7 +721,7 @@ export const guildRouter = router({
    * Gated to OWNER only (NOT OFFICER) or platform admin. Type-the-name
    * confirm guards against wrong-entity deletes. Reuses
    * GUILD_ROLE_CHANGED with metadata.action="deleted" until we get a
-   * dedicated GUILD_DELETED audit event (NEXT_STEPS.md #5).
+   * dedicated GUILD_DELETED audit event.
    */
   delete: protectedProcedure
     .input(
