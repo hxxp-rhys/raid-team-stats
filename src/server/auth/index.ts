@@ -217,7 +217,7 @@ const config: NextAuthConfig = {
 
   callbacks: {
     async signIn({ user, account, profile }) {
-      // Battle.net is a PRIMARY identity. Three cases behind the one OAuth
+      // Battle.net is LINK-ONLY (not a primary identity). Three cases behind the one OAuth
       // callback, distinguished by (is this Battle.net already linked?) and
       // (is there a current session?):
       //

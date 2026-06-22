@@ -49,7 +49,7 @@
 >
 > **Revision note (post-critique):** §1.3, §2, §4, §5, §6, §8, §9 and the new
 > §11 were revised against the prod stack actually on `development` (pgbouncer
-> transaction mode, single global `encode` Caddyfile, `globalIp` 600/60s proxy
+> transaction mode, single global `encode` Setup/Caddyfile, `globalIp` 600/60s proxy
 > matcher, share-token 7–30d TTL, ingest-route ownership = character-only). The
 > two prior "near-real-time both legs" claims were over-confident about infra
 > that **does not exist in prod today**. See the **Critic resolution log (§11)**
@@ -137,7 +137,7 @@ Three load-bearing constraints were **verified against the live tree** and
 constrain the architecture. The previous draft assumed away all three:
 
 - **No `LISTEN/NOTIFY` wake.** Both `web` and `worker` reach Postgres **only
-  through pgbouncer in `POOL_MODE: transaction`** (`docker-compose.prod.yml`
+  through pgbouncer in `POOL_MODE: transaction`** (`Setup/docker-compose.yml`
   L60/L92/L126); the `postgres` container exposes no host port and there is **no
   `DIRECT_URL`/session-mode entry** (`src/lib/db.ts` builds a single
   `PrismaPg({connectionString: env.DATABASE_URL})`; the Prisma datasource has no
@@ -150,7 +150,7 @@ constrain the architecture. The previous draft assumed away all three:
   explicitly out of v1, fork 9.A.10.)
 
 - **SSE does not survive the prod Caddy + Cloudflare + proxy stack *as it
-  stands*.** The prod `Caddyfile` has one global `encode zstd gzip` (L5) and one
+  stands*.** The prod `Setup/Caddyfile` has one global `encode zstd gzip` (L5) and one
   `reverse_proxy web:3000` with **no `flush_interval`, no per-path matcher**
   (L27-31): a `text/event-stream` body is compressed/buffered and never flushes.
   And `src/proxy.ts` runs `consumeLimit(policies.globalIp, …)` (600/60s,
@@ -162,7 +162,7 @@ constrain the architecture. The previous draft assumed away all three:
   matcher with `flush_interval -1` + `encode` exclusion on the stream path; (2)
   edit the `proxy.ts` matcher regex to *exclude* the stream path (a code change);
   (3) heartbeat ≤15s. Until all three land + are verified on the prod CF plan,
-  **the live transport is short-polling.** (Verified: Caddyfile L5,L27-31;
+  **the live transport is short-polling.** (Verified: Setup/Caddyfile L5,L27-31;
   proxy.ts L40,L88-95; rate-limit.ts L128.)
 
 - **Existing machine-auth gate is character-ownership ONLY.** The ingest route
@@ -710,7 +710,7 @@ SSE is a gated upgrade (§1.3 B2).**
   1. **Caddy:** a per-path matcher for the stream route with `reverse_proxy {
      flush_interval -1 }`, **excluded from the global `encode`** (else the
      `text/event-stream` body buffers/compresses and never flushes — the stream
-     looks dead). The prod Caddyfile today has neither (L5 global encode, L27-31
+     looks dead). The prod Setup/Caddyfile today has neither (L5 global encode, L27-31
      single proxy, no matcher).
   2. **proxy.ts:** **edit the `matcher` regex** (L93) to add the stream path to
      the exclusion list alongside `api/health|api/ready|api/metrics`, so a held
@@ -1398,7 +1398,7 @@ against `prisma/schema.prisma`, `src/server/ingestion/queues.ts`,
 `addon/StatSmith/StatSmith.lua`, `companion/upload.mjs`,
 `src/app/uploader/ingest/route.ts`, `src/server/api/trpc.ts`,
 `src/server/security/share-token.ts`, `src/server/security/rate-limit.ts`,
-`src/proxy.ts`, `src/lib/db.ts`, `docker-compose.prod.yml`, `Caddyfile`.
+`src/proxy.ts`, `src/lib/db.ts`, `Setup/docker-compose.yml`, `Setup/Caddyfile`.
 
 ---
 
@@ -1417,7 +1417,7 @@ against the live tree before acting.
   (not v1)**. U6 reclassified from "to confirm" to "confirmed unsupported."
 
 - **B2 (SSE broken through current Caddy + proxy.ts; assumed config doesn't
-  exist).** ACCEPTED, verified (Caddyfile L5 global `encode`, L27-31 single proxy
+  exist).** ACCEPTED, verified (Setup/Caddyfile L5 global `encode`, L27-31 single proxy
   no matcher; proxy.ts L93 matcher includes all non-health paths +
   `consumeLimit(globalIp)` L40; rate-limit.ts L128 = 600/60s). **Day-one
   transport switched to SHORT-POLL** (`GET /uploader/poll/team/:id?since=`),

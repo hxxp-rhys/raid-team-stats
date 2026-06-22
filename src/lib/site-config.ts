@@ -40,7 +40,7 @@ type HomepageFeature = { title: string; body: string };
 const DEFAULT_FEATURES: ReadonlyArray<HomepageFeature> = [
   {
     title: "Live multi-source sync",
-    body: "Tracked raid-team members refresh hourly across Blizzard, Warcraft Logs, and Raider.IO. Full guild rosters refresh weekly after reset.",
+    body: "Tracked raid-team members refresh hourly, pulling live data from Blizzard, Warcraft Logs, and Raider.IO. Full guild rosters re-sync weekly from Battle.net after reset.",
   },
   {
     title: "Customizable dashboards",

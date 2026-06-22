@@ -117,7 +117,8 @@ Enforced in the app itself, before any feature code:
 - **HSTS** (2-year, `includeSubDomains`, `preload`), `X-Frame-Options: DENY` +
   CSP `frame-ancestors 'none'`, restrictive Permissions-Policy and
   Cross-Origin isolation headers.
-- **Sliding-window rate limiting** (Redis + Lua) on every non-static request.
+- **Sliding-window rate limiting** (Redis + Lua) on every request except the
+  health/ready/metrics endpoints (which must respond fast and use their own auth).
 - **Encryption at rest** — Argon2id password hashes; AES-256-GCM for OAuth
   tokens, MFA secrets, and PII.
 - **Authenticated Redis**, hardened containers (cap-drop, read-only rootfs,
@@ -223,9 +224,8 @@ src/
 
 addon/        # in-game World of Warcraft addon
 companion/    # desktop companion that uploads addon exports
-ops/          # monitoring configs (Prometheus, Loki, Promtail, Grafana)
 prisma/       # schema + migrations
-Setup/        # ← self-contained PRODUCTION deployment package
+Setup/        # ← self-contained PRODUCTION deploy package (compose, Caddy, ops/ monitoring configs)
 docs/         # design notes, runbooks, research
 ```
 
