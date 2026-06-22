@@ -76,18 +76,21 @@ section below.
 
 ## Local development
 
-**Prerequisites:** Docker / Docker Desktop. Node.js 22+ on the host is optional
-(only for running `next dev` natively for faster HMR on Windows).
+**Prerequisites:** Docker / Docker Desktop, and Node.js 22+ on the host for the
+Next.js dev server + the test suite.
 
-```bash
-cp .env.example .env     # placeholder secrets let the app boot in dev
-docker compose up        # Postgres + Redis + Next.js dev server + monitoring
-```
+To run a **full instance** locally, use the single [`Setup/`](./Setup/) Compose
+stack — the same package as production. It pulls the pre-built image and runs in
+production mode, so it needs your Battle.net / Warcraft Logs / SMTP credentials;
+for a no-DNS local run set `APP_HOST=localhost`, `APP_URL` / `AUTH_URL=https://localhost`,
+and `TLS_MODE=internal`. Full walkthrough: **[SETUP.md](./SETUP.md)**.
 
-The app boots on <http://localhost:3000> (`/api/health`, `/api/ready` probes).
-The container runs `prisma migrate deploy` on start, so the schema always
-matches the committed migrations. Full instructions, the native-host path, and
-troubleshooting live in **[SETUP.md](./SETUP.md)**.
+For **code changes with hot reload**, run `npm run dev` (Next.js dev server,
+development mode — provider keys optional). It needs a reachable Postgres + Redis
+and a populated root `.env` (copy `.env.example`, then set at least `AUTH_SECRET`
+and `TOKEN_ENCRYPTION_KEY`); apply the schema with `npm run db:migrate`.
+
+Health checks live at `/api/health` and `/api/ready`.
 
 ### Common scripts
 

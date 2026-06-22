@@ -1,9 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config. The web container is expected to be running at
- * APP_URL (default localhost:3000). In CI we boot the prod build via
- * `docker compose up` before the test step; locally use `npm run dev`.
+ * Playwright config. The app is expected to be running at APP_URL
+ * (default localhost:3000). In CI we build then start it natively
+ * (`npm run build` + `npm run start`) before the test step; locally use
+ * `npm run dev`.
  */
 const APP_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 
