@@ -33,7 +33,7 @@ A single `docker compose up -d` brings up the full stack:
 > **Security & monitoring stack — on by default, opt out anytime.**
 > The four monitoring services collect metrics and logs and ship preconfigured
 > Grafana dashboards. They bind to **localhost only** (never the internet). If
-> you don't want them, set `COMPOSE_PROFILES=` (empty) in `.env` — see
+> you don't want them, set `COMPOSE_PROFILES=caddy` in `.env` — see
 > [Monitoring](#monitoring) below.
 
 ---
@@ -233,10 +233,11 @@ ssh -L 3001:localhost:3001 you@your-server
 # then open http://localhost:3001  (user/pass: GRAFANA_ADMIN_USER / _PASSWORD)
 ```
 
-**To opt out of monitoring**, set this in `.env` and re-launch:
+**To opt out of monitoring**, drop `monitoring` from `COMPOSE_PROFILES` in `.env`
+(keep `caddy` so you still have a reverse proxy) and re-launch:
 
 ```ini
-COMPOSE_PROFILES=
+COMPOSE_PROFILES=caddy
 ```
 
 ```bash
@@ -263,11 +264,48 @@ included but **off by default**. To enable it:
 3. In `.env` set `BACKUP_AGE_PUBKEY`, `RCLONE_REMOTE`, and add `backup` to the
    profiles:
    ```ini
-   COMPOSE_PROFILES=monitoring,backup
+   COMPOSE_PROFILES=caddy,monitoring,backup
    ```
 4. `docker compose up -d`
 
 It runs at 04:00 server time and prunes remote copies older than 30 days.
+
+---
+
+## Using your own reverse proxy instead of Caddy (optional)
+
+The bundled Caddy is gated behind the `caddy` profile. If you already run an edge
+reverse proxy on the host (e.g. **Traefik**, Nginx Proxy Manager), drop `caddy`
+from `COMPOSE_PROFILES` so it stays out of the way (and frees ports 80/443):
+
+```ini
+COMPOSE_PROFILES=monitoring          # no "caddy"
+```
+
+The stack always creates a bridge network named **`rts-net`** that `web` joins.
+Attach your proxy to that network and route your host to `web:3000` (plain HTTP —
+your proxy terminates TLS). The data tier (Postgres/Redis) stays off `rts-net`,
+so the proxy can only reach the app. With Traefik's file provider, for example:
+
+```yaml
+# traefik dynamic config — raiders.example.com -> web
+http:
+  routers:
+    rts:
+      rule: "Host(`raiders.example.com`)"
+      entryPoints: [websecure]
+      service: rts
+      tls: { certResolver: cloudflare }
+  services:
+    rts:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://rts-web:3000"
+```
+
+…and add `rts-net` as an `external: true` network on the Traefik container so it
+can resolve `rts-web`. (`TLS_MODE` and the `certs/` dir are unused without Caddy.)
 
 ---
 
@@ -320,8 +358,8 @@ it remotely be offered its *Corresponding Source*. The app does this with a
 
 | Service | Container | Exposed | Profile |
 |---------|-----------|---------|---------|
-| Caddy | `rts-caddy` | 80, 443 (public) | always |
-| Web | `rts-web` | via Caddy only | always |
+| Caddy | `rts-caddy` | 80, 443 (public) | `caddy` |
+| Web | `rts-web` | via the reverse proxy only (Caddy, or your own on `rts-net`) | always |
 | Worker | `rts-worker` | — | always |
 | Postgres | `rts-postgres` | internal | always |
 | PgBouncer | `rts-pgbouncer` | internal | always |

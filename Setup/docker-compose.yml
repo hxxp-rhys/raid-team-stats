@@ -9,9 +9,11 @@
 #      $EDITOR .env              # set APP_HOST/APP_URL/AUTH_URL + your API keys
 #      docker compose up -d      # pulls the image, runs DB migrations, starts up
 #
-#  Monitoring (Prometheus + Loki + Promtail + Grafana) is ON by default.
-#  To turn it OFF, set  COMPOSE_PROFILES=  (empty) in .env.
-#  To also enable nightly encrypted backups, set  COMPOSE_PROFILES=monitoring,backup
+#  COMPOSE_PROFILES (in .env) selects the optional stacks. Default:
+#  caddy,monitoring — the bundled Caddy reverse proxy + monitoring (Prometheus +
+#  Loki + Promtail + Grafana). Drop "caddy" to front the app with an EXTERNAL
+#  proxy (e.g. Traefik) routed to `web` over rts-net; drop "monitoring" to skip
+#  it; add "backup" for nightly encrypted backups.
 #
 #  See README.md in this folder for the full step-by-step guide.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -20,10 +22,14 @@ name: raid-team-stats
 
 services:
   # ── Reverse proxy + HTTPS (TLS_MODE: acme | custom | internal) ────────────
+  #  OPTIONAL: gated behind the "caddy" profile (default-on via COMPOSE_PROFILES)
+  #  so deployments fronted by an EXTERNAL proxy (e.g. Traefik) omit it and route
+  #  straight to `web` over the shared rts-net network instead.
   caddy:
     image: caddy:2-alpine
     container_name: rts-caddy
     restart: unless-stopped
+    profiles: ["caddy"]
     # caddy-entrypoint.sh writes the tls directive (imported by the Caddyfile)
     # from TLS_MODE, then starts Caddy. Run via `sh`, so no +x bit is needed.
     entrypoint: ["/bin/sh", "/etc/caddy/caddy-entrypoint.sh"]
@@ -99,6 +105,13 @@ services:
       timeout: 3s
       start_period: 40s
       retries: 5
+    # web is the only service a reverse proxy talks to. It joins rts-net (the
+    # shared edge network an external proxy like Traefik attaches to) IN ADDITION
+    # to the default network it uses to reach the data tier (which stays off
+    # rts-net, so the proxy can't reach Postgres/Redis).
+    networks:
+      - default
+      - rts-net
 
   # ── Background ingestion worker (same image, different command) ───────────
   worker:
@@ -208,7 +221,7 @@ services:
       retries: 5
 
   # ═════════════════════════════════════════════════════════════════════════
-  #  MONITORING — ON by default. Opt out with COMPOSE_PROFILES= (empty) in .env.
+  #  MONITORING — ON by default. Opt out by dropping "monitoring" from COMPOSE_PROFILES.
   #  All UIs bind to 127.0.0.1 only; reach Grafana via an SSH tunnel
   #  (ssh -L 3001:localhost:3001 you@server  →  http://localhost:3001).
   # ═════════════════════════════════════════════════════════════════════════
@@ -321,3 +334,14 @@ services:
         echo "backup: apk add failed, retrying in 15s..."; sleep 15; done;
         echo "0 4 * * * sh /usr/local/bin/backup.sh" | crontab -;
         crond -f -l 2
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  # Shared "edge" network for the reverse proxy. With the bundled Caddy this is
+  # simply where `web` also lives; with an EXTERNAL proxy on the same host (e.g.
+  # Traefik) that proxy attaches to rts-net to reach `web` directly. bridge = a
+  # single-host network other Compose projects on the host can share. The data
+  # tier stays on the default network only, so the proxy never sees it.
+  rts-net:
+    name: rts-net
+    driver: bridge
