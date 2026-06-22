@@ -741,7 +741,7 @@ export const raidTeamRouter = router({
    * the existing assertRaidTeamRole helper. Type-the-name confirm guards
    * against wrong-entity deletes (e.g. an admin holding two team detail
    * pages open). Reuses RAID_TEAM_SETTINGS_UPDATED with metadata.action
-   * until we get dedicated *_DELETED audit events (NEXT_STEPS.md #5).
+   * until we get dedicated *_DELETED audit events.
    */
   delete: protectedProcedure
     .input(

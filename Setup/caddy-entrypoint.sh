@@ -41,7 +41,7 @@ case "${TLS_MODE}" in
       echo "  Put both files in the certs dir mounted at /certs, set" >&2
       echo "  SSL_CERT_FILENAME / SSL_KEY_FILENAME in .env, and make them" >&2
       echo "  readable by root (key mode 0600, owned by uid 0). The Setup" >&2
-      echo "  package's ./init-storage.sh does this for you." >&2
+      echo "  package's ./init.sh does this for you." >&2
       exit 1
     fi
     printf 'tls %s %s\n' "${cert}" "${key}" > "${SNIPPET}"

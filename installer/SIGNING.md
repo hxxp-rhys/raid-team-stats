@@ -1,8 +1,8 @@
 # Making the installer a trusted program (removing the Windows warning)
 
 Windows shows **"Windows protected your PC" (SmartScreen)** / **"unknown
-publisher"** because the MSI and the bundled `rts-companion.exe` are not
-**Authenticode code-signed**. It's a *reputation/identity* warning, not a
+publisher"** because the MSI and the bundled executables (`rts-companion.exe`,
+`rts-tray.exe`) are not **Authenticode code-signed**. It's a *reputation/identity* warning, not a
 malware detection. The only legitimate fix is to sign the binaries with a
 code-signing certificate from a CA Windows trusts. Self-signed certs do
 **not** work for public distribution (they'd have to be manually trusted on
@@ -14,7 +14,7 @@ every PC).
    own signing service (formerly "Trusted Signing"), ~US$9.99/month. Identity
    validated once (individual or business). Signatures get **immediate
    SmartScreen trust** (no slow reputation build). No hardware token. This
-   repo's release workflow signs the exe + MSI with it automatically once
+   repo's release workflow signs the executables + MSI with it automatically once
    configured (see "A." below). Best cost/UX for a self-hosted indie tool.
 2. **EV (Extended Validation) code-signing certificate** — ~US$250–700/yr
    (DigiCert, Sectigo, SSL.com…). Immediate SmartScreen trust. Requires a
@@ -23,14 +23,16 @@ every PC).
    but SmartScreen reputation **builds over time/downloads** — users may
    still see the warning for a while after launch.
 
-In all cases: sign **both** `rts-companion.exe` (its original Node
-signature is invalidated by the SEA injection) **and** the final `.msi`,
-and **timestamp** the signature (so it stays valid after the cert expires).
+In all cases: sign the bundled executables — `rts-companion.exe` and
+`rts-tray.exe` (their original Node signatures are invalidated by the SEA
+injection) — **and** the final `.msi`, and **timestamp** the signatures (so they
+stay valid after the cert expires).
 
 ## A. Azure Artifact Signing in CI (recommended — already wired)
 
-`.github/workflows/installer-release.yml` signs **both** the exe (before WiX
-embeds it into the MSI) and the MSI using the official
+`.github/workflows/installer-release.yml` signs the executables (the `exe`
+folder filter covers both `rts-companion.exe` and `rts-tray.exe`, before WiX
+embeds them into the MSI) and the MSI using the official
 `Azure/artifact-signing-action`. It activates automatically when you set, under
 the repo's **Settings → Secrets and variables → Actions**:
 

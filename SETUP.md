@@ -40,9 +40,11 @@ cp .env.example .env
 ```
 
 Everything you run lives in the self-contained **[`Setup/`](./Setup/)** package —
-one Compose file that pulls the pre-built image. You'll edit `Setup/.env` in the
-next steps; the app validates every value at boot and **refuses to start in
-production** if a required one is missing or malformed.
+one Compose file that pulls the pre-built image. The `cp` gives you a `.env` to
+fill in over the next steps (register your credentials below, then `./init.sh`
+populates all the secrets and prepares storage in step 4). The app validates
+every value at boot and **refuses to start in production** if a required one is
+missing or malformed.
 
 ---
 
@@ -103,19 +105,21 @@ bring the stack up.
 
 ---
 
-## 4. Generate the app secrets
+## 4. Initialize secrets and storage
 
-From the `Setup/` folder, run the bundled script — it generates every secret and
-password and writes them into `Setup/.env` (re-run safe; it never overwrites a
-value you already set):
+From the `Setup/` folder, run the bundled init script. It fills in every secret
+and password **and** creates the data directories with the ownership each
+container needs (re-run safe; it never overwrites a value you already set):
 
 ```bash
-./generate-secrets.sh
+sudo ./init.sh
 ```
 
-That fills in `AUTH_SECRET`, `SHARE_TOKEN_SECRET`, `TOKEN_ENCRYPTION_KEY`,
-`METRICS_TOKEN`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`. To do it by hand
-instead, generate each and paste it into the matching key:
+It sets `AUTH_SECRET`, `SHARE_TOKEN_SECRET`, `TOKEN_ENCRYPTION_KEY`,
+`METRICS_TOKEN`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and
+`GRAFANA_ADMIN_PASSWORD`. (`sudo` lets it set the right owner on the
+monitoring/Caddy data directories — without it those services fail to start with
+"permission denied".) To generate the secrets by hand instead, run:
 
 ```bash
 openssl rand -base64 48     # -> AUTH_SECRET           (session signing)
@@ -140,8 +144,8 @@ ADMIN_EMAILS=you@example.com
 ```
 
 You don't assemble `DATABASE_URL` / `REDIS_URL` yourself — the Compose file builds
-them from `POSTGRES_PASSWORD` / `REDIS_PASSWORD` (which `./generate-secrets.sh`
-fills in), so just set those passwords.
+them from `POSTGRES_PASSWORD` / `REDIS_PASSWORD` (which `./init.sh` fills in), so
+just set those passwords.
 
 ---
 
@@ -149,10 +153,10 @@ fills in), so just set those passwords.
 
 For a local instance (self-signed cert, no DNS) set these in `Setup/.env`:
 `APP_HOST=localhost`, `APP_URL=https://localhost`, `AUTH_URL=https://localhost`,
-`TLS_MODE=internal`. Then from the `Setup/` folder:
+`TLS_MODE=internal`. Then from the `Setup/` folder (storage was already prepared
+by `init.sh` in step 4):
 
 ```bash
-./init-storage.sh        # one-time: create the data dirs
 docker compose up -d     # pulls the image, runs migrations, starts the stack
 ```
 
@@ -214,13 +218,13 @@ own certificate — e.g. behind Cloudflare; see `Setup/README.md`), runs databas
 from one image, and ships a **default-on monitoring stack** (Prometheus + Loki +
 Grafana) you can opt out of.
 
-You edit one file and run one command:
+You run one init script, edit one file, and launch:
 
 ```bash
 cd Setup
-cp .env.example .env && ./generate-secrets.sh    # configure (one file)
-./init-storage.sh                                # prepare storage
-docker compose up -d                             # launch
+./init.sh                 # create .env, generate secrets, prepare storage
+$EDITOR .env              # set APP_HOST/APP_URL/AUTH_URL + your API keys
+docker compose up -d      # launch
 ```
 
 The complete walkthrough — DNS records, production OAuth redirect URIs, the

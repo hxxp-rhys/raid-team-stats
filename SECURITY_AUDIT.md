@@ -143,7 +143,7 @@ Data is grouped by element. "At rest", "In transit", and "Keys/logs" state the v
 - **Remediation:** add `.max(...)` to `members`/`guildOnline`/`sessions` and drop `.passthrough()` on the persisted objects.
 
 #### F14 — Grafana defaults to `admin`/`admin` (dev only)
-✅ **RESOLVED (2026-06-22):** `Setup/docker-compose.yml` grafana uses `GF_SECURITY_ADMIN_PASSWORD` (default `change-me-before-exposing`, filled by `generate-secrets.sh`) and is loopback-only.
+✅ **RESOLVED (2026-06-22):** `Setup/docker-compose.yml` grafana uses `GF_SECURITY_ADMIN_PASSWORD` (default `change-me-before-exposing`, filled by `init.sh`) and is loopback-only.
 - **Category:** Default credentials. **Location:** `Setup/docker-compose.yml`; `.env.example:104-105`.
 - **Risk:** real default creds — but heavily mitigated: Grafana binds to `127.0.0.1:3001` in dev, anonymous/signup are disabled, and **it does not exist in the prod compose at all**.
 - **Remediation:** set a strong `GRAFANA_ADMIN_PASSWORD` in `.env` and never expose `:3001` beyond loopback.

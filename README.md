@@ -52,14 +52,14 @@ There are two paths — pick the one that matches what you want to do:
 ### 🚀 Deploy it (self-host for your guild)
 
 Everything you need is in the **[`Setup/`](./Setup/) folder** — a self-contained
-production package that runs a pre-built image. You edit **one file** and run
-**one command**:
+production package that runs a pre-built image. Run one init script, edit **one
+file** (`.env`), and launch:
 
 ```bash
 cd Setup
-cp .env.example .env && ./generate-secrets.sh    # configure
-./init-storage.sh                                # prepare storage
-docker compose up -d                             # launch (auto-TLS, auto-migrate)
+./init.sh                 # create .env, generate secrets, prepare storage
+$EDITOR .env              # set APP_HOST/APP_URL/AUTH_URL + your API keys
+docker compose up -d      # launch (auto-TLS, auto-migrate)
 ```
 
 **→ Follow the step-by-step guide in [`Setup/README.md`](./Setup/README.md).**
