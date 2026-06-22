@@ -20,10 +20,12 @@ application. See the **Security** and **Hardening your hosting environment**
 sections of the [README](./README.md) for the operator-facing controls.
 
 Authentication is implemented via Auth.js v5 with both a Credentials provider
-(Argon2id password hashing) and Battle.net OAuth. Battle.net is a primary
-identity: signing in with a linked Battle.net account authenticates as its
-owner, and signing in with one that isn't linked to anyone auto-creates a new
-(email-less) account and links it.
+(Argon2id password hashing) and Battle.net OAuth. Email/password is the primary
+identity; Battle.net is **link-only**. Signing in with a Battle.net account that
+is already linked authenticates as its owner; signing in while already logged in
+links Battle.net to the current account; signing in with an unlinked Battle.net
+account is refused (you must register with an email first, then link). Battle.net
+never auto-creates accounts — it exposes no email.
 
 ## Cryptography
 
@@ -42,34 +44,25 @@ owner, and signing in with one that isn't linked to anyone auto-creates a new
 
 ## Known dependency advisories (accepted with mitigations)
 
-These advisories affect transitive dependencies that we cannot upgrade without
-introducing breaking changes (downgrading the framework itself). We document
-each, the assessed risk in our context, and the mitigation that keeps the risk
-acceptable. Revisit on every dependency review.
+These advisories affect dependencies we cannot currently move to the patched
+version without a breaking change (a peer-range conflict or a framework
+downgrade). We document each, the assessed risk in our context, and the
+mitigation that keeps the risk acceptable. Revisit on every dependency review.
 
-### 1. `nodemailer <= 8.0.4` — SMTP command injection (moderate)
+### 1. `nodemailer < 8.0.3` — SMTP command injection (moderate)
 
-- **Advisories:** GHSA-c7w3-x93f-qmm8, GHSA-vvjj-xcjg-gr5g.
-- **Why we accept:** Pulled in transitively by `@auth/core`. No upstream fix in
-  the Auth.js v5 beta channel at time of writing.
-- **Mitigation in code:** We never expose `envelope.size` or transport `name`
-  options to user input. All email sending paths use a single server-controlled
+- **Advisories:** GHSA-c7w3-x93f-qmm8 (`envelope.size`), GHSA-vvjj-xcjg-gr5g
+  (transport `name`). Fixed upstream in nodemailer 8.0.4.
+- **Why we accept:** nodemailer is a direct dependency pinned to the 7.x line
+  because `@auth/core` (Auth.js v5 beta) declares a `^7.0.7` peer range; adopting
+  the 8.0.4 fix requires an `@auth/core`/Auth.js upgrade that allows nodemailer 8.x.
+- **Mitigation in code:** We never expose `envelope.size` or the transport `name`
+  option to user input. All email sending paths use a single server-controlled
   transport configuration built from env vars; from/to/subject are constructed
   from validated user IDs or app-controlled templates.
-- **Re-check:** when Auth.js v5 ships a stable release that pins a patched
-  nodemailer.
+- **Re-check:** when `@auth/core`/Auth.js v5 stable allows nodemailer ≥ 8.0.4.
 
-### 2. `postcss < 8.5.10` — XSS via CSS stringify output (moderate)
-
-- **Advisory:** GHSA-qx2v-qp2m-jg93.
-- **Why we accept:** Pulled in transitively by `next`. The only `audit fix` is
-  to downgrade Next.js several major versions — unacceptable regression.
-- **Mitigation in code:** The vulnerability requires attacker-controlled CSS
-  input. Our CSS comes from our own source files and Tailwind 4; no user input
-  is processed through postcss.
-- **Re-check:** when a Next.js patch release bumps postcss.
-
-### 3. `@hono/node-server < 1.19.13` — middleware bypass via repeated slashes (moderate)
+### 2. `@hono/node-server < 1.19.13` — middleware bypass via repeated slashes (moderate)
 
 - **Advisory:** GHSA-92pp-h63x-v22m.
 - **Why we accept:** Pulled in transitively by `@prisma/dev`, which we do not
@@ -86,7 +79,7 @@ acceptable. Revisit on every dependency review.
 
 Production headers are enforced both by the Next.js proxy (`src/proxy.ts`,
 `src/server/security/headers.ts`) and by the Caddy reverse proxy
-(`Caddyfile`). Belt-and-braces — neither layer alone is authoritative.
+(`Setup/Caddyfile`). Belt-and-braces — neither layer alone is authoritative.
 
 Verify with:
 

@@ -25,7 +25,7 @@ export const SECURITY_SECTIONS: ReadonlyArray<{ title: string; body: string }> =
   },
   {
     title: "Hardening & logging",
-    body: "The app enforces a strict, nonce-based Content-Security-Policy, rate-limits sign-in and other sensitive endpoints, and keeps an audit log of privileged actions that is only ever appended to — entries are never altered after the fact, though old ones may age out under a configurable retention policy. In the shipped setup it runs as a non-root container with Linux capabilities dropped and privilege-escalation disabled. Personal data and secrets — including email addresses and tokens — are stripped from the application's logs.",
+    body: "The app enforces a strict, nonce-based Content-Security-Policy, rate-limits sign-in and other sensitive endpoints, and keeps an audit log of privileged actions that is only ever appended to — entries are never altered after the fact, though old ones may age out under a configurable retention policy. In the shipped setup the application runs as a non-root container with Linux capabilities dropped and privilege-escalation disabled. Personal data and secrets — including email addresses and tokens — are stripped from the application's logs.",
   },
   {
     title: "What's collected — and what isn't",

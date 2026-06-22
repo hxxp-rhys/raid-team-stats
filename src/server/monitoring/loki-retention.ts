@@ -10,8 +10,10 @@ import { logger } from "@/lib/logger";
  *   1. ENFORCE IT IMMEDIATELY by submitting a Loki delete request for the access
  *      stream older than the target (Loki's compactor — already configured with
  *      `retention_enabled` + `delete_request_store` — processes it).
- *   2. PERSIST it by rewriting `retention_period` in ops/loki/loki-config.yml so
- *      that on the next Loki restart the compactor enforces it NATIVELY.
+ *   2. PERSIST it by rewriting `retention_period` in the Loki config file so
+ *      that on the next Loki restart the compactor enforces it NATIVELY (best-
+ *      effort — only when that file is writable from this process; see
+ *      LOKI_CONFIG_PATH below).
  *
  * The retention prune job then keeps using the delete API only WHILE Loki's
  * running retention (read from /config) differs from the target; once a restart
@@ -22,8 +24,12 @@ import { logger } from "@/lib/logger";
  */
 
 const ACCESS_STREAM = '{container="rts-caddy"}';
-// The repo source is bind-mounted into the web/worker containers at /app, so the
-// Loki config file (also bind-mounted into the loki container) is writable here.
+// Loki reads its config from a file bind-mounted into the loki container (the
+// repo's Setup/ops/loki/loki-config.yml on the host). Rewriting it from THIS
+// process only works where that file is also reachable + writable here — true in
+// a local dev bind-mount, but NOT in the read-only production web container,
+// where this persist step no-ops (caught below) while Loki keeps its file-set
+// retention; the immediate delete-API enforcement above runs either way.
 const LOKI_CONFIG_PATH = "/app/ops/loki/loki-config.yml";
 // auth_enabled:false → Loki uses the default single tenant.
 const ORG_HEADER: Record<string, string> = { "X-Scope-OrgID": "fake" };
