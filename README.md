@@ -8,9 +8,9 @@ Built in security, encryption, hashing, monitoring, and observability.
 
 Customizable raid-team stat tracking for World of Warcraft guilds. It pulls
 character, Mythic+, raid, vault, and parse data from **Blizzard**, **Warcraft
-Logs**, and **Raider.IO** and renders configurable dashboards scoped to
-guild-internal raid teams — with an optional in-game addon for data the API
-doesn't expose.
+Logs**, **Raider.IO** and has it's own add-on to fill the gaps. It renders configurable
+dashboards scoped to guild-internal raid teams — with an optional in-game addon for
+data the API doesn't expose.
 
 > 💙 **Free & open source.** If your guild finds this useful, you can support
 > development and hosting via the **[Sponsor button](https://github.com/sponsors/hxxp-rhys)**.
