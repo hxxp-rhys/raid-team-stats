@@ -1,6 +1,12 @@
 version: 2
 updates:
-  # npm dependency CVEs / updates (security L5).
+  # npm dependency CVEs / updates (security L5). Everything is grouped into a
+  # single weekly PR. The `ignore` rules below hold back three upgrades that are
+  # blocked by a *coupled* package; without them, one incompatible member fails
+  # `npm ci` / lint / tsc and turns the entire grouped PR red, blocking every
+  # safe update alongside it. Each rule has a re-check trigger — revisit on every
+  # dependency review. (Dependabot excludes ignored dependencies from updates
+  # entirely, so they simply never appear in the grouped PR.)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -9,6 +15,28 @@ updates:
     groups:
       all:
         patterns: ["*"]
+    ignore:
+      # nodemailer: next-auth@5 (the only published 5.x line) peer-requires
+      # nodemailer@^7.0.7, so a v8/v9 major bump breaks `npm ci` with ERESOLVE.
+      # The 7.x advisories are mitigated in src/lib/email.ts + SECURITY.md §1.
+      # Re-check when next-auth widens its nodemailer peer range.
+      - dependency-name: "nodemailer"
+        update-types: ["version-update:semver-major"]
+      # eslint: eslint-config-next (16.x) bundles eslint-plugin-react@7.37.x,
+      # whose eslint peer range caps at 9.x and excludes eslint 10 — so eslint
+      # 10 breaks `npm run lint` (the plugin calls a rule API ESLint 10 removed)
+      # even though eslint-config-next's own peer only says ">=9". Hold at 9.x.
+      # Re-check when eslint-config-next ships a plugin set compatible w/ ESLint 10.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # ioredis: BullMQ pins its bundled ioredis to an EXACT version (5.10.1).
+      # Bumping our root ioredis ahead of that produces two ioredis copies, and
+      # BullMQ's `ConnectionOptions` type then rejects our root `redisBlocking`
+      # connection (dual-copy `AbstractConnector` skew) → `tsc` fails in
+      # src/server/ingestion/{queues,worker}.ts. Keep root ioredis aligned with
+      # BullMQ's bundled pin and bump the two together. Re-check when BullMQ's
+      # pinned ioredis version changes.
+      - dependency-name: "ioredis"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -38,9 +38,9 @@ because it mutates real DB state. **Don't run it against production.**
 
 ## OWASP ZAP baseline
 
-CI workflow `.github/workflows/security.yml` runs `zaproxy/action-baseline`
-weekly + on every push to `main`. Findings land as a workflow-run
-artifact (`zap-report`) and can be downloaded from the Actions tab.
+CI workflow `.github/workflows/zap.yml` runs `zaproxy/action-baseline`
+weekly (Mondays 06:00 UTC) and on manual dispatch. Findings land as a
+workflow-run artifact (`zap_scan`) and can be downloaded from the Actions tab.
 
 To run locally:
 
