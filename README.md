@@ -1,5 +1,11 @@
 # Raid Team Stats
 
+World of Warcraft raid analytics & performance dashboards for mythic guild raid teams.
+Track DPS, healing, deaths, and progression.
+Calendar for raid schedules with alerts and reminders.
+Custom forms for recruitment & more for each raid team.
+Built in security, encryption, hashing, monitoring, and observability.
+
 Customizable raid-team stat tracking for World of Warcraft guilds. It pulls
 character, Mythic+, raid, vault, and parse data from **Blizzard**, **Warcraft
 Logs**, and **Raider.IO** and renders configurable dashboards scoped to
