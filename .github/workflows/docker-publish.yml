@@ -40,7 +40,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Registers binfmt handlers so multi-arch builds are a one-line change
       # (add linux/arm64 to `platforms` below). Harmless for amd64-only.
@@ -66,7 +66,7 @@ jobs:
 
       - name: Compute image names + tags
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
           # NOTE: the repo was renamed to raid-team-stats, but the GHCR image is
           # intentionally pinned to ghcr.io/hxxp-rhys/raid-stats (NOT

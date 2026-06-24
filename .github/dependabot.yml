@@ -9,6 +9,11 @@ updates:
   # entirely, so they simply never appear in the grouped PR.)
   - package-ecosystem: "npm"
     directory: "/"
+    # Target development: `main` is a curated subset regenerated from
+    # `development` by the update-production skill (`git read-tree --reset
+    # development`), so a PR merged into `main` is reverted on the next publish.
+    # Dependency bumps must land on `development` and flow to main via publish.
+    target-branch: "development"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
@@ -39,9 +44,11 @@ updates:
       - dependency-name: "ioredis"
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "development"
     schedule:
       interval: "weekly"
   - package-ecosystem: "docker"
     directory: "/"
+    target-branch: "development"
     schedule:
       interval: "weekly"
