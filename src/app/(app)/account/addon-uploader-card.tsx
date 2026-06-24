@@ -194,13 +194,25 @@ export function AddonUploaderCard({
               here.
             </p>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
               <thead>
                 <tr className="text-muted-foreground text-left text-xs uppercase">
                   <th className="py-1 pr-3 font-medium">Character</th>
                   <th className="py-1 pr-3 text-right font-medium">World vault</th>
                   <th className="py-1 pr-3 text-right font-medium">M+ runs</th>
-                  <th className="py-1 pr-3 text-right font-medium">Updated</th>
+                  <th
+                    className="py-1 pr-3 text-right font-medium"
+                    title="When the addon last captured this data in-game"
+                  >
+                    Captured
+                  </th>
+                  <th
+                    className="py-1 pr-3 text-right font-medium"
+                    title="When the site last received this upload from the companion"
+                  >
+                    Received
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-border divide-y">
@@ -221,10 +233,24 @@ export function AddonUploaderCard({
                     <td className="text-muted-foreground py-1.5 pr-3 text-right text-xs">
                       {relAge(u.collectedAt, nowMs)}
                     </td>
+                    <td className="text-muted-foreground py-1.5 pr-3 text-right text-xs">
+                      {relAge(u.receivedAt, nowMs)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
+          )}
+          {uploads.length > 0 && (
+            <p className="text-muted-foreground mt-1.5 text-[11px] leading-relaxed">
+              <span className="font-medium">Captured</span> is when your addon
+              read the data in-game; <span className="font-medium">Received</span>{" "}
+              is when this site got it. An old <em>Captured</em> time just means
+              you haven&apos;t played recently — it doesn&apos;t mean uploads
+              stopped. A full capture needs a WoW session (vault, lockouts and
+              keystone arrive from Blizzard a minute or two after you log in).
+            </p>
           )}
         </div>
 

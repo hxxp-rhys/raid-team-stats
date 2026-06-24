@@ -314,18 +314,36 @@ function uninstallClean() {
 // deletion is skipped (UPGRADINGPRODUCTCODE) and this just cleans up the backup.
 function restoreConfig() {
   try {
-    var d = caData(); // LOGONUSER
+    var d = caData(); // LOGONUSER | PRODUCTVERSION
     var user = ("" + (d[0] || "")).replace(/^\s+|\s+$/g, "");
     if (!user) return;
+    var ver = "" + (d[1] || "");
     var fso = new ActiveXObject("Scripting.FileSystemObject");
     var bak = upgradeBackupPath(user);
-    if (!fso.FileExists(bak)) return; // nothing to restore or clean up
+    if (!fso.FileExists(bak)) return; // not an upgrade — nothing to restore/clean
     var dir = localAppDataDir(user);
     var cfg = dir + "\\config.json";
     if (!fso.FileExists(cfg)) {
       ensureTree(fso, dir);
       fso.CopyFile(bak, cfg, true); // verbatim restore
     }
+    // Re-assert install presence on UPGRADE. writeConfig (which fires the
+    // "install" telemetry) is gated NOT HAVECONFIG and is SKIPPED on every
+    // upgrade, so without this the website roster can keep showing the
+    // companion as "not installed" after an update until the next successful
+    // upload heals it. Read api+token from the (now-present) config and post
+    // "install" so the heal is immediate. Fail-open — postEvent never throws
+    // and a failure here must not block the upgrade.
+    try {
+      if (fso.FileExists(cfg)) {
+        var tf = fso.OpenTextFile(cfg, 1);
+        var txt = "" + tf.ReadAll();
+        tf.Close();
+        var am = txt.match(/"api"\s*:\s*"([^"]*)"/);
+        var tm = txt.match(/"token"\s*:\s*"([^"]*)"/);
+        if (am && tm && am[1] && tm[1]) postEvent(am[1], tm[1], "install", ver);
+      }
+    } catch (ePost) {}
     try { fso.DeleteFile(bak, true); } catch (eDel) {}
   } catch (e) {}
 }

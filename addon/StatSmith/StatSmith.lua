@@ -83,12 +83,23 @@ local AddonName, ns = ...
 -- Small GetActiveDelveTier fallback retained. No wire-format change.
 -- 1.2.8: version bump only, to exercise the opt-in addon auto-update end-to-end
 -- (no functional/collector change; no wire-format change).
+-- 1.2.9: completeness gate now keys on data-readiness EVENTS, not on the data
+-- being non-empty. The Great Vault is gated on the WEEKLY_REWARDS_UPDATE event
+-- (sawWeeklyRewards latch) — with a vaultRows>0 fallback so a session where the
+-- event never fires can't freeze the export — and the mythicPlus.season~=nil
+-- hard gate is DROPPED. An empty vault (early in the week) and an off-season
+-- nil M+ season are LEGITIMATE states that were freezing the companion-facing
+-- export (collectedAt never advanced) for the whole session. M+/keystone are
+-- now best-effort. The `complete` wire flag (shape) + the never-regress write
+-- are UNCHANGED, so the companion's captureIsPartial + the website re-check
+-- keep working as-is.
 local SCHEMA_VERSION = 3
-local ADDON_VERSION = "1.2.8"
--- Flipped true by UPDATE_INSTANCE_INFO (raid-lockout data has round-
--- tripped — fires even with zero lockouts, the meaningful "ready" signal
--- that lagged in sparse captures). Re-armed each addon load/reload.
-local sawInstanceInfo = false
+local ADDON_VERSION = "1.2.9"
+-- Flipped true by their readiness EVENTS (the data has round-tripped — both
+-- fire even when empty, the meaningful "ready" signal that lagged in sparse
+-- captures). Re-armed each addon load/reload.
+local sawInstanceInfo = false      -- UPDATE_INSTANCE_INFO (raid lockouts)
+local sawWeeklyRewards = false     -- WEEKLY_REWARDS_UPDATE (Great Vault)
 
 -- ─── tiny dependency-free JSON encoder ──────────────────────────────────
 local function jsonEncodeString(s)
@@ -839,19 +850,27 @@ local function collect()
   -- Observed raid presence (omitted entirely when nothing's been seen).
   local ro = safe(buildRaidObserver, nil)
   if type(ro) == "table" then payload.raidObserver = ro end
-  -- "Complete" = the data that needs a Blizzard server round-trip has had
-  -- its chance to land THIS session: UPDATE_INSTANCE_INFO has fired (raid
-  -- lockouts settled — fires even with zero lockouts) AND the Great Vault
-  -- rows are present AND the M+ season is known. These hold in every
-  -- legit-empty state and re-establish within seconds after a /reload,
-  -- so they don't false-negative the way the old 5-min timer did.
+  -- "Complete" = every section that needs a Blizzard server round-trip has HAD
+  -- ITS CHANCE to land THIS session: UPDATE_INSTANCE_INFO has fired (raid
+  -- lockouts) AND the Great Vault is ready AND lockout encounter data has
+  -- actually loaded (or there are zero saved instances). VAULT READINESS =
+  -- the WEEKLY_REWARDS_UPDATE event has fired (it fires even for an EMPTY vault
+  -- — this is what fixes the off-season / early-week freeze the old vaultRows>0
+  -- gate caused) OR the vault already has rows (a belt-and-braces fallback so a
+  -- rare session where the event never fires can't freeze the export forever —
+  -- WEEKLY_REWARDS_UPDATE, unlike UPDATE_INSTANCE_INFO/RequestRaidInfo, has no
+  -- explicit request that guarantees it fires). We do NOT gate on
+  -- mythicPlus.season~=nil (off-season nil is legitimate). M+ / keystone are
+  -- best-effort (no readiness event): a not-yet-loaded keystone arrives absent
+  -- and the weekly M+ run count can briefly read low, both healed by the next
+  -- complete capture (the 60s ticker, within ~1 min). The never-regress write
+  -- below still stops an incomplete capture from overwriting a good one.
   local vaultRows = payload.vault and payload.vault.activities
     and #payload.vault.activities or 0
   -- Honest lockout readiness: if the player is saved to ANY instance, the
   -- capture isn't complete until its encounter data has actually loaded
   -- (>=1 lockout with encounters>0). Zero saved instances is a valid
-  -- "ready & empty" state. This is the field that lagged while the old
-  -- proxy gate falsely reported complete.
+  -- "ready & empty" state.
   local locks = payload.lockouts or {}
   local lockoutsReady = #locks == 0
   if not lockoutsReady then
@@ -863,9 +882,7 @@ local function collect()
     end
   end
   local complete = sawInstanceInfo
-    and vaultRows > 0
-    and payload.mythicPlus ~= nil
-    and payload.mythicPlus.season ~= nil
+    and (sawWeeklyRewards or vaultRows > 0)
     and lockoutsReady
     and true
     or false
@@ -1032,10 +1049,14 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     -- Final refresh so the SavedVariables file the companion reads is current.
     collect()
   else
-    -- UPDATE_INSTANCE_INFO = raid-lockout data has round-tripped; this is
-    -- the readiness signal that gates a "complete" capture (it fires even
-    -- when the player has zero lockouts).
+    -- Readiness events that gate a "complete" capture (both fire even when the
+    -- player's lockouts/vault are empty — the "data has round-tripped" signal):
+    --   UPDATE_INSTANCE_INFO  = raid-lockout data has round-tripped.
+    --   WEEKLY_REWARDS_UPDATE = Great Vault data has round-tripped (replaces the
+    --                           old vaultRows>0 proxy that froze the export when
+    --                           the vault was legitimately empty).
     if event == "UPDATE_INSTANCE_INFO" then sawInstanceInfo = true end
+    if event == "WEEKLY_REWARDS_UPDATE" then sawWeeklyRewards = true end
     -- Vault/M+/gear/lockout/talent changed — refresh (debounced).
     C_Timer.After(2, collect)
   end

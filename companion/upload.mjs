@@ -35,7 +35,7 @@ import http from "node:http";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // bump in lockstep with installer/Package.wxs Version + src/lib/companion-release.ts LATEST_COMPANION_VERSION
-const COMPANION_VERSION = "1.0.35.0";
+const COMPANION_VERSION = "1.0.36.0";
 
 // Hard ceiling on the addon bundle download. The real bundle is ~40 KB; this
 // 8 MB cap bounds memory and refuses an absurd/hostile response before buffering.
@@ -663,34 +663,44 @@ async function syncNow(cfg, opts) {
   const force = !!(opts && opts.force);
   let uploaded = 0;
   let skipped = 0;
+  let failed = 0;
   try {
     for (const f of findSavedVarFiles(cfg.wowPath)) {
+      let m = null;
       let changed = true;
       try {
-        const m = (await stat(f)).mtimeMs;
-        if (!force && seen.get(f) === m) {
-          changed = false;
-        } else {
-          seen.set(f, m);
-        }
+        m = (await stat(f)).mtimeMs;
+        if (!force && seen.get(f) === m) changed = false;
       } catch (e) {
         log(`sync: stat failed for ${f}: ${(e && e.message) || e}`);
         changed = force; // can't debounce; upload only if forced
       }
-      if (changed) {
-        await uploadOne(cfg, f);
-        uploaded++;
-      } else {
+      if (!changed) {
         skipped++;
+        continue;
       }
+      const r = await uploadOne(cfg, f);
+      if (r === "uploaded") uploaded++;
+      else if (r === "failed") failed++;
+      else skipped++; // "skipped" (nothing new) or "none" (no/partial export)
+      // Commit the mtime debounce ONLY once the upload settled (accepted,
+      // nothing-new, or nothing-to-send). A FAILED upload leaves `seen`
+      // UNCHANGED so the next poll RETRIES this file instead of skipping it
+      // until WoW happens to rewrite SavedVariables. The 5-min poll bounds the
+      // retry rate, and a stale-token 401 keeps retrying so it auto-recovers
+      // once the token is reconfigured. (No mtime ⇒ stat failed ⇒ nothing to
+      // debounce.)
+      if (m !== null && r !== "failed") seen.set(f, m);
     }
-    lastResult = `${uploaded} uploaded, ${skipped} skipped`;
+    lastResult =
+      `${uploaded} uploaded, ${skipped} skipped` +
+      (failed ? `, ${failed} failed` : "");
   } catch (e) {
     lastResult = `error: ${(e && e.message) || e}`;
     log(`sync pass error: ${(e && e.message) || e}`);
   }
   lastSyncAt = new Date().toISOString();
-  return { uploaded, skipped };
+  return { uploaded, skipped, failed };
 }
 
 // ── Tray loopback control server (Phase 4) ──────────────────────────────────
@@ -809,6 +819,7 @@ function startControlServer(cfg, intervals) {
               ok: true,
               uploaded: r.uploaded,
               skipped: r.skipped,
+              failed: r.failed,
             });
             return;
           }
