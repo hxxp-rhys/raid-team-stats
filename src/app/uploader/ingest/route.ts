@@ -180,6 +180,49 @@ export async function POST(req: Request) {
   }
   const payload = parsed.data;
 
+  // ── mark the companion installed + record its version ──
+  // ANY authenticated upload that carries the version header (complete OR
+  // partial) is proof the companion is installed and running, so we set
+  // installed=true here — BEFORE the partial-capture early-return below.
+  // This heals two gaps: (1) a row previously flipped to installed=false by an
+  // "uninstall" event during a companion UPGRADE (the /uploader/event route)
+  // was never restored, because the old code only set installed=true in the
+  // upsert CREATE branch — so an actively-uploading companion showed as "not
+  // installed" on the roster forever; (2) a companion that only ever sends
+  // partial captures never reached the (post-early-return) status block at all.
+  // Data persistence stays gated on `complete` further down — only the
+  // install-presence flag is updated here. Paste-box / older companions omit
+  // the header, so they're never falsely marked installed. Best-effort: a
+  // failure here must not fail the upload.
+  if (reportedCompanionVersion) {
+    try {
+      const existing = await db.companionStatus.findUnique({
+        where: { userId },
+        select: { installedAt: true },
+      });
+      const seen = {
+        installed: true,
+        uninstalledAt: null,
+        lastSeenVersion: reportedCompanionVersion,
+        ...(payload.addonVersion
+          ? { lastSeenAddonVersion: payload.addonVersion }
+          : {}),
+      };
+      await db.companionStatus.upsert({
+        where: { userId },
+        create: { userId, installedAt: new Date(), ...seen },
+        // Preserve the FIRST install timestamp (mirrors /uploader/event); only
+        // stamp installedAt when it was never set.
+        update: {
+          ...seen,
+          ...(existing?.installedAt == null ? { installedAt: new Date() } : {}),
+        },
+      });
+    } catch (err) {
+      logger.warn({ err, userId }, "companion install-presence update failed");
+    }
+  }
+
   // ── reject partial captures ──
   // addon ≥1.1.5 sets complete=false for early/short-session snapshots
   // whose round-trip-dependent fields (keystone, lockout bosses, delves,
@@ -293,25 +336,10 @@ export async function POST(req: Request) {
   // upload above. NOT placed before the partial-capture early return — only a
   // full, successful upload should trigger it.
   try {
-    // Record the freshly-reported version(s) FIRST so the notify decision below
-    // uses up-to-date state. Only when the companion sent its version header
-    // (paste-box / older companions omit it, so we don't clobber a known
-    // lastSeenVersion with null). lastSeenAddonVersion comes from the parsed
-    // payload when present.
-    if (reportedCompanionVersion) {
-      const seen = {
-        lastSeenVersion: reportedCompanionVersion,
-        ...(payload.addonVersion
-          ? { lastSeenAddonVersion: payload.addonVersion }
-          : {}),
-      };
-      await db.companionStatus.upsert({
-        where: { userId },
-        create: { userId, installed: true, ...seen },
-        update: seen,
-      });
-    }
-
+    // The companion's install-presence + version were already recorded above
+    // (for ANY versioned upload, before the partial-capture return). Here we
+    // only decide whether to send the one-time "update available" email, using
+    // that up-to-date state.
     const status = await db.companionStatus.findUnique({
       where: { userId },
       select: { lastSeenVersion: true, notifiedUpdateVersion: true },
