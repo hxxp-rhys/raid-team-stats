@@ -3,7 +3,6 @@
 import { useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
 import { cn } from "@/lib/utils";
@@ -153,34 +152,22 @@ export function MembersModal({
   const [pick, setPick] = useState<string>("");
   const [pickRank, setPickRank] = useState<RankValue>(DEFAULT_RANK);
   const [pickRole, setPickRole] = useState<"MEMBER" | "CO_LEADER">("MEMBER");
-  const [query, setQuery] = useState<string>("");
 
-  // Always show the active roster in alphabetical order (case-insensitive,
-  // locale-aware) — the API doesn't guarantee any ordering. Search filters
-  // by character name OR realm so a manager can quickly find a member on a
-  // specific server.
-  const visibleMemberships = useMemo(() => {
+  // Active roster in alphabetical order (case-insensitive, locale-aware) — the
+  // API doesn't guarantee any ordering. Tie-break by realm so same-name alts on
+  // different realms have a stable, deterministic order.
+  const sortedMemberships = useMemo(() => {
     const all = team.data?.memberships ?? [];
-    const sorted = [...all].sort((a, b) => {
+    return [...all].sort((a, b) => {
       const byName = a.character.name.localeCompare(
         b.character.name,
         undefined,
         { sensitivity: "base" },
       );
       if (byName !== 0) return byName;
-      // Tie-break by realm so same-name alts on different realms have a
-      // stable, deterministic order (e.g. two "Foo" characters always sort
-      // by realm slug).
       return a.character.realmSlug.localeCompare(b.character.realmSlug);
     });
-    const q = query.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(
-      (m) =>
-        m.character.name.toLowerCase().includes(q) ||
-        m.character.realmSlug.toLowerCase().includes(q),
-    );
-  }, [team.data?.memberships, query]);
+  }, [team.data?.memberships]);
 
   const totalCount = team.data?.memberships.length ?? 0;
 
@@ -225,13 +212,9 @@ export function MembersModal({
           <p className="text-muted-foreground">Loading…</p>
         ) : totalCount === 0 ? (
           <p className="text-muted-foreground">No members yet.</p>
-        ) : visibleMemberships.length === 0 ? (
-          <p className="text-muted-foreground">
-            No members match &ldquo;{query}&rdquo;.
-          </p>
         ) : (
           <ul className="divide-border divide-y">
-            {visibleMemberships.map((m) => (
+            {sortedMemberships.map((m) => (
               <li
                 key={m.id}
                 className="flex items-center justify-between gap-3 py-2"
@@ -297,26 +280,25 @@ export function MembersModal({
           </ul>
         )}
 
-        {(canManage || totalCount > 1) && (
-          // Pinned bottom controls: the add bar (managers) and the member-list
-          // search, kept static and flush against the modal's Close footer while
-          // the roster scrolls. Spans the body padding (-mx-5 / -mb-4) and sits
-          // on the scroll container's bottom edge via `sticky bottom-0`.
+        {canManage && (
+          // Pinned add bar (character search / rank / role / Add): kept static
+          // and flush against the modal's Close footer while the roster scrolls.
+          // Spans the body padding (-mx-5 / -mb-4) and sits on the scroll
+          // container's bottom edge via `sticky bottom-0`.
           <div className="border-border bg-card sticky bottom-0 -mx-5 -mb-4 border-t">
-            {canManage && (
-              <form
-                className="flex flex-wrap items-center gap-2 px-5 py-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!pick) return;
-                  add.mutate({
-                    raidTeamId: teamId,
-                    characterId: pick,
-                    rank: pickRank,
-                    role: pickRole,
-                  });
-                }}
-              >
+            <form
+              className="flex flex-wrap items-center gap-2 px-5 py-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!pick) return;
+                add.mutate({
+                  raidTeamId: teamId,
+                  characterId: pick,
+                  rank: pickRank,
+                  role: pickRole,
+                });
+              }}
+            >
               <EligibleCombobox
                 options={eligible.data ?? []}
                 value={pick}
@@ -358,30 +340,11 @@ export function MembersModal({
               <Button type="submit" disabled={!pick || add.isPending} size="sm">
                 {add.isPending ? "Adding…" : "Add"}
               </Button>
-              </form>
-            )}
-            {canManage && add.error && (
+            </form>
+            {add.error && (
               <p className="text-destructive px-5 pb-2 text-xs" role="alert">
                 {add.error.message}
               </p>
-            )}
-            {totalCount > 1 && (
-              // Member-list search, sitting flush against the Close footer.
-              <div className="flex items-center gap-2 px-5 py-3">
-                <Input
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search by name or realm…"
-                  aria-label="Search members"
-                  className="h-8 flex-1"
-                />
-                {query && (
-                  <span className="text-muted-foreground shrink-0 text-xs">
-                    {visibleMemberships.length} of {totalCount}
-                  </span>
-                )}
-              </div>
             )}
           </div>
         )}
