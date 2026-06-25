@@ -53,6 +53,11 @@ import {
   groupKnownLikeInGame,
 } from "@/lib/widgets/professions-logic";
 import { isAddonFresh, resolveField } from "@/lib/source-resolver";
+import {
+  isOutdated,
+  LATEST_COMPANION_VERSION,
+  LATEST_ADDON_VERSION,
+} from "@/lib/companion-release";
 import { warcraftLogsClient } from "@/server/ingestion/warcraftlogs/client";
 import {
   DEATH_DAMAGE_TAKEN_QUERY,
@@ -403,7 +408,12 @@ export const snapshotRouter = router({
       const ownerUserIds = [...new Set(memberships.map((m) => m.character.userId))];
       const companionRows = await ctx.db.companionStatus.findMany({
         where: { userId: { in: ownerUserIds } },
-        select: { userId: true, installed: true },
+        select: {
+          userId: true,
+          installed: true,
+          lastSeenVersion: true,
+          lastSeenAddonVersion: true,
+        },
       });
       const companionByUser = new Map(
         companionRows.map((c) => [c.userId, c]),
@@ -623,9 +633,26 @@ export const snapshotRouter = router({
                   companionNow - lastReceivedAt.getTime() > COMPANION_STALE_MS
                 ? "warning"
                 : "ok";
+          // Installed-only: the user's last-seen companion + addon versions and
+          // whether either is behind the latest published release (an asterisk
+          // on the App column nudges an update without nagging).
+          const isInstalled = companionRow?.installed === true;
+          const companionVersion = isInstalled
+            ? (companionRow?.lastSeenVersion ?? null)
+            : null;
+          const addonVersion = isInstalled
+            ? (companionRow?.lastSeenAddonVersion ?? null)
+            : null;
           const companion = {
             state: companionState,
             lastReceivedAt,
+            companionVersion,
+            addonVersion,
+            companionOutdated: isOutdated(
+              companionVersion,
+              LATEST_COMPANION_VERSION,
+            ),
+            addonOutdated: isOutdated(addonVersion, LATEST_ADDON_VERSION),
           };
 
           // ── Phase 5: addon-as-primary / API-fallback for a SAFE subset ──
@@ -1817,6 +1844,7 @@ export const snapshotRouter = router({
           fightId: number;
           targetActorId: number;
           characterId: string | null;
+          targetName: string | null;
           encounterId: number;
           difficulty: number;
           deathAtMs: number;
@@ -1869,7 +1897,6 @@ export const snapshotRouter = router({
         ctx.db.wclFightDeath.findMany({
           where: {
             reportCode: { in: reportCodes },
-            characterId: { in: teamCharacterIds },
             kill: false,
           },
           orderBy: { deathAt: "desc" },
@@ -1895,15 +1922,30 @@ export const snapshotRouter = router({
         ctx.db.wclReportActor.findMany({
           where: {
             reportCode: { in: reportCodes },
-            characterId: { in: teamCharacterIds },
           },
-          select: { reportCode: true, actorId: true, characterId: true },
+          select: {
+            reportCode: true,
+            actorId: true,
+            characterId: true,
+            name: true,
+          },
         }),
       ]);
 
       // (reportCode → (actorId → characterId)), team only.
       const actorMapByReport = new Map<string, Map<number, string>>();
+      // (reportCode → (actorId → name)), ALL friendly actors — used to label the
+      // death of a non-roster raider (characterId = null) on the death list.
+      const actorNameByReport = new Map<string, Map<number, string>>();
       for (const a of actorRows) {
+        if (a.name != null) {
+          let nm = actorNameByReport.get(a.reportCode);
+          if (!nm) {
+            nm = new Map();
+            actorNameByReport.set(a.reportCode, nm);
+          }
+          nm.set(a.actorId, a.name);
+        }
         if (!a.characterId) continue;
         let m = actorMapByReport.get(a.reportCode);
         if (!m) {
@@ -1987,6 +2029,8 @@ export const snapshotRouter = router({
           fightId: d.fightId,
           targetActorId: d.targetActorId,
           characterId: d.characterId,
+          targetName:
+            actorNameByReport.get(d.reportCode)?.get(d.targetActorId) ?? null,
           encounterId: d.encounterId,
           difficulty: d.difficulty,
           deathAtMs: d.deathAt.getTime(),
@@ -2870,6 +2914,7 @@ export const snapshotRouter = router({
             encounterId: true,
             difficulty: true,
             kill: true,
+            startAt: true,
             friendlyPlayerIds: true,
           },
         }),
@@ -2911,34 +2956,85 @@ export const snapshotRouter = router({
         2,
         Math.ceil(teamCharacterIds.length * 0.5),
       );
+      // Dedup physical pulls across report copies. The SAME pull is frequently
+      // logged under multiple report codes (the guild log + a member's personal
+      // log), and there is no DB-level dedup (`@@unique([reportCode, fightId])`
+      // only) — so counting raw WclFight rows multiplies a pull by the number of
+      // copies it appears in. A raider present in every copy (typically the
+      // owner/uploader) balloons far above teammates present only in the guild
+      // log (the reported "101 vs 37" bug). Cluster fights by (encounter|
+      // difficulty) + startAt within a small tolerance — the same physical pull
+      // shares an absolute startAt across copies (±clock skew), while distinct
+      // pulls are far apart — then UNION the resolved roster across the copies
+      // (a member present in ANY copy counts once, which also repairs a guild
+      // log that under-captured friendlies) and treat the pull as sourced if ANY
+      // copy is sourced. Count each physical pull exactly once.
+      const PULL_MERGE_MS = 5000;
+      type PhysPull = {
+        encounterId: number;
+        difficulty: number;
+        kill: boolean;
+        sourced: boolean;
+        present: Set<string>;
+      };
+      const fightsByEncDiff = new Map<string, typeof fightRows>();
       for (const f of fightRows) {
-        const actorMap = actorMapByReport.get(f.reportCode);
-        const present = new Set<string>();
-        if (actorMap) {
-          for (const aid of f.friendlyPlayerIds) {
-            const cid = actorMap.get(aid);
-            if (cid) present.add(cid);
+        const k = `${f.encounterId}|${f.difficulty}`;
+        let arr = fightsByEncDiff.get(k);
+        if (!arr) fightsByEncDiff.set(k, (arr = []));
+        arr.push(f);
+      }
+      const physPulls: PhysPull[] = [];
+      for (const fs of fightsByEncDiff.values()) {
+        fs.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+        let cluster: PhysPull | null = null;
+        let clusterTime = Number.NEGATIVE_INFINITY;
+        for (const f of fs) {
+          const t = f.startAt.getTime();
+          if (!cluster || t - clusterTime > PULL_MERGE_MS) {
+            cluster = {
+              encounterId: f.encounterId,
+              difficulty: f.difficulty,
+              kill: false,
+              sourced: false,
+              present: new Set<string>(),
+            };
+            physPulls.push(cluster);
+          }
+          clusterTime = t;
+          cluster.kill ||= f.kill;
+          cluster.sourced ||= sourcedCodes.has(f.reportCode);
+          const actorMap = actorMapByReport.get(f.reportCode);
+          if (actorMap) {
+            for (const aid of f.friendlyPlayerIds) {
+              const cid = actorMap.get(aid);
+              if (cid) cluster.present.add(cid);
+            }
           }
         }
-        if (!sourcedCodes.has(f.reportCode) && present.size < sweptMinPresent)
-          continue; // gate: swept fights need a real share of the team present
-        const key = `${f.encounterId}|${f.difficulty}`;
+      }
+
+      for (const pp of physPulls) {
+        // Swept (no sourced copy) pulls still need a real share of the roster
+        // present, or one raider's pug log inflates the boss's totals.
+        if (!pp.sourced && pp.present.size < sweptMinPresent) continue;
+        const key = `${pp.encounterId}|${pp.difficulty}`;
         const enc = encTotals.get(key) ?? {
-          encounterId: f.encounterId,
-          difficulty: f.difficulty,
+          encounterId: pp.encounterId,
+          difficulty: pp.difficulty,
           totalPulls: 0,
           killPulls: 0,
         };
         enc.totalPulls++;
-        if (f.kill) enc.killPulls++;
+        if (pp.kill) enc.killPulls++;
         encTotals.set(key, enc);
         totalPulls++;
-        for (const cid of present) {
+        for (const cid of pp.present) {
           pullsPresent.set(cid, (pullsPresent.get(cid) ?? 0) + 1);
           const ek = `${key}|${cid}`;
           const p = partByEncChar.get(ek) ?? { pullsIn: 0, killPresent: false };
           p.pullsIn++;
-          if (f.kill) p.killPresent = true;
+          if (pp.kill) p.killPresent = true;
           partByEncChar.set(ek, p);
         }
       }

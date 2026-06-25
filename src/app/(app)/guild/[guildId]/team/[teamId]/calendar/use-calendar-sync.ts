@@ -59,11 +59,18 @@ type DeletableEvent = { id: string; seriesId: string | null };
 /**
  * Leader-only delete for a calendar raid. Branches on `seriesId`: a one-off
  * goes through `deleteEvent` (the server rejects series occurrences); a
- * recurring raid ends the WHOLE series via `endSeries` (deactivates it so the
- * materializer stops and clears future occurrences from the Month view).
- * Confirms first (series wording when recurring), then invalidates the calendar
- * queries — `eventsInRange` + `eventDetail`, plus `listSeries` for a series —
- * so every open surface drops the removed raid even before the sync poll fires.
+ * recurring raid HARD-deletes the WHOLE series via `endSeries({ hardDelete:
+ * true })` — deactivating it so the materializer stops AND removing every future
+ * occurrence (signups and all) so the series leaves the Month view entirely
+ * (past raids / attendance history are untouched). This is the deliberate
+ * difference from the series manager's "End series", which omits the flag and
+ * keeps its cancel-signed-up behavior.
+ *
+ * Confirms first (series wording when recurring), then on success invalidates
+ * the calendar queries — `eventsInRange` + `eventDetail`, plus `listSeries` for
+ * a series — so every open surface drops the removed raid even before the sync
+ * poll fires. On failure it exposes `error` (a server throw used to be silent —
+ * "nothing happens") so the delete buttons can surface why it didn't delete.
  */
 export function useDeleteRaid(raidTeamId: string, onDeleted?: () => void) {
   const utils = api.useUtils();
@@ -83,20 +90,26 @@ export function useDeleteRaid(raidTeamId: string, onDeleted?: () => void) {
   });
 
   const isPending = deleteEvent.isPending || endSeries.isPending;
+  // Surface whichever delete path last threw so the button can show it. Both
+  // mutations are mutually exclusive per click, so at most one carries an error.
+  const error = deleteEvent.error?.message ?? endSeries.error?.message ?? null;
 
   const confirmAndDelete = (event: DeletableEvent) => {
+    // Clear any prior error so a fresh attempt doesn't show a stale message.
+    deleteEvent.reset();
+    endSeries.reset();
     if (event.seriesId) {
       if (
         window.confirm(
-          "Delete the ENTIRE recurring series? This stops the schedule and removes its future occurrences. Past raids are untouched.",
+          "Delete this ENTIRE recurring series? This stops the schedule and removes ALL upcoming occurrences from the calendar — including any with signups. Past raids and their attendance history are untouched. This can't be undone.",
         )
       ) {
-        endSeries.mutate({ seriesId: event.seriesId });
+        endSeries.mutate({ seriesId: event.seriesId, hardDelete: true });
       }
     } else if (window.confirm("Delete this raid? This can't be undone.")) {
       deleteEvent.mutate({ eventId: event.id });
     }
   };
 
-  return { confirmAndDelete, isPending };
+  return { confirmAndDelete, isPending, error };
 }

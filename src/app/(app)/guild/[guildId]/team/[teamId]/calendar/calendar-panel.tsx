@@ -326,8 +326,13 @@ function AgendaRow({
               disabled={del.isPending}
               onClick={() => del.confirmAndDelete(e)}
             >
-              Delete
+              {del.isPending ? "Deleting…" : "Delete"}
             </Button>
+          )}
+          {del.error && (
+            <p className="text-destructive max-w-[16rem] text-right text-xs" role="alert">
+              {del.error}
+            </p>
           )}
         </div>
       </div>

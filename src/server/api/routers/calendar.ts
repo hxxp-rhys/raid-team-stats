@@ -1095,12 +1095,22 @@ export const calendarRouter = router({
     }),
 
   /**
-   * Stop a recurring series: deactivate it and clear its FUTURE occurrences
-   * (cancel ones with signups, delete empty placeholders; pinned/locked/
-   * already-cancelled left as-is). Past occurrences are preserved. LEADER+.
+   * Stop a recurring series: deactivate it and clear its FUTURE occurrences.
+   * Default (`hardDelete` false / omitted) — the series editor's "End series"
+   * action — cancels future occurrences with signups (history kept) and deletes
+   * empty placeholders. With `hardDelete: true` — the calendar "Delete raid"
+   * button on a recurring raid — EVERY future occurrence is hard-deleted
+   * regardless of signups, so the whole series disappears from the Month view.
+   * Either way pinned/locked/already-cancelled occurrences are left as-is and
+   * past occurrences are preserved (attendance history intact). LEADER+.
    */
   endSeries: protectedProcedure
-    .input(z.object({ seriesId: z.string().cuid() }))
+    .input(
+      z.object({
+        seriesId: z.string().cuid(),
+        hardDelete: z.boolean().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const series = await ctx.db.raidEventSeries.findUnique({
         where: { id: input.seriesId },
@@ -1146,6 +1156,7 @@ export const calendarRouter = router({
           status: e.status,
           signupCount: e._count.signups,
         })),
+        { hardDelete: input.hardDelete ?? false },
       );
       const res = await applySeriesPlan(ctx.db, series, plan);
 
@@ -1154,7 +1165,7 @@ export const calendarRouter = router({
         actorUserId: ctx.session.user.id,
         subjectType: "raidEventSeries",
         subjectId: series.id,
-        metadata: { ended: true, ...res },
+        metadata: { ended: true, hardDelete: input.hardDelete ?? false, ...res },
       });
       return { ok: true, ...res };
     }),

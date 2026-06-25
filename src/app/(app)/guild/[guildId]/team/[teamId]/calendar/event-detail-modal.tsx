@@ -131,10 +131,15 @@ function Body({
                 del.confirmAndDelete({ id: eventId, seriesId: event.seriesId })
               }
             >
-              Delete
+              {del.isPending ? "Deleting…" : "Delete"}
             </Button>
           )}
         </div>
+        {del.error && (
+          <p className="text-destructive text-xs" role="alert">
+            {del.error}
+          </p>
+        )}
         <p className="text-muted-foreground">
           {fmtRange(event.startsAt as unknown as string, event.endsAt as unknown as string)}
         </p>

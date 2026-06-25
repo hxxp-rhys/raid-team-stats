@@ -247,6 +247,11 @@ export function CooldownUsageWidget({ raidTeamId }: { raidTeamId: string }) {
           <tbody className="divide-border divide-y">
             {deaths.slice(0, 200).map((d, i) => {
               const meta = members[d.characterId ?? ""];
+              // Non-roster raiders' deaths have no roster character (characterId
+              // null or not on this team), so they have no class color — label
+              // them from the WCL actor name and render in a muted tone.
+              const isRoster = meta != null;
+              const displayName = meta?.name ?? d.targetName ?? "Unknown";
               const bossName = encName.get(d.encounterId) ?? `Boss ${d.encounterId}`;
               const fm = fights.get(`${d.reportCode}|${d.fightId}`);
               const pullLabel = `${diffShort(d.difficulty)}${fm?.pullNumber ? ` #${fm.pullNumber}` : ""}`;
@@ -260,7 +265,7 @@ export function CooldownUsageWidget({ raidTeamId }: { raidTeamId: string }) {
                       fightId: d.fightId,
                       targetActorId: d.targetActorId,
                       deathAtMs: d.deathAtMs,
-                      player: meta?.name ?? "Unknown",
+                      player: displayName,
                       classId: meta?.classId ?? null,
                       boss: bossName,
                       pullLabel,
@@ -269,10 +274,12 @@ export function CooldownUsageWidget({ raidTeamId }: { raidTeamId: string }) {
                   }
                 >
                   <td
-                    className="max-w-[7rem] truncate py-1 pr-2 font-medium"
-                    style={{ color: wowClassColor(meta?.classId) }}
+                    className={`max-w-[7rem] truncate py-1 pr-2 font-medium ${
+                      isRoster ? "" : "text-muted-foreground"
+                    }`}
+                    style={isRoster ? { color: wowClassColor(meta?.classId) } : undefined}
                   >
-                    {meta?.name ?? "Unknown"}
+                    {displayName}
                   </td>
                   {boss === "all" && (
                     <td className="max-w-[7rem] truncate py-1 pr-2">{bossName}</td>

@@ -11,11 +11,16 @@ const DAYS = 60;
 const W = 280;
 const H = 60;
 
+const fmtDay = (ms: number) =>
+  new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
 /**
  * Inline SVG sparkline of iLvL over time for a raid team. A header selector
  * picks the series: the team "Average" (default) or a single character's
  * forward-filled iLvL. Plots against the real day axis so the line is
- * time-accurate, and scales in both dimensions to fill its grid cell.
+ * time-accurate, and scales in both dimensions to fill its grid cell. A subtle
+ * y-axis gutter (max/min iLvL = the spread shown) and x-axis date range frame
+ * the line so the magnitude is legible.
  *
  * `characterId` is the persisted default selection: a character cuid, the
  * "__average__" sentinel, or unset (the latter two both mean Average).
@@ -53,7 +58,7 @@ export function CharacterTimelineWidget({
     ? "Team average"
     : characters.find((c) => c.id === effectiveSelection)?.name;
 
-  const path = useMemo(() => {
+  const chart = useMemo(() => {
     const points = timeline.data?.points;
     if (!points || points.length === 0) return null;
 
@@ -81,9 +86,11 @@ export function CharacterTimelineWidget({
         ? H / 2
         : H - ((y - yMin) / (yMax - yMin)) * (H - 4) - 2;
 
-    return series
+    const d = series
       .map((s, i) => `${i === 0 ? "M" : "L"} ${sx(s.day)} ${sy(s.value)}`)
       .join(" ");
+
+    return { d, yMin, yMax, xMin, xMax };
   }, [timeline.data, effectiveSelection, effectiveIsAverage]);
 
   const selector = (
@@ -119,27 +126,49 @@ export function CharacterTimelineWidget({
         <WidgetError message={timeline.error.message} />
       ) : characters.length === 0 ? (
         <WidgetEmpty>No tracked characters yet.</WidgetEmpty>
-      ) : !path ? (
+      ) : !chart ? (
         <WidgetEmpty>Not enough snapshots to draw a trend yet.</WidgetEmpty>
       ) : (
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          width="100%"
-          height="100%"
-          preserveAspectRatio="none"
-          role="img"
-          aria-label="iLvL trend"
-          className="block h-full w-full"
-        >
-          <path
-            d={path}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            vectorEffect="non-scaling-stroke"
-            className="text-primary"
-          />
-        </svg>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 gap-1.5">
+            {/* y-axis: the iLvL spread the line covers (max top, min bottom) */}
+            <div className="text-muted-foreground flex w-8 shrink-0 flex-col justify-between py-0.5 text-right text-[10px] tabular-nums">
+              <span>{Math.round(chart.yMax)}</span>
+              <span className="text-[9px] tracking-tight opacity-70">iLvL</span>
+              <span>
+                {chart.yMin === chart.yMax ? "" : Math.round(chart.yMin)}
+              </span>
+            </div>
+            {/* the line */}
+            <div className="relative min-w-0 flex-1">
+              <svg
+                viewBox={`0 0 ${W} ${H}`}
+                width="100%"
+                height="100%"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label={`iLvL trend, ${Math.round(chart.yMin)} to ${Math.round(
+                  chart.yMax,
+                )}`}
+                className="block h-full w-full"
+              >
+                <path
+                  d={chart.d}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  vectorEffect="non-scaling-stroke"
+                  className="text-primary"
+                />
+              </svg>
+            </div>
+          </div>
+          {/* x-axis: the date range the line spans */}
+          <div className="text-muted-foreground mt-1 flex justify-between pl-[38px] text-[10px] tabular-nums">
+            <span>{fmtDay(chart.xMin)}</span>
+            <span>{fmtDay(chart.xMax)}</span>
+          </div>
+        </div>
       )}
     </WidgetShell>
   );
