@@ -9,11 +9,13 @@ import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
 
 /**
  * Defensive Usage (cooldown_usage) — a browsable, filterable ledger of the
- * deaths in the raid team's WCL logs. Pick a raid (by date), boss, and pull
- * (all default to "All"), then click any death to open a verbose, data-driven
- * breakdown: the boss damage taken in the seconds before death, the defensives
- * that were active or pressed, and the healing received — enough for a raid
- * leader to judge skill issue vs external factor.
+ * deaths in the raid team's WCL logs. Pick a raid (by date), boss, and pull —
+ * these default to the most recent raid → its most recent boss → its most
+ * recent pull, and the per-pull filter unlocks once a boss is chosen — then
+ * click any death to open a verbose, data-driven breakdown: the boss damage
+ * taken in the seconds before death, the defensives that were active or
+ * pressed, and the healing received — enough for a raid leader to judge skill
+ * issue vs external factor.
  */
 
 const diffShort = (d: number): string =>

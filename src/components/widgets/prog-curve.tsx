@@ -4,12 +4,14 @@ import { useMemo, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
 import {
+  bossProgressOf,
   decayChipOf,
   dedupePulls,
   isThrowaway,
   nightBuckets,
   nightsOf,
   paceOf,
+  phasesTotalOf,
   progressOf,
   rollingBest,
   slopeOf,
@@ -210,10 +212,10 @@ export function ProgCurveWidget({ raidTeamId }: { raidTeamId: string }) {
             value={axis}
             onChange={(e) => setAxis(e.target.value as "fight" | "boss")}
             aria-label="Progress axis"
-            title="Fight % is phase-aware (intermissions count); Boss HP is raw health remaining."
+            title="Both axes are phase-aware and monotonic (a deeper pull always ranks higher). Fight % is WCL's fight percentage; Boss progress maps each pull onto one 0–100% scale across all phases — a deeper phase, or lower boss HP within a phase, reads as more progress."
           >
             <option value="fight">Fight %</option>
-            <option value="boss">Boss HP</option>
+            <option value="boss">Boss progress</option>
           </select>
           <select
             className="border-border bg-background rounded-md border px-1.5 py-1"
@@ -318,11 +320,17 @@ function CurveTab({
     return <WidgetEmpty>No pulls on this boss yet.</WidgetEmpty>;
   }
 
-  const values = pulls.map((p) => progressOf(p, axis));
+  // Boss axis is phase-aware: every pull shares ONE 0–100% scale built from the
+  // deepest phase reached on this boss (a kill reaches the final phase), so a
+  // deep-phase wipe never inverts below a shallow one. Fight axis is already
+  // monotonic, so it ignores phasesTotal.
+  const phasesTotal = phasesTotalOf(pulls);
+  const valueOf = (p: Pull) =>
+    axis === "boss" ? bossProgressOf(p, phasesTotal) : progressOf(p, "fight");
+
+  const values = pulls.map(valueOf);
   const best = rollingBest(values);
-  const wipesOnly = pulls
-    .filter((p) => !p.kill)
-    .map((p) => progressOf(p, axis));
+  const wipesOnly = pulls.filter((p) => !p.kill).map(valueOf);
   const slope = slopeOf(wipesOnly);
   const nights = nightsOf(pulls);
   const buckets = nightBuckets(pulls);

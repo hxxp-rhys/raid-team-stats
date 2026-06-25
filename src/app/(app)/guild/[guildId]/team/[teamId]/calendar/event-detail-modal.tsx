@@ -9,6 +9,7 @@ import { wowClassColor } from "@/lib/wow";
 import { cn } from "@/lib/utils";
 import type { AttendanceState, RosterMember } from "@/lib/calendar/roster";
 import { ReadinessBar, STATE_META, StatusControl } from "./parts";
+import { useDeleteRaid } from "./use-calendar-sync";
 
 const fmtRange = (start: string, end: string) => {
   const s = new Date(start);
@@ -25,12 +26,14 @@ const fmtRange = (start: string, end: string) => {
 
 export function EventDetailModal({
   eventId,
+  raidTeamId,
   open,
   onClose,
   canLead,
   onEdit,
 }: {
   eventId: string | null;
+  raidTeamId: string;
   open: boolean;
   onClose: () => void;
   canLead: boolean;
@@ -39,7 +42,13 @@ export function EventDetailModal({
   return (
     <Modal open={open} onClose={onClose} title="Raid event">
       {open && eventId && (
-        <Body eventId={eventId} canLead={canLead} onEdit={onEdit} />
+        <Body
+          eventId={eventId}
+          raidTeamId={raidTeamId}
+          canLead={canLead}
+          onEdit={onEdit}
+          onClose={onClose}
+        />
       )}
     </Modal>
   );
@@ -47,16 +56,21 @@ export function EventDetailModal({
 
 function Body({
   eventId,
+  raidTeamId,
   canLead,
   onEdit,
+  onClose,
 }: {
   eventId: string;
+  raidTeamId: string;
   canLead: boolean;
   onEdit: (id: string) => void;
+  onClose: () => void;
 }) {
   const utils = api.useUtils();
   const q = api.calendar.eventDetail.useQuery({ eventId });
   const refetch = () => void utils.calendar.eventDetail.invalidate({ eventId });
+  const del = useDeleteRaid(raidTeamId, onClose);
 
   const lock = api.calendar.setLock.useMutation({ onSuccess: refetch });
   const cancel = api.calendar.cancelEvent.useMutation({
@@ -105,6 +119,20 @@ function Body({
           )}
           {locked && (
             <span className="text-amber-500 text-xs font-medium">🔒 ROSTER LOCKED</span>
+          )}
+          {canLead && (
+            <Button
+              type="button"
+              size="xs"
+              variant="destructive"
+              className="ml-auto"
+              disabled={del.isPending}
+              onClick={() =>
+                del.confirmAndDelete({ id: eventId, seriesId: event.seriesId })
+              }
+            >
+              Delete
+            </Button>
           )}
         </div>
         <p className="text-muted-foreground">

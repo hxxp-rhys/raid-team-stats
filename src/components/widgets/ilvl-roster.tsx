@@ -1,10 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import { api } from "@/lib/trpc-client";
+import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { wowClassColor } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
+
+type TeamMember =
+  RouterOutputs["snapshot"]["latestForTeam"]["members"][number];
 
 /**
  * Team Roster — every active member with their roster RANK, realm, level and
@@ -37,15 +45,40 @@ const rankOrder = (r: string | null | undefined) =>
 
 type SortKey = "name" | "rank" | "realm" | "level" | "ilvl";
 
+type RosterRow = {
+  m: TeamMember;
+  name: string;
+  rank: string | null;
+  realm: string;
+  level: number;
+  ilvl: number | null;
+  companion: {
+    state: "none" | "ok" | "warning";
+    lastReceivedAt: Date | string | null;
+  };
+};
+
+// Per-column descriptors. Rank sorts by standing order (lower = higher
+// standing), so it defaults ascending (best-first) like the original.
+const COLUMNS: ColumnMap<RosterRow, SortKey> = {
+  name: { key: "name", accessor: (r) => r.name, kind: "text" },
+  rank: {
+    key: "rank",
+    accessor: (r) => rankOrder(r.rank),
+    kind: "number",
+    defaultAsc: true,
+  },
+  realm: { key: "realm", accessor: (r) => r.realm, kind: "text" },
+  level: { key: "level", accessor: (r) => r.level, kind: "number" },
+  ilvl: { key: "ilvl", accessor: (r) => r.ilvl, kind: "number" },
+};
+
 export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
-  // Default: alphabetical by character name.
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [asc, setAsc] = useState(true);
 
-  const rows = useMemo(() => {
+  const baseRows = useMemo<RosterRow[]>(() => {
     const members = q.data?.members ?? [];
-    const withVals = members.map((m) => ({
+    return members.map((m) => ({
       m,
       name: m.character.name,
       rank: (m as { rank?: string | null }).rank ?? null,
@@ -62,38 +95,19 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
         }
       ).companion ?? { state: "none" as const, lastReceivedAt: null },
     }));
-    const dir = asc ? 1 : -1;
-    const cmp = (a: (typeof withVals)[number], b: (typeof withVals)[number]) => {
-      switch (sortKey) {
-        case "rank": {
-          const d = rankOrder(a.rank) - rankOrder(b.rank);
-          return d !== 0 ? d * dir : a.name.localeCompare(b.name);
-        }
-        case "realm": {
-          const d = a.realm.localeCompare(b.realm);
-          return d !== 0 ? d * dir : a.name.localeCompare(b.name);
-        }
-        case "level":
-          return (a.level - b.level) * dir || a.name.localeCompare(b.name);
-        case "ilvl":
-          return ((a.ilvl ?? -1) - (b.ilvl ?? -1)) * dir || a.name.localeCompare(b.name);
-        case "name":
-        default:
-          return a.name.localeCompare(b.name) * dir;
-      }
-    };
-    return [...withVals].sort(cmp);
-  }, [q.data, sortKey, asc]);
+  }, [q.data]);
 
-  const toggle = (key: SortKey) => {
-    if (key === sortKey) {
-      setAsc((v) => !v);
-    } else {
-      setSortKey(key);
-      // Sensible default direction per column: text asc, numbers desc.
-      setAsc(key === "name" || key === "realm" || key === "rank");
-    }
-  };
+  // Default: alphabetical by character name.
+  const {
+    sorted: rows,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: COLUMNS,
+    initial: { key: "name", asc: true },
+    tieBreaker: (r) => r.name,
+  });
 
   return (
     <WidgetShell
@@ -112,11 +126,11 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
             <caption className="sr-only">Team roster</caption>
             <thead>
               <tr className="text-muted-foreground text-left text-xs uppercase">
-                <SortHeader label="Character" col="name" sortKey={sortKey} asc={asc} onClick={toggle} />
-                <SortHeader label="Rank" col="rank" sortKey={sortKey} asc={asc} onClick={toggle} />
-                <SortHeader label="Realm" col="realm" sortKey={sortKey} asc={asc} onClick={toggle} />
-                <SortHeader label="Lvl" col="level" sortKey={sortKey} asc={asc} onClick={toggle} />
-                <SortHeader label="iLvL" col="ilvl" sortKey={sortKey} asc={asc} onClick={toggle} align="right" />
+                <SortableHeader label="Character" col="name" active={sortKey === "name"} asc={asc} onSort={toggle} />
+                <SortableHeader label="Rank" col="rank" active={sortKey === "rank"} asc={asc} onSort={toggle} />
+                <SortableHeader label="Realm" col="realm" active={sortKey === "realm"} asc={asc} onSort={toggle} />
+                <SortableHeader label="Lvl" col="level" active={sortKey === "level"} asc={asc} onSort={toggle} />
+                <SortableHeader label="iLvL" col="ilvl" active={sortKey === "ilvl"} asc={asc} onSort={toggle} align="right" />
                 <th scope="col" className="py-1 pr-3 text-center font-medium uppercase">
                   App
                 </th>
@@ -157,42 +171,6 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
         </div>
       )}
     </WidgetShell>
-  );
-}
-
-function SortHeader({
-  label,
-  col,
-  sortKey,
-  asc,
-  onClick,
-  align,
-}: {
-  label: string;
-  col: SortKey;
-  sortKey: SortKey;
-  asc: boolean;
-  onClick: (c: SortKey) => void;
-  align?: "right";
-}) {
-  const active = sortKey === col;
-  return (
-    <th
-      scope="col"
-      aria-sort={active ? (asc ? "ascending" : "descending") : "none"}
-      className={`py-1 pr-3 font-medium ${align === "right" ? "text-right" : ""}`}
-    >
-      <button
-        type="button"
-        onClick={() => onClick(col)}
-        className={`inline-flex items-center gap-0.5 uppercase hover:text-foreground ${
-          active ? "text-foreground" : ""
-        }`}
-      >
-        {label}
-        <span className="text-[9px]">{active ? (asc ? "▲" : "▼") : "↕"}</span>
-      </button>
-    </th>
   );
 }
 

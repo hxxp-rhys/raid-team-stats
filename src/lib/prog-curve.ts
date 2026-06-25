@@ -55,17 +55,70 @@ export function dedupePulls(pulls: Pull[]): Pull[] {
 }
 
 /**
- * Progress made on a pull, 0–100. Kills are always 100. The default axis is
- * fightPercentage (phase-aware); bossPercentage (raw HP) is the toggle.
- * A pull with neither value reads as 0 progress, never as null — by this
+ * Progress made on a pull, 0–100. Kills are always 100.
+ *
+ * The "fight" axis uses WCL's fightPercentage, which is already phase-weighted
+ * and monotonic across a fight. The "boss" axis is PHASE-AWARE overall progress
+ * (see `bossProgressOf`): raw `bossPercentage` is the HP of the LAST REACHED
+ * PHASE and resets to ~100 each phase, so it is NOT monotonic on multi-phase
+ * bosses and must never be charted directly. `progressOf(p, "boss")` therefore
+ * delegates to `bossProgressOf` with `phasesTotal` computed from the pull's own
+ * `lastPhase` — callers that have the whole encounter should prefer
+ * `bossProgressOf(p, phasesTotalOf(pulls))` so every pull shares one scale.
+ *
+ * A pull with neither percentage reads as 0 progress, never as null — by this
  * point the row IS a real pull; only its depth is unknown.
  */
 export function progressOf(p: Pull, axis: "fight" | "boss" = "fight"): number {
   if (p.kill) return 100;
-  const remaining =
-    axis === "fight" ? (p.fightPct ?? p.bossPct) : (p.bossPct ?? p.fightPct);
+  if (axis === "boss") return bossProgressOf(p, p.lastPhase ?? 1);
+  const remaining = p.fightPct ?? p.bossPct;
   if (remaining == null) return 0;
   return Math.min(100, Math.max(0, 100 - remaining));
+}
+
+/**
+ * Highest phase reached across an encounter's pulls — the denominator for
+ * phase-aware boss progress. A kill reaches the final phase, so this is the
+ * boss's phase count in practice. Returns 1 when no pull carries a phase (the
+ * fallback path then collapses `bossProgressOf` to raw `100 - bossPct`).
+ */
+export function phasesTotalOf(pulls: Pull[]): number {
+  let max = 1;
+  for (const p of pulls) {
+    if (p.lastPhase != null && p.lastPhase > max) max = p.lastPhase;
+  }
+  return max;
+}
+
+/**
+ * PHASE-AWARE overall boss progress, 0–100 and MONOTONIC: a deeper phase OR a
+ * lower `bossPct` within a phase always ranks higher. Maps each pull onto one
+ * shared 0–100% scale spanning the whole fight:
+ *
+ *   progress = ((lastPhase - 1) + (100 - bossPct)/100) / phasesTotal * 100
+ *
+ * where `phasesTotal` is the max phase observed across the encounter
+ * (`phasesTotalOf`). Phase k contributes the band [(k-1)/phasesTotal,
+ * k/phasesTotal] and the within-phase HP burned fills that band, so the bands
+ * meet exactly at phase boundaries — no inversion where a deep P3 wipe
+ * (high bossPct) would otherwise plot below a shallow P1 wipe.
+ *
+ * Fallback to the raw `100 - bossPct` when phase data is missing (lastPhase
+ * null/0) or there is only one phase (phasesTotal ≤ 1) — nothing to weight.
+ * Kills always map to 100.
+ */
+export function bossProgressOf(p: Pull, phasesTotal: number): number {
+  if (p.kill) return 100;
+  const bossPct = p.bossPct ?? p.fightPct;
+  if (bossPct == null) return 0;
+  const lastPhase = p.lastPhase ?? 0;
+  if (lastPhase < 1 || phasesTotal <= 1) {
+    return Math.min(100, Math.max(0, 100 - bossPct));
+  }
+  const progress =
+    ((lastPhase - 1 + (100 - bossPct) / 100) / phasesTotal) * 100;
+  return Math.min(100, Math.max(0, progress));
 }
 
 export type ThrowawayOptions = {

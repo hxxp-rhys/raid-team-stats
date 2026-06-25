@@ -1,16 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { api } from "@/lib/trpc-client";
+import { cn } from "@/lib/utils";
 
 /**
  * The roster ranks an officer can assign — Raid Leader / Officer / Main / Trial
  * / Flex / Rotational / Social (leadership first). Distinct from the site
- * permission tier (role). "" = unranked.
+ * permission tier (role). New members default to Main; "Unranked" (null) is now
+ * a legacy display-only state that can no longer be assigned from the picker.
  */
 const RANKS = [
   { value: "RAID_LEADER", label: "Raid Leader" },
@@ -22,6 +24,111 @@ const RANKS = [
   { value: "SOCIAL", label: "Social" },
 ] as const;
 type RankValue = (typeof RANKS)[number]["value"];
+
+const DEFAULT_RANK: RankValue = "MAIN";
+
+type EligibleCharacter = { id: string; name: string; realmSlug: string };
+
+/**
+ * Searchable combobox for picking an eligible character to add. The native
+ * <select> can't host a search box and the repo has no combobox primitive, so
+ * this is a lightweight one: a text input that filters the options by name OR
+ * realm. The list opens UPWARD because the add bar is pinned to the bottom of
+ * the modal.
+ */
+function EligibleCombobox({
+  options,
+  value,
+  onChange,
+  disabled,
+  placeholder,
+}: {
+  options: EligibleCharacter[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const listboxId = useId();
+  const selected = options.find((o) => o.id === value);
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return options;
+    return options.filter(
+      (o) =>
+        o.name.toLowerCase().includes(s) ||
+        o.realmSlug.toLowerCase().includes(s),
+    );
+  }, [options, q]);
+
+  return (
+    <div className="relative min-w-0 flex-1">
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-label="Search and select a character to add"
+        value={
+          open ? q : selected ? `${selected.name} (${selected.realmSlug})` : ""
+        }
+        onFocus={() => {
+          setOpen(true);
+          setQ("");
+        }}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        // Delay close so an option's onMouseDown can fire first.
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="bg-background border-border h-8 w-full rounded-md border px-2 text-sm disabled:opacity-60"
+      />
+      {open && !disabled && (
+        <ul
+          role="listbox"
+          id={listboxId}
+          className="border-border bg-card absolute bottom-full left-0 z-20 mb-1 max-h-48 w-full overflow-y-auto rounded-md border shadow-lg"
+        >
+          {filtered.length === 0 ? (
+            <li className="text-muted-foreground px-2 py-1.5 text-xs">
+              No matches
+            </li>
+          ) : (
+            filtered.map((o) => (
+              <li key={o.id}>
+                <button
+                  type="button"
+                  // onMouseDown (not onClick) so the selection commits before
+                  // the input's onBlur closes the list.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onChange(o.id);
+                    setQ("");
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "hover:bg-muted flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left text-sm",
+                    o.id === value && "bg-muted",
+                  )}
+                >
+                  <span className="truncate">{o.name}</span>
+                  <span className="text-muted-foreground shrink-0 text-xs">
+                    {o.realmSlug}
+                  </span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /**
  * Manage Members modal. Lists the active roster + a picker form for adding
@@ -44,6 +151,7 @@ export function MembersModal({
     raidTeamId: teamId,
   });
   const [pick, setPick] = useState<string>("");
+  const [pickRank, setPickRank] = useState<RankValue>(DEFAULT_RANK);
   const [pickRole, setPickRole] = useState<"MEMBER" | "CO_LEADER">("MEMBER");
   const [query, setQuery] = useState<string>("");
 
@@ -87,6 +195,7 @@ export function MembersModal({
   const add = api.raidTeam.addMember.useMutation({
     onSuccess: async () => {
       setPick("");
+      setPickRank(DEFAULT_RANK);
       setPickRole("MEMBER");
       await invalidate();
     },
@@ -166,7 +275,11 @@ export function MembersModal({
                       aria-label={`Rank for ${m.character.name}`}
                       className="bg-background border-border h-8 rounded-md border px-2 text-xs"
                     >
-                      <option value="">Unranked</option>
+                      {/* "Unranked" is no longer assignable — kept as a disabled
+                          placeholder so legacy null-rank members still render. */}
+                      <option value="" disabled>
+                        — set rank —
+                      </option>
                       {RANKS.map((r) => (
                         <option key={r.value} value={r.value}>
                           {r.label}
@@ -202,58 +315,71 @@ export function MembersModal({
         )}
 
         {canManage && (
-          <form
-            className="border-border flex flex-wrap items-center gap-2 border-t pt-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!pick) return;
-              add.mutate({
-                raidTeamId: teamId,
-                characterId: pick,
-                role: pickRole,
-              });
-            }}
-          >
-            <select
-              value={pick}
-              onChange={(e) => setPick(e.target.value)}
-              className="bg-background border-border h-8 flex-1 rounded-md border px-2 text-sm"
-              disabled={
-                eligible.isPending || (eligible.data?.length ?? 0) === 0
-              }
+          // Pinned add bar: stays static at the bottom while the roster scrolls.
+          // Spans the modal body padding (-mx-5 / -mb-4) and sits on the scroll
+          // container's bottom edge via `sticky bottom-0`.
+          <div className="border-border bg-card sticky bottom-0 -mx-5 -mb-4 border-t px-5 py-3">
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!pick) return;
+                add.mutate({
+                  raidTeamId: teamId,
+                  characterId: pick,
+                  rank: pickRank,
+                  role: pickRole,
+                });
+              }}
             >
-              <option value="">
-                {eligible.isPending
-                  ? "Loading…"
-                  : (eligible.data?.length ?? 0) === 0
-                    ? "No eligible characters"
-                    : "Select a character"}
-              </option>
-              {eligible.data?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.realmSlug})
-                </option>
-              ))}
-            </select>
-            <select
-              value={pickRole}
-              onChange={(e) =>
-                setPickRole(e.target.value as "MEMBER" | "CO_LEADER")
-              }
-              className="bg-background border-border h-8 rounded-md border px-2 text-sm"
-            >
-              <option value="MEMBER">Member</option>
-              <option value="CO_LEADER">Co-leader</option>
-            </select>
-            <Button type="submit" disabled={!pick || add.isPending} size="sm">
-              {add.isPending ? "Adding…" : "Add"}
-            </Button>
-          </form>
-        )}
-        {add.error && (
-          <p className="text-destructive text-xs" role="alert">
-            {add.error.message}
-          </p>
+              <EligibleCombobox
+                options={eligible.data ?? []}
+                value={pick}
+                onChange={setPick}
+                disabled={
+                  eligible.isPending || (eligible.data?.length ?? 0) === 0
+                }
+                placeholder={
+                  eligible.isPending
+                    ? "Loading…"
+                    : (eligible.data?.length ?? 0) === 0
+                      ? "No eligible characters"
+                      : "Search a character…"
+                }
+              />
+              <select
+                value={pickRank}
+                onChange={(e) => setPickRank(e.target.value as RankValue)}
+                aria-label="Rank for new member"
+                className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+              >
+                {RANKS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={pickRole}
+                onChange={(e) =>
+                  setPickRole(e.target.value as "MEMBER" | "CO_LEADER")
+                }
+                aria-label="Role for new member"
+                className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+              >
+                <option value="MEMBER">Member</option>
+                <option value="CO_LEADER">Co-leader</option>
+              </select>
+              <Button type="submit" disabled={!pick || add.isPending} size="sm">
+                {add.isPending ? "Adding…" : "Add"}
+              </Button>
+            </form>
+            {add.error && (
+              <p className="text-destructive mt-2 text-xs" role="alert">
+                {add.error.message}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </Modal>

@@ -1,8 +1,13 @@
 "use client";
 
-import { api } from "@/lib/trpc-client";
+import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { wowClassColor } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
 
 /**
  * Brez Economy — battle-rez usage on progression. From the deaths layer's
@@ -18,8 +23,57 @@ const diffShort = (d: number): string =>
 const DESC =
   "Battle-rez economy — rezzes spent per boss + per pull, success rate, and who provides vs needs them. From public WCL logs.";
 
+type BrezEncounter =
+  RouterOutputs["snapshot"]["brezEconomy"]["encounters"][number];
+
+type BrezRow = BrezEncounter & {
+  /** Boss display name (for the Boss column's text sort). */
+  bossName: string;
+  /** Survived rate as a sortable number (null → unsortable-low). */
+  survivedPct: number | null;
+  /** Position in the server's default order (seeds the default sort). */
+  defaultOrder: number;
+};
+
+type SortKey =
+  | "default"
+  | "boss"
+  | "wipes"
+  | "brezzes"
+  | "perPull"
+  | "survived";
+
+const COLUMNS: ColumnMap<BrezRow, SortKey> = {
+  default: { key: "default", accessor: (r) => r.defaultOrder, kind: "number", defaultAsc: true },
+  boss: { key: "boss", accessor: (r) => r.bossName, kind: "text" },
+  wipes: { key: "wipes", accessor: (r) => r.wipePulls, kind: "number" },
+  brezzes: { key: "brezzes", accessor: (r) => r.rezzes, kind: "number" },
+  perPull: { key: "perPull", accessor: (r) => r.rezzesPerPull, kind: "number" },
+  survived: { key: "survived", accessor: (r) => r.survivedPct, kind: "number" },
+};
+
 export function BrezEconomyWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.brezEconomy.useQuery({ raidTeamId });
+
+  const encounterNames = q.data?.encounterNames ?? {};
+  const baseRows: BrezRow[] = (q.data?.encounters ?? []).map((e, i) => ({
+    ...e,
+    bossName: encounterNames[e.encounterId] ?? `Encounter ${e.encounterId}`,
+    survivedPct: e.rezzes > 0 ? (e.successful / e.rezzes) * 100 : null,
+    defaultOrder: i,
+  }));
+
+  // Default: the server's encounter order (frozen via defaultOrder).
+  const {
+    sorted: sortedEncounters,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: COLUMNS,
+    initial: { key: "default", asc: true },
+    tieBreaker: (r) => r.bossName,
+  });
 
   if (q.isPending) {
     return (
@@ -46,8 +100,7 @@ export function BrezEconomyWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  const { encounters, rezzers, rezzed, totalRezzes, successRate, memberMeta, encounterNames } =
-    q.data;
+  const { rezzers, rezzed, totalRezzes, successRate, memberMeta } = q.data;
   const name = (cid: string) => memberMeta[cid]?.name ?? "Unknown";
   const color = (cid: string) => wowClassColor(memberMeta[cid]?.classId);
 
@@ -75,18 +128,18 @@ export function BrezEconomyWidget({ raidTeamId }: { raidTeamId: string }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="text-muted-foreground border-border border-b text-left uppercase">
-              <th className="py-1 pr-2 font-medium">Boss</th>
-              <th className="py-1 pr-2 text-right font-medium">Wipes</th>
-              <th className="py-1 pr-2 text-right font-medium">Brezzes</th>
-              <th className="py-1 pr-2 text-right font-medium">/pull</th>
-              <th className="py-1 pl-2 text-right font-medium">Survived</th>
+              <SortableHeader label="Boss" col="boss" active={sortKey === "boss"} asc={asc} onSort={toggle} className="pr-2" />
+              <SortableHeader label="Wipes" col="wipes" active={sortKey === "wipes"} asc={asc} onSort={toggle} align="right" className="pr-2" />
+              <SortableHeader label="Brezzes" col="brezzes" active={sortKey === "brezzes"} asc={asc} onSort={toggle} align="right" className="pr-2" />
+              <SortableHeader label="/pull" col="perPull" active={sortKey === "perPull"} asc={asc} onSort={toggle} align="right" className="pr-2" />
+              <SortableHeader label="Survived" col="survived" active={sortKey === "survived"} asc={asc} onSort={toggle} align="right" className="pr-0 pl-2" />
             </tr>
           </thead>
           <tbody className="divide-border divide-y">
-            {encounters.map((e) => (
+            {sortedEncounters.map((e) => (
               <tr key={`${e.encounterId}|${e.difficulty}`}>
                 <th scope="row" className="max-w-[10rem] truncate py-1 pr-2 text-left font-medium">
-                  {encounterNames[e.encounterId] ?? `Encounter ${e.encounterId}`}{" "}
+                  {e.bossName}{" "}
                   <span className="text-muted-foreground/60">{diffShort(e.difficulty)}</span>
                 </th>
                 <td className="py-1 pr-2 text-right tabular-nums">{e.wipePulls}</td>
@@ -95,7 +148,7 @@ export function BrezEconomyWidget({ raidTeamId }: { raidTeamId: string }) {
                   {e.rezzesPerPull.toFixed(1)}
                 </td>
                 <td className="py-1 pl-2 text-right tabular-nums">
-                  {e.rezzes > 0 ? `${Math.round((e.successful / e.rezzes) * 100)}%` : "—"}
+                  {e.survivedPct != null ? `${Math.round(e.survivedPct)}%` : "—"}
                 </td>
               </tr>
             ))}

@@ -640,6 +640,20 @@ export const raidTeamRouter = router({
         raidTeamId: z.string().cuid(),
         characterId: z.string().cuid(),
         role: teamRoleSchema.optional(),
+        // Roster rank for a NEW member. Defaults to MAIN ("Unranked"/null is no
+        // longer assignable from the UI). Only applied on create — re-adding a
+        // previously-removed member preserves their prior rank.
+        rank: z
+          .enum([
+            "MAIN",
+            "TRIAL",
+            "FLEX",
+            "ROTATIONAL",
+            "SOCIAL",
+            "OFFICER",
+            "RAID_LEADER",
+          ])
+          .optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -691,6 +705,7 @@ export const raidTeamRouter = router({
           raidTeamId: input.raidTeamId,
           characterId: input.characterId,
           role: input.role ?? "MEMBER",
+          rank: input.rank ?? "MAIN",
           addedByUserId: ctx.session.user.id,
         },
         update: {
