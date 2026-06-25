@@ -18,6 +18,7 @@ import {
   arrayMove,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
+  horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ import {
   type WidgetType,
 } from "@/lib/widgets/types";
 import { SortableWidget } from "./sortable-widget";
+import { SortableTab } from "./sortable-tab";
 
 type Params = Promise<{ guildId: string; teamId: string; dashboardId: string }>;
 
@@ -178,6 +180,17 @@ function Inner({ params }: { params: Params }) {
     updateActiveTab((ws) => arrayMove(ws, oldIndex, newIndex));
   };
 
+  // Reorder the tab strip itself (separate dnd context from the widget list).
+  const onTabDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = layout.tabs.findIndex((t) => t.id === active.id);
+    const newIndex = layout.tabs.findIndex((t) => t.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    setLayout((l) => ({ ...l, tabs: arrayMove(l.tabs, oldIndex, newIndex) }));
+    setDirty(true);
+  };
+
   const save = () => {
     update.mutate(
       { dashboardId, layout },
@@ -254,53 +267,33 @@ function Inner({ params }: { params: Params }) {
           <CardTitle>Tabs</CardTitle>
           <CardDescription>
             Group widgets into themed tabs (e.g. Readiness, Progression, M+).
-            Rename inline; delete with the ✕ button.
+            Drag the ⋮⋮ handle to reorder; rename inline; delete with the ✕
+            button.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
-            {layout.tabs.map((t) => {
-              const isActive = t.id === activeTab?.id;
-              return (
-                <div
-                  key={t.id}
-                  className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm transition-colors ${
-                    isActive
-                      ? "border-primary bg-muted"
-                      : "border-border bg-background"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setActiveTabId(t.id)}
-                    className="font-medium"
-                  >
-                    {t.name}{" "}
-                    <span className="text-muted-foreground text-xs">
-                      ({t.widgets.length})
-                    </span>
-                  </button>
-                  {isActive && (
-                    <>
-                      <input
-                        aria-label="Rename tab"
-                        value={t.name}
-                        onChange={(e) => renameTab(t.id, e.target.value)}
-                        className="bg-background border-border h-6 w-24 rounded border px-1 text-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => deleteTab(t.id)}
-                        className="text-muted-foreground hover:text-destructive ml-1 text-xs"
-                        aria-label={`Delete tab ${t.name}`}
-                      >
-                        ✕
-                      </button>
-                    </>
-                  )}
-                </div>
-              );
-            })}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={onTabDragEnd}
+            >
+              <SortableContext
+                items={layout.tabs.map((t) => t.id)}
+                strategy={horizontalListSortingStrategy}
+              >
+                {layout.tabs.map((t) => (
+                  <SortableTab
+                    key={t.id}
+                    tab={t}
+                    isActive={t.id === activeTab?.id}
+                    onSelect={() => setActiveTabId(t.id)}
+                    onRename={(name) => renameTab(t.id, name)}
+                    onDelete={() => deleteTab(t.id)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
             <Button size="sm" variant="outline" onClick={addTab}>
               + Add tab
             </Button>

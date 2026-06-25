@@ -1,8 +1,30 @@
 "use client";
 
-import { api } from "@/lib/trpc-client";
+import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { wowClassColor, wowClassName } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
+
+type SortKey = "name" | "class" | "spec";
+
+type LoadoutRow =
+  RouterOutputs["snapshot"]["latestForTeam"]["members"][number] & {
+    spec: string | null;
+  };
+
+const COLUMNS: ColumnMap<LoadoutRow, SortKey> = {
+  name: { key: "name", accessor: (r) => r.character.name, kind: "text" },
+  class: {
+    key: "class",
+    accessor: (r) => wowClassName(r.character.classId),
+    kind: "text",
+  },
+  spec: { key: "spec", accessor: (r) => r.spec ?? "", kind: "text" },
+};
 
 /**
  * Each character's current spec + a copyable talent code (Blizzard's compressed
@@ -11,6 +33,23 @@ import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
  */
 export function TalentLoadoutsWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
+
+  const baseRows: LoadoutRow[] = (q.data?.members ?? []).map((m) => ({
+    ...m,
+    spec: m.latest.character?.specName ?? null,
+  }));
+
+  // Default: alphabetical by spec.
+  const {
+    sorted: rows,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: COLUMNS,
+    initial: { key: "spec", asc: true },
+    tieBreaker: (r) => r.character.name,
+  });
 
   if (q.isPending) {
     return (
@@ -34,13 +73,6 @@ export function TalentLoadoutsWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  const rows = q.data.members
-    .map((m) => ({
-      ...m,
-      spec: m.latest.character?.specName ?? null,
-    }))
-    .sort((a, b) => (a.spec ?? "").localeCompare(b.spec ?? ""));
-
   return (
     <WidgetShell
       title="Talent loadouts"
@@ -50,9 +82,9 @@ export function TalentLoadoutsWidget({ raidTeamId }: { raidTeamId: string }) {
         <caption className="sr-only">Talent loadouts</caption>
         <thead>
           <tr className="text-muted-foreground text-left text-xs uppercase">
-            <th scope="col" className="py-1 pr-3 font-medium">Character</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Class</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Spec</th>
+            <SortableHeader label="Character" col="name" active={sortKey === "name"} asc={asc} onSort={toggle} />
+            <SortableHeader label="Class" col="class" active={sortKey === "class"} asc={asc} onSort={toggle} />
+            <SortableHeader label="Spec" col="spec" active={sortKey === "spec"} asc={asc} onSort={toggle} />
           </tr>
         </thead>
         <tbody className="divide-border divide-y">

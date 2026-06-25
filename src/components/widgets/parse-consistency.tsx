@@ -6,6 +6,11 @@ import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { bandOf, slopeBadge } from "@/lib/parse-consistency";
 import { wowClassColor } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
 
 /**
  * Parse Consistency — median/best/variance (tab 1) and week-over-week
@@ -209,6 +214,26 @@ function RoleChip({ role }: { role: "tank" | "healer" | "dps" }) {
   );
 }
 
+type SnapshotRow = {
+  member: Members[number];
+  median: number | null;
+  best: number | null;
+  volatility: number | null;
+  kills: number | null;
+  lowSample: boolean;
+};
+
+type SnapshotSortKey = "member" | "med" | "best" | "sigma" | "n";
+
+// The median●——○best bar column is purely visual and stays a plain header.
+const SNAPSHOT_COLUMNS: ColumnMap<SnapshotRow, SnapshotSortKey> = {
+  member: { key: "member", accessor: (r) => r.member.character.name, kind: "text" },
+  med: { key: "med", accessor: (r) => r.median, kind: "number" },
+  best: { key: "best", accessor: (r) => r.best, kind: "number" },
+  sigma: { key: "sigma", accessor: (r) => r.volatility, kind: "number" },
+  n: { key: "n", accessor: (r) => r.kills, kind: "number" },
+};
+
 function SnapshotTab({
   members,
   encounterSel,
@@ -216,20 +241,13 @@ function SnapshotTab({
   members: Members;
   encounterSel: number | "all";
 }) {
-  type Row = {
-    member: Members[number];
-    median: number | null;
-    best: number | null;
-    volatility: number | null;
-    kills: number | null;
-    lowSample: boolean;
-  };
+  type Row = SnapshotRow;
   // WCL returns 0 (not null) for a logged-but-unrated boss, so treat 0 as "no
   // score" — otherwise an unrated boss (e.g. a brand-new raid boss) shows a
   // misleading "0" and drags the All-bosses average down.
   const hasScore = (v: number | null | undefined): v is number =>
     v != null && v > 0;
-  const rows: Row[] = members
+  const baseRows: Row[] = members
     .map((m) => {
       if (encounterSel === "all") {
         // WCL's whole-zone aggregates (already 0-filtered server-side); hasScore
@@ -258,8 +276,19 @@ function SnapshotTab({
     })
     // Keep a member if they have a real score OR a logged kill — so a boss with
     // kills-but-no-score still lists who killed it (with "—").
-    .filter((r) => r.median != null || r.best != null || (r.kills ?? 0) > 0)
-    .sort((a, b) => (b.median ?? -1) - (a.median ?? -1));
+    .filter((r) => r.median != null || r.best != null || (r.kills ?? 0) > 0);
+
+  // Default: median percentile, high-first (the historical order).
+  const {
+    sorted: rows,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: SNAPSHOT_COLUMNS,
+    initial: { key: "med", asc: false },
+    tieBreaker: (r) => r.member.character.name,
+  });
 
   // Specific boss selected, members have logged kills on it, but nobody has a
   // real WCL score yet → notice under the dropdowns.
@@ -296,25 +325,14 @@ function SnapshotTab({
       <table className="w-full text-xs">
         <thead>
           <tr className="text-muted-foreground text-left">
-            <th className="py-1 pr-2 font-normal">Member</th>
+            <SortableHeader label="Member" col="member" active={sortKey === "member"} asc={asc} onSort={toggle} weight="normal" uppercase={false} className="pr-2" />
             <th className="w-1/2 py-1 pr-2 font-normal">
               median ●——○ best
             </th>
-            <th className="py-1 pr-2 text-right font-normal" title="Season median percentile">
-              med
-            </th>
-            <th className="py-1 pr-2 text-right font-normal" title="Season best percentile">
-              best
-            </th>
-            <th
-              className="py-1 pr-2 text-right font-normal"
-              title="Std-dev of per-kill percentiles (≥4 kills) — lower = steadier"
-            >
-              σ
-            </th>
-            <th className="py-1 text-right font-normal" title="Logged kills">
-              n
-            </th>
+            <SortableHeader label="med" col="med" active={sortKey === "med"} asc={asc} onSort={toggle} align="right" weight="normal" uppercase={false} className="pr-2" title="Season median percentile" />
+            <SortableHeader label="best" col="best" active={sortKey === "best"} asc={asc} onSort={toggle} align="right" weight="normal" uppercase={false} className="pr-2" title="Season best percentile" />
+            <SortableHeader label="σ" col="sigma" active={sortKey === "sigma"} asc={asc} onSort={toggle} align="right" weight="normal" uppercase={false} className="pr-2" title="Std-dev of per-kill percentiles (≥4 kills) — lower = steadier" />
+            <SortableHeader label="n" col="n" active={sortKey === "n"} asc={asc} onSort={toggle} align="right" weight="normal" uppercase={false} className="pr-0" title="Logged kills" />
           </tr>
         </thead>
         <tbody>

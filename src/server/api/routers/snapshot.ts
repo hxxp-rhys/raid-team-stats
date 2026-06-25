@@ -784,6 +784,112 @@ export const snapshotRouter = router({
     }),
 
   /**
+   * Per-DAY iLvL timeline for EVERY tracked character of a raid team, plus a
+   * team "Average" series — used by the character-timeline widget's character
+   * selector. Team-scoped auth (any member / guild staff / valid share token),
+   * matching `latestForTeam` + `characterTimeline`.
+   *
+   * Bucketing rule: one bucket per calendar day in [now-days, now]. For each
+   * character we forward-fill their last-known Blizzard-source itemLevel up to
+   * each day (item level is a standing value, not an event, so carry-forward is
+   * correct). The Average for a day is the mean over only the characters that
+   * already have a known value by that day — a day BEFORE a character's first
+   * snapshot contributes nothing for that character (honest about gaps).
+   */
+  teamItemLevelTimeline: publicProcedure
+    .input(
+      z.object({
+        raidTeamId: z.string().cuid(),
+        days: z.number().int().min(7).max(180).default(60),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      // Any team member, guild OWNER/OFFICER, or valid share token may read.
+      await assertTeamReadAccess(ctx, input.raidTeamId);
+
+      const memberships = await ctx.db.raidTeamMembership.findMany({
+        where: { raidTeamId: input.raidTeamId, isActive: true },
+        include: {
+          character: { select: { id: true, name: true, classId: true } },
+        },
+      });
+      const characters = memberships.map((m) => m.character);
+      const characterIds = characters.map((c) => c.id);
+
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      // Anchor the day buckets to UTC midnight so they're stable + deterministic.
+      const todayStart = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+      const startDay = todayStart - (input.days - 1) * DAY_MS;
+      const dayCount = input.days;
+
+      const emptyPoints = Array.from({ length: dayCount }, (_, i) => ({
+        day: startDay + i * DAY_MS,
+        average: null as number | null,
+        byChar: {} as Record<string, number>,
+      }));
+
+      if (characterIds.length === 0) {
+        return { characters, points: emptyPoints };
+      }
+
+      // One findMany over all characters; bucket + forward-fill in JS.
+      const since = new Date(startDay);
+      const rows = await ctx.db.characterSnapshot.findMany({
+        where: {
+          characterId: { in: characterIds },
+          source: "BLIZZARD",
+          capturedAt: { gte: since },
+          itemLevel: { not: null },
+        },
+        orderBy: { capturedAt: "asc" },
+        select: { characterId: true, capturedAt: true, itemLevel: true },
+      });
+
+      // Group ascending snapshots per character.
+      const byChar = new Map<string, Array<{ dayIdx: number; ilvl: number }>>();
+      for (const r of rows) {
+        if (r.itemLevel == null) continue;
+        const dayIdx = Math.floor((r.capturedAt.getTime() - startDay) / DAY_MS);
+        const clamped = dayIdx < 0 ? 0 : dayIdx > dayCount - 1 ? dayCount - 1 : dayIdx;
+        let list = byChar.get(r.characterId);
+        if (!list) byChar.set(r.characterId, (list = []));
+        list.push({ dayIdx: clamped, ilvl: r.itemLevel });
+      }
+
+      const points = emptyPoints.map((p) => ({
+        day: p.day,
+        average: null as number | null,
+        byChar: {} as Record<string, number>,
+      }));
+
+      // Forward-fill each character across the day axis.
+      for (const c of characters) {
+        const list = byChar.get(c.id);
+        if (!list || list.length === 0) continue;
+        let cursor = 0;
+        let last: number | null = null;
+        for (let d = 0; d < dayCount; d++) {
+          while (cursor < list.length && list[cursor]!.dayIdx <= d) {
+            last = list[cursor]!.ilvl;
+            cursor++;
+          }
+          if (last != null) points[d]!.byChar[c.id] = last;
+        }
+      }
+
+      // Average over only the characters with a known value that day.
+      for (const p of points) {
+        const vals = Object.values(p.byChar);
+        p.average =
+          vals.length > 0
+            ? vals.reduce((a, b) => a + b, 0) / vals.length
+            : null;
+      }
+
+      return { characters, points };
+    }),
+
+  /**
    * One character's KNOWN recipes for the current expansion, grouped by the
    * in-game recipe CATEGORIES in display order ("sorted like in game") — behind
    * the Professions widget's per-player button. Reads the RAW snapshot (the
@@ -2793,6 +2899,18 @@ export const snapshotRouter = router({
       >();
       const pullsPresent = new Map<string, number>();
       let totalPulls = 0;
+      // Swept (non-sourced, wclGuildId=null) reports are pug / cross-guild logs
+      // surfaced via a member's personal parse ranks. Counting them when only
+      // 1-2 roster characters were present lets one raider's pug pulls (e.g.
+      // Crown of the Cosmos) balloon far above the team's own logs (the reported
+      // "101 vs max 17" bug). Require a substantial share of the roster to be
+      // present before a swept fight counts toward team bench-equity. Sourced
+      // (guild-own) logs are never gated. Threshold is heuristic — tune if a
+      // small/bench-heavy team loses legitimate personally-logged nights.
+      const sweptMinPresent = Math.max(
+        2,
+        Math.ceil(teamCharacterIds.length * 0.5),
+      );
       for (const f of fightRows) {
         const actorMap = actorMapByReport.get(f.reportCode);
         const present = new Set<string>();
@@ -2802,7 +2920,8 @@ export const snapshotRouter = router({
             if (cid) present.add(cid);
           }
         }
-        if (!sourcedCodes.has(f.reportCode) && present.size < 2) continue; // gate
+        if (!sourcedCodes.has(f.reportCode) && present.size < sweptMinPresent)
+          continue; // gate: swept fights need a real share of the team present
         const key = `${f.encounterId}|${f.difficulty}`;
         const enc = encTotals.get(key) ?? {
           encounterId: f.encounterId,

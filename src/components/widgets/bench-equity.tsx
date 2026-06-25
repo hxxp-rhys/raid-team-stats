@@ -5,6 +5,11 @@ import { useMemo, useState } from "react";
 import { api } from "@/lib/trpc-client";
 import { wowClassColor } from "@/lib/wow";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
 
 /**
  * Bench Equity — per-boss pull participation. Who's pulling vs who's sitting,
@@ -33,6 +38,18 @@ const shortLabel = (name: string, fallback: number): string =>
 const encKey = (e: { encounterId: number; difficulty: number }) =>
   `${e.encounterId}|${e.difficulty}`;
 
+type BenchSortKey = "raider" | "part";
+
+// Only the two practical columns are sortable; the per-boss matrix columns are
+// heat cells and stay plain headers.
+const BENCH_COLUMNS: ColumnMap<
+  { name: string; pullPct: number },
+  BenchSortKey
+> = {
+  raider: { key: "raider", accessor: (r) => r.name, kind: "text" },
+  part: { key: "part", accessor: (r) => r.pullPct, kind: "number" },
+};
+
 export function BenchEquityWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.benchEquity.useQuery({ raidTeamId });
   const [difficultySel, setDifficultySel] = useState<number | null>(null);
@@ -57,22 +74,35 @@ export function BenchEquityWidget({ raidTeamId }: { raidTeamId: string }) {
 
   // Per-member participation FOR THIS DIFFICULTY (pulls present ÷ this
   // difficulty's total pulls). Only members who pulled it at all are shown.
-  const rows = useMemo(() => {
+  const baseRows = useMemo(() => {
     if (!q.data) return [];
+    const meta = q.data.memberMeta;
     return q.data.members
       .map((m) => {
         let pullsIn = 0;
         for (const e of diffEncounters) pullsIn += m.byEnc[encKey(e)]?.pullsIn ?? 0;
         return {
           characterId: m.characterId,
+          name: meta[m.characterId]?.name ?? "Unknown",
           pullsIn,
           pullPct: diffTotalPulls > 0 ? (pullsIn / diffTotalPulls) * 100 : 0,
           byEnc: m.byEnc,
         };
       })
-      .filter((m) => m.pullsIn > 0)
-      .sort((a, b) => b.pullPct - a.pullPct);
+      .filter((m) => m.pullsIn > 0);
   }, [q.data, diffEncounters, diffTotalPulls]);
+
+  // Default: highest participation first (matches the prior static order).
+  const {
+    sorted: rows,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: BENCH_COLUMNS,
+    initial: { key: "part", asc: false },
+    tieBreaker: (r) => r.name,
+  });
 
   if (q.isPending) {
     return (
@@ -130,8 +160,8 @@ export function BenchEquityWidget({ raidTeamId }: { raidTeamId: string }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="text-muted-foreground border-border border-b text-left uppercase">
-                <th className="py-1 pr-2 font-medium">Raider</th>
-                <th className="py-1 pr-2 text-right font-medium">Part.</th>
+                <SortableHeader label="Raider" col="raider" active={sortKey === "raider"} asc={asc} onSort={toggle} className="pr-2" />
+                <SortableHeader label="Part." col="part" active={sortKey === "part"} asc={asc} onSort={toggle} align="right" className="pr-2" />
                 {cols.map((e) => (
                   <th
                     key={encKey(e)}

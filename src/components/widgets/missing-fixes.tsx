@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { api } from "@/lib/trpc-client";
+import { api, type RouterOutputs } from "@/lib/trpc-client";
 import { Modal } from "@/components/ui/modal";
 import { wowClassColor, wowClassName } from "@/lib/wow";
 import { WidgetShell, WidgetLoading, WidgetError, WidgetEmpty } from "./shell";
@@ -11,6 +11,13 @@ import {
   selectMissing,
   sortByWorst,
 } from "@/lib/widgets/missing-fixes-logic";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
+
+type SortKey = "worst" | "name" | "class" | "ilvl" | "enchants" | "gems";
 
 /**
  * Per-character enchant/gem readiness. Each character gets two gear icons:
@@ -76,9 +83,80 @@ function StatusCell({
   );
 }
 
+type FixRow = RouterOutputs["snapshot"]["latestForTeam"]["members"][number] & {
+  missingEnchants: number;
+  missingGems: number;
+  enchSlots: string[];
+  gemSlots: string[];
+  ilvl: number;
+  hasEquip: boolean;
+  /** Position in the default worst-first order (seeds the default sort). */
+  worstOrder: number;
+};
+
+const COLUMNS: ColumnMap<FixRow, SortKey> = {
+  // Non-header column: reproduces the default sortByWorst order exactly.
+  worst: { key: "worst", accessor: (r) => r.worstOrder, kind: "number", defaultAsc: true },
+  name: { key: "name", accessor: (r) => r.character.name, kind: "text" },
+  class: {
+    key: "class",
+    accessor: (r) => wowClassName(r.character.classId),
+    kind: "text",
+  },
+  ilvl: { key: "ilvl", accessor: (r) => r.ilvl, kind: "number" },
+  enchants: {
+    key: "enchants",
+    accessor: (r) => r.missingEnchants,
+    kind: "number",
+  },
+  gems: { key: "gems", accessor: (r) => r.missingGems, kind: "number" },
+};
+
 export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
   const q = api.snapshot.latestForTeam.useQuery({ raidTeamId });
   const [listOpen, setListOpen] = useState(false);
+
+  // Pre-sorted worst-first (the historical default); worstOrder freezes that
+  // order so the default sort key reproduces it, and the lightbox keeps it.
+  const baseRows: FixRow[] = (q.data?.members ?? [])
+    .map((m) => {
+      const ench = m.latest.equipment?.missingEnchantsCount ?? 0;
+      const gem = m.latest.equipment?.missingGemsCount ?? 0;
+      const enchSlots = m.latest.equipment?.missingEnchantSlots ?? [];
+      const gemSlots = m.latest.equipment?.missingGemSlots ?? [];
+      const ilvl =
+        m.latest.equipment?.itemLevel ?? m.latest.character?.itemLevel ?? 0;
+      const hasEquip = !!m.latest.equipment;
+      return {
+        ...m,
+        missingEnchants: ench,
+        missingGems: gem,
+        enchSlots,
+        gemSlots,
+        ilvl,
+        hasEquip,
+        worstOrder: 0,
+      };
+    })
+    // Worst (most missing) first, then by ilvl desc.
+    .sort(sortByWorst)
+    .map((m, i) => ({ ...m, worstOrder: i }));
+
+  // Default: worst-first (matches the prior static order).
+  const {
+    sorted: rows,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: COLUMNS,
+    initial: { key: "worst", asc: true },
+    tieBreaker: (r) => r.character.name,
+  });
+
+  // Only the characters with at least one unfixed slot — the lightbox subject.
+  // Uses the pre-sorted base order so the list always matches worst-first.
+  const missing = selectMissing(baseRows);
 
   if (q.isPending) {
     return (
@@ -101,31 +179,6 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
       </WidgetShell>
     );
   }
-
-  const rows = q.data.members
-    .map((m) => {
-      const ench = m.latest.equipment?.missingEnchantsCount ?? 0;
-      const gem = m.latest.equipment?.missingGemsCount ?? 0;
-      const enchSlots = m.latest.equipment?.missingEnchantSlots ?? [];
-      const gemSlots = m.latest.equipment?.missingGemSlots ?? [];
-      const ilvl =
-        m.latest.equipment?.itemLevel ?? m.latest.character?.itemLevel ?? 0;
-      const hasEquip = !!m.latest.equipment;
-      return {
-        ...m,
-        missingEnchants: ench,
-        missingGems: gem,
-        enchSlots,
-        gemSlots,
-        ilvl,
-        hasEquip,
-      };
-    })
-    // Worst (most missing) first, then by ilvl desc.
-    .sort(sortByWorst);
-
-  // Only the characters with at least one unfixed slot — the lightbox subject.
-  const missing = selectMissing(rows);
 
   return (
     <WidgetShell
@@ -154,11 +207,11 @@ export function MissingFixesWidget({ raidTeamId }: { raidTeamId: string }) {
         <caption className="sr-only">Enchant and gem readiness</caption>
         <thead>
           <tr className="text-muted-foreground text-left text-xs uppercase">
-            <th scope="col" className="py-1 pr-3 font-medium">Character</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Class</th>
-            <th scope="col" className="py-1 pr-3 text-right font-medium">iLvL</th>
-            <th scope="col" className="py-1 pr-3 text-center font-medium">Enchants</th>
-            <th scope="col" className="py-1 pr-3 text-center font-medium">Gems</th>
+            <SortableHeader label="Character" col="name" active={sortKey === "name"} asc={asc} onSort={toggle} />
+            <SortableHeader label="Class" col="class" active={sortKey === "class"} asc={asc} onSort={toggle} />
+            <SortableHeader label="iLvL" col="ilvl" active={sortKey === "ilvl"} asc={asc} onSort={toggle} align="right" />
+            <SortableHeader label="Enchants" col="enchants" active={sortKey === "enchants"} asc={asc} onSort={toggle} align="center" />
+            <SortableHeader label="Gems" col="gems" active={sortKey === "gems"} asc={asc} onSort={toggle} align="center" />
           </tr>
         </thead>
         <tbody className="divide-border divide-y">

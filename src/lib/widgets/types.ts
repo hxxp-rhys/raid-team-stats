@@ -288,9 +288,16 @@ export const newTabId = (): string =>
  * a new configurable widget: drop a schema below, and the WidgetConfigEditor
  * will pick it up automatically.
  */
+// Sentinel `characterId` meaning "plot the team Average series" (also the
+// default when `characterId` is unset).
+export const CHARACTER_TIMELINE_AVERAGE = "__average__" as const;
+
 export const WIDGET_CONFIG_SCHEMAS: Partial<Record<WidgetType, z.ZodTypeAny>> = {
+  // `characterId` is either a character cuid, the "__average__" sentinel, or
+  // unset (both of the latter mean the team Average series). Not cuid-strict so
+  // the sentinel persists.
   character_timeline: z.object({
-    characterId: z.string().cuid().optional(),
+    characterId: z.string().optional(),
   }),
 };
 

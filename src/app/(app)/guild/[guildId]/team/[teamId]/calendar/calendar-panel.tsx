@@ -7,7 +7,7 @@ import type { Route } from "next";
 import { api } from "@/lib/trpc-client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCalendarSync } from "./use-calendar-sync";
+import { useCalendarSync, useDeleteRaid } from "./use-calendar-sync";
 import { EventDetailModal } from "./event-detail-modal";
 import { EventFormModal } from "./event-form-modal";
 import { SettingsModal } from "./settings-modal";
@@ -172,13 +172,14 @@ export function CalendarPanel({
       </div>
 
       {view === "agenda" ? (
-        <AgendaView teamId={teamId} onOpen={setDetailId} canManage={canManage} />
+        <AgendaView teamId={teamId} onOpen={setDetailId} canManage={canManage} canLead={canLead} />
       ) : (
         <MonthView teamId={teamId} onOpen={setDetailId} />
       )}
 
       <EventDetailModal
         eventId={detailId}
+        raidTeamId={teamId}
         open={detailId !== null}
         onClose={() => setDetailId(null)}
         canLead={canLead}
@@ -272,13 +273,16 @@ function AgendaRow({
   e,
   onOpen,
   canManage,
+  canLead,
   teamId,
 }: {
   e: AgendaEvent;
   onOpen: (id: string) => void;
   canManage: boolean;
+  canLead: boolean;
   teamId: string;
 }) {
+  const del = useDeleteRaid(teamId);
   return (
     <li
       className={cn(
@@ -310,9 +314,22 @@ function AgendaRow({
             {e.raidSize ? ` · ${e.raidSize}` : ""}
           </p>
         </button>
-        <span className="text-muted-foreground text-xs tabular-nums">
-          {e.present} in · {e.responded} responded
-        </span>
+        <div className="flex flex-col items-end gap-1">
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {e.present} in · {e.responded} responded
+          </span>
+          {canLead && (
+            <Button
+              type="button"
+              size="xs"
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() => del.confirmAndDelete(e)}
+            >
+              Delete
+            </Button>
+          )}
+        </div>
       </div>
       {e.status !== "CANCELLED" && (
         <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
@@ -335,6 +352,7 @@ function AgendaSection({
   events,
   onOpen,
   canManage,
+  canLead,
   teamId,
 }: {
   title: string;
@@ -342,6 +360,7 @@ function AgendaSection({
   events: AgendaEvent[];
   onOpen: (id: string) => void;
   canManage: boolean;
+  canLead: boolean;
   teamId: string;
 }) {
   if (events.length === 0) return null;
@@ -355,7 +374,7 @@ function AgendaSection({
       </div>
       <ul className="space-y-2">
         {events.map((e) => (
-          <AgendaRow key={e.id} e={e} onOpen={onOpen} canManage={canManage} teamId={teamId} />
+          <AgendaRow key={e.id} e={e} onOpen={onOpen} canManage={canManage} canLead={canLead} teamId={teamId} />
         ))}
       </ul>
     </section>
@@ -366,10 +385,12 @@ function AgendaView({
   teamId,
   onOpen,
   canManage,
+  canLead,
 }: {
   teamId: string;
   onOpen: (id: string) => void;
   canManage: boolean;
+  canLead: boolean;
 }) {
   const from = useMemo(() => {
     const d = new Date();
@@ -409,8 +430,8 @@ function AgendaView({
 
   return (
     <div className="space-y-5">
-      <AgendaSection title="This week" events={thisWeek} onOpen={onOpen} canManage={canManage} teamId={teamId} />
-      <AgendaSection title="Upcoming" events={upcoming} onOpen={onOpen} canManage={canManage} teamId={teamId} />
+      <AgendaSection title="This week" events={thisWeek} onOpen={onOpen} canManage={canManage} canLead={canLead} teamId={teamId} />
+      <AgendaSection title="Upcoming" events={upcoming} onOpen={onOpen} canManage={canManage} canLead={canLead} teamId={teamId} />
     </div>
   );
 }

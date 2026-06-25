@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bossProgressOf,
   decayChipOf,
   dedupePulls,
   isThrowaway,
   nightBuckets,
   nightsOf,
   paceOf,
+  phasesTotalOf,
   progressOf,
   rollingBest,
   slopeOf,
@@ -70,14 +72,79 @@ describe("progressOf", () => {
   it("kills are always 100, regardless of stored percentages", () => {
     expect(progressOf(pull({ kill: true, fightPct: 37 }))).toBe(100);
   });
-  it("uses the phase-aware axis by default, HP axis on toggle", () => {
+  it("fight axis uses fightPercentage; falls back to bossPct, clamps", () => {
     const p = pull({ fightPct: 60, bossPct: 80 });
     expect(progressOf(p, "fight")).toBe(40);
-    expect(progressOf(p, "boss")).toBe(20);
-  });
-  it("falls back across axes and clamps", () => {
     expect(progressOf(pull({ fightPct: null, bossPct: 30 }), "fight")).toBe(70);
     expect(progressOf(pull({ fightPct: null, bossPct: null }))).toBe(0);
+  });
+  it("boss axis is phase-aware; collapses to raw HP on a single phase", () => {
+    // Default fixture is lastPhase 1, so per-pull phasesTotal ≤ 1 → fallback
+    // to raw 100 - bossPct (the only sensible scale for a one-phase boss).
+    expect(progressOf(pull({ bossPct: 80, lastPhase: 1 }), "boss")).toBe(20);
+    // A P2 wipe at 50% boss HP, scaled across the 2 phases it now knows about.
+    // ((2-1) + (100-50)/100) / 2 * 100 = (1 + 0.5) / 2 * 100 = 75.
+    expect(progressOf(pull({ bossPct: 50, lastPhase: 2 }), "boss")).toBe(75);
+  });
+});
+
+describe("phasesTotalOf + bossProgressOf (phase-aware boss progress)", () => {
+  it("phasesTotalOf is the deepest phase reached, min 1", () => {
+    expect(phasesTotalOf([])).toBe(1);
+    expect(
+      phasesTotalOf([
+        pull({ lastPhase: 1 }),
+        pull({ lastPhase: 3 }),
+        pull({ lastPhase: 2 }),
+        pull({ lastPhase: null }),
+      ]),
+    ).toBe(3);
+  });
+
+  it("maps each pull onto one shared 0-100% scale", () => {
+    const total = 3; // a 3-phase boss
+    // Start of P1 (full HP) ≈ 0; end of P1 (0% HP) ≈ start of P2 boundary.
+    expect(bossProgressOf(pull({ bossPct: 100, lastPhase: 1 }), total)).toBe(0);
+    // End of P1: ((1-1) + 1) / 3 * 100 = 33.33…
+    expect(
+      bossProgressOf(pull({ bossPct: 0, lastPhase: 1 }), total),
+    ).toBeCloseTo(100 / 3);
+    // Start of P2 meets end of P1 — no inversion at the phase boundary.
+    expect(
+      bossProgressOf(pull({ bossPct: 100, lastPhase: 2 }), total),
+    ).toBeCloseTo(100 / 3);
+    // Mid P3: ((3-1) + 0.5) / 3 * 100 = 83.33…
+    expect(
+      bossProgressOf(pull({ bossPct: 50, lastPhase: 3 }), total),
+    ).toBeCloseTo((2.5 / 3) * 100);
+  });
+
+  it("is MONOTONIC: a deep P3 wipe ranks above a shallow P1 wipe", () => {
+    // The bug it fixes: bossPct resets each phase, so a P3 wipe at 90% boss HP
+    // (deep) used to plot BELOW a P1 wipe at 40% (shallow). Phase-aware scaling
+    // must rank the deeper pull higher despite its higher bossPct.
+    const total = 3;
+    const shallowP1 = bossProgressOf(pull({ bossPct: 40, lastPhase: 1 }), total);
+    const deepP3 = bossProgressOf(pull({ bossPct: 90, lastPhase: 3 }), total);
+    expect(deepP3).toBeGreaterThan(shallowP1);
+
+    // Within a phase, lower remaining HP ⇒ more progress.
+    expect(
+      bossProgressOf(pull({ bossPct: 20, lastPhase: 2 }), total),
+    ).toBeGreaterThan(bossProgressOf(pull({ bossPct: 80, lastPhase: 2 }), total));
+  });
+
+  it("kills map to 100; missing phase/single phase falls back to raw HP", () => {
+    expect(bossProgressOf(pull({ kill: true, lastPhase: 3 }), 3)).toBe(100);
+    // No phase data → raw 100 - bossPct.
+    expect(bossProgressOf(pull({ bossPct: 30, lastPhase: null }), 3)).toBe(70);
+    expect(bossProgressOf(pull({ bossPct: 30, lastPhase: 0 }), 3)).toBe(70);
+    // Single-phase boss (phasesTotal ≤ 1) → raw 100 - bossPct.
+    expect(bossProgressOf(pull({ bossPct: 30, lastPhase: 1 }), 1)).toBe(70);
+    // Neither percentage → 0.
+    expect(
+      bossProgressOf(pull({ bossPct: null, fightPct: null, lastPhase: 2 }), 3),
+    ).toBe(0);
   });
 });
 

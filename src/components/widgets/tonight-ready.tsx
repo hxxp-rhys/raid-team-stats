@@ -4,6 +4,11 @@ import { useMemo, useState } from "react";
 
 import { api } from "@/lib/trpc-client";
 import { WidgetShell, WidgetEmpty, WidgetLoading, WidgetError } from "./shell";
+import {
+  SortableHeader,
+  useSortableColumns,
+  type ColumnMap,
+} from "./sortable-table";
 
 /**
  * Raid-Night Readiness Board — at-a-glance "who's ready to pull". Per player,
@@ -34,6 +39,20 @@ const PILLAR_GLYPH: Record<Pillar, string> = {
   ready: "✓",
   attention: "!",
   unknown: "?",
+};
+
+type TonightSortKey = "default" | "name" | "synced";
+
+// Only the practical columns are sortable; the Cons./Gear pillars are status
+// pips and stay plain headers.
+const TONIGHT_COLUMNS: ColumnMap<
+  { name: string; ageH: number | null; defaultOrder: number },
+  TonightSortKey
+> = {
+  default: { key: "default", accessor: (r) => r.defaultOrder, kind: "number", defaultAsc: true },
+  name: { key: "name", accessor: (r) => r.name, kind: "text" },
+  // ageH null (no addon data) sorts as the lowest value.
+  synced: { key: "synced", accessor: (r) => r.ageH, kind: "number" },
 };
 
 export function TonightReadyWidget({ raidTeamId }: { raidTeamId: string }) {
@@ -124,6 +143,29 @@ export function TonightReadyWidget({ raidTeamId }: { raidTeamId: string }) {
     return { ready, attention, unknown };
   }, [rows]);
 
+  // Needs-attention first, then unknown, then ready — the historical default.
+  // defaultOrder freezes that ordering so the default sort reproduces it; the
+  // call-out list also reads it (independent of any click-sort).
+  const baseRows = useMemo(() => {
+    const order: Record<Pillar, number> = { attention: 0, unknown: 1, ready: 2 };
+    return [...rows]
+      .sort((a, b) => order[a.overall] - order[b.overall])
+      .map((r, i) => ({ ...r, defaultOrder: i }));
+  }, [rows]);
+
+  // Default: needs-attention first (frozen via defaultOrder).
+  const {
+    sorted,
+    sortKey,
+    asc,
+    toggle,
+  } = useSortableColumns(baseRows, {
+    columns: TONIGHT_COLUMNS,
+    initial: { key: "default", asc: true },
+    tieBreaker: (r) => r.name,
+  });
+  const callouts = baseRows.filter((r) => r.overall === "attention");
+
   if (q.isPending) {
     return (
       <WidgetShell title="Tonight ready" description={DESC} requiresCompanion>
@@ -146,11 +188,6 @@ export function TonightReadyWidget({ raidTeamId }: { raidTeamId: string }) {
     );
   }
 
-  // Needs-attention first, then unknown, then ready.
-  const order: Record<Pillar, number> = { attention: 0, unknown: 1, ready: 2 };
-  const sorted = [...rows].sort((a, b) => order[a.overall] - order[b.overall]);
-  const callouts = sorted.filter((r) => r.overall === "attention");
-
   return (
     <WidgetShell title="Tonight ready" description={DESC} requiresCompanion>
       <div className="mb-2 flex flex-wrap gap-3 text-xs">
@@ -161,10 +198,10 @@ export function TonightReadyWidget({ raidTeamId }: { raidTeamId: string }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-muted-foreground border-border border-b text-left uppercase">
-            <th className="py-1 pr-2 font-medium">Raider</th>
+            <SortableHeader label="Raider" col="name" active={sortKey === "name"} asc={asc} onSort={toggle} className="pr-2" />
             <th className="py-1 pr-2 text-center font-medium">Cons.</th>
             <th className="py-1 pr-2 text-center font-medium">Gear</th>
-            <th className="py-1 pl-2 text-right font-medium">Synced</th>
+            <SortableHeader label="Synced" col="synced" active={sortKey === "synced"} asc={asc} onSort={toggle} align="right" className="pr-0 pl-2" />
           </tr>
         </thead>
         <tbody className="divide-border divide-y">
