@@ -324,7 +324,15 @@ function AgendaRow({
               size="xs"
               variant="destructive"
               disabled={del.isPending}
-              onClick={() => del.confirmAndDelete(e)}
+              onClick={() =>
+                del.confirmAndDelete({
+                  id: e.id,
+                  seriesId: e.seriesId,
+                  // startsAt of THIS occurrence — lets a recurring delete include
+                  // it even when it's today / in progress / just-passed.
+                  startsAt: new Date(e.startsAt),
+                })
+              }
             >
               {del.isPending ? "Deleting…" : "Delete"}
             </Button>

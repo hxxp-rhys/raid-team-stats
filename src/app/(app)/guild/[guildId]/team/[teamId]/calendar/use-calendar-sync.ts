@@ -53,18 +53,25 @@ export function useCalendarSync(raidTeamId: string): void {
   }, [pulse.data, raidTeamId, utils]);
 }
 
-/** A raid the delete handler needs to identify (one-off vs recurring series). */
-type DeletableEvent = { id: string; seriesId: string | null };
+/**
+ * A raid the delete handler needs to identify (one-off vs recurring series).
+ * `startsAt` is the clicked occurrence's start instant — for a recurring raid it
+ * lets the server include THIS occurrence in the delete even when it's today /
+ * in progress / just-passed (the whole point of the "delete from here" fix).
+ */
+type DeletableEvent = { id: string; seriesId: string | null; startsAt: Date };
 
 /**
  * Leader-only delete for a calendar raid. Branches on `seriesId`: a one-off
  * goes through `deleteEvent` (the server rejects series occurrences); a
- * recurring raid HARD-deletes the WHOLE series via `endSeries({ hardDelete:
- * true })` — deactivating it so the materializer stops AND removing every future
- * occurrence (signups and all) so the series leaves the Month view entirely
- * (past raids / attendance history are untouched). This is the deliberate
- * difference from the series manager's "End series", which omits the flag and
- * keeps its cancel-signed-up behavior.
+ * recurring raid HARD-deletes the clicked occurrence + everything upcoming via
+ * `endSeries({ hardDelete: true, fromStartsAt })` — deactivating the series so
+ * the materializer stops AND removing the clicked occurrence (even if it's
+ * today / in progress / just-passed) plus every later occurrence (signups,
+ * pins, locks and all) so the raid leaves BOTH the Agenda and Month views
+ * entirely. Earlier past raids / attendance history are untouched. This is the
+ * deliberate difference from the series manager's "End series", which omits the
+ * flag (and the `fromStartsAt` floor) and keeps its cancel-signed-up behavior.
  *
  * Confirms first (series wording when recurring), then on success invalidates
  * the calendar queries — `eventsInRange` + `eventDetail`, plus `listSeries` for
@@ -101,10 +108,14 @@ export function useDeleteRaid(raidTeamId: string, onDeleted?: () => void) {
     if (event.seriesId) {
       if (
         window.confirm(
-          "Delete this ENTIRE recurring series? This stops the schedule and removes ALL upcoming occurrences from the calendar — including any with signups. Past raids and their attendance history are untouched. This can't be undone.",
+          "Delete this recurring raid? This removes this occurrence and all upcoming ones from the calendar and stops the schedule. Earlier past raids stay for attendance history. This can't be undone.",
         )
       ) {
-        endSeries.mutate({ seriesId: event.seriesId, hardDelete: true });
+        endSeries.mutate({
+          seriesId: event.seriesId,
+          hardDelete: true,
+          fromStartsAt: event.startsAt,
+        });
       }
     } else if (window.confirm("Delete this raid? This can't be undone.")) {
       deleteEvent.mutate({ eventId: event.id });

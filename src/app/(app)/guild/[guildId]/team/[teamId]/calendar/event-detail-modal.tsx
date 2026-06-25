@@ -128,7 +128,13 @@ function Body({
               className="ml-auto"
               disabled={del.isPending}
               onClick={() =>
-                del.confirmAndDelete({ id: eventId, seriesId: event.seriesId })
+                del.confirmAndDelete({
+                  id: eventId,
+                  seriesId: event.seriesId,
+                  // startsAt of THIS occurrence — lets the server include it in a
+                  // recurring delete even when it's today / in progress / passed.
+                  startsAt: new Date(event.startsAt),
+                })
               }
             >
               {del.isPending ? "Deleting…" : "Delete"}

@@ -101,7 +101,11 @@ describe("reconcileSeries", () => {
     expect(plan.toCancel).toEqual([]);
   });
 
-  it("hardDelete: still leaves pinned / locked / cancelled occurrences alone", () => {
+  it("hardDelete: ALSO removes pinned / locked / cancelled occurrences (no leftover row)", () => {
+    // "Delete raid" on a recurring raid must clear EVERY de-scheduled occurrence,
+    // including a leader-edited (seriesOverride), LOCKED, or already-CANCELLED one
+    // — otherwise the clicked/locked/cancelled occurrence lingers as a visible
+    // "still-present deleted raid" in both the Agenda and Month views.
     const plan = reconcileSeries(
       [],
       [
@@ -110,6 +114,22 @@ describe("reconcileSeries", () => {
         ev({ id: "cancelled", occurrenceDate: "2026-06-18", status: "CANCELLED", signupCount: 1 }),
       ],
       { hardDelete: true },
+    );
+    expect(plan.toDelete).toEqual(["pin", "locked", "cancelled"]);
+    expect(plan.toCancel).toEqual([]);
+    expect(plan.toUpdate).toEqual([]);
+  });
+
+  it("NON-hardDelete (editor / End series): STILL skips pinned / locked / cancelled (no regression)", () => {
+    // The series editor and "End series" must never auto-touch a pinned, locked,
+    // or cancelled occurrence — only hardDelete ("Delete raid") overrides that.
+    const plan = reconcileSeries(
+      [],
+      [
+        ev({ id: "pin", occurrenceDate: "2026-06-16", seriesOverride: true, signupCount: 2 }),
+        ev({ id: "locked", occurrenceDate: "2026-06-17", status: "LOCKED", signupCount: 5 }),
+        ev({ id: "cancelled", occurrenceDate: "2026-06-18", status: "CANCELLED", signupCount: 1 }),
+      ],
     );
     expect(plan.toDelete).toEqual([]);
     expect(plan.toCancel).toEqual([]);
