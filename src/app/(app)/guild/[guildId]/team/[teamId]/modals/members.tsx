@@ -221,23 +221,6 @@ export function MembersModal({
       }
     >
       <div className="space-y-4 text-sm">
-        {totalCount > 1 && (
-          <div className="flex items-center gap-2">
-            <Input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name or realm…"
-              aria-label="Search members"
-              className="h-8 flex-1"
-            />
-            {query && (
-              <span className="text-muted-foreground shrink-0 text-xs">
-                {visibleMemberships.length} of {totalCount}
-              </span>
-            )}
-          </div>
-        )}
         {team.isPending ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : totalCount === 0 ? (
@@ -314,24 +297,26 @@ export function MembersModal({
           </ul>
         )}
 
-        {canManage && (
-          // Pinned add bar: stays static at the bottom while the roster scrolls.
-          // Spans the modal body padding (-mx-5 / -mb-4) and sits on the scroll
-          // container's bottom edge via `sticky bottom-0`.
-          <div className="border-border bg-card sticky bottom-0 -mx-5 -mb-4 border-t px-5 py-3">
-            <form
-              className="flex flex-wrap items-center gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!pick) return;
-                add.mutate({
-                  raidTeamId: teamId,
-                  characterId: pick,
-                  rank: pickRank,
-                  role: pickRole,
-                });
-              }}
-            >
+        {(canManage || totalCount > 1) && (
+          // Pinned bottom controls: the add bar (managers) and the member-list
+          // search, kept static and flush against the modal's Close footer while
+          // the roster scrolls. Spans the body padding (-mx-5 / -mb-4) and sits
+          // on the scroll container's bottom edge via `sticky bottom-0`.
+          <div className="border-border bg-card sticky bottom-0 -mx-5 -mb-4 border-t">
+            {canManage && (
+              <form
+                className="flex flex-wrap items-center gap-2 px-5 py-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!pick) return;
+                  add.mutate({
+                    raidTeamId: teamId,
+                    characterId: pick,
+                    rank: pickRank,
+                    role: pickRole,
+                  });
+                }}
+              >
               <EligibleCombobox
                 options={eligible.data ?? []}
                 value={pick}
@@ -373,11 +358,30 @@ export function MembersModal({
               <Button type="submit" disabled={!pick || add.isPending} size="sm">
                 {add.isPending ? "Adding…" : "Add"}
               </Button>
-            </form>
-            {add.error && (
-              <p className="text-destructive mt-2 text-xs" role="alert">
+              </form>
+            )}
+            {canManage && add.error && (
+              <p className="text-destructive px-5 pb-2 text-xs" role="alert">
                 {add.error.message}
               </p>
+            )}
+            {totalCount > 1 && (
+              // Member-list search, sitting flush against the Close footer.
+              <div className="flex items-center gap-2 px-5 py-3">
+                <Input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by name or realm…"
+                  aria-label="Search members"
+                  className="h-8 flex-1"
+                />
+                {query && (
+                  <span className="text-muted-foreground shrink-0 text-xs">
+                    {visibleMemberships.length} of {totalCount}
+                  </span>
+                )}
+              </div>
             )}
           </div>
         )}

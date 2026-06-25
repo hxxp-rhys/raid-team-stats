@@ -55,6 +55,10 @@ type RosterRow = {
   companion: {
     state: "none" | "ok" | "warning";
     lastReceivedAt: Date | string | null;
+    companionVersion?: string | null;
+    addonVersion?: string | null;
+    companionOutdated?: boolean;
+    addonOutdated?: boolean;
   };
 };
 
@@ -91,6 +95,10 @@ export function IlvlRosterWidget({ raidTeamId }: { raidTeamId: string }) {
           companion?: {
             state: "none" | "ok" | "warning";
             lastReceivedAt: Date | string | null;
+            companionVersion?: string | null;
+            addonVersion?: string | null;
+            companionOutdated?: boolean;
+            addonOutdated?: boolean;
           };
         }
       ).companion ?? { state: "none" as const, lastReceivedAt: null },
@@ -188,6 +196,10 @@ function CompanionCell({
   companion: {
     state: "none" | "ok" | "warning";
     lastReceivedAt: Date | string | null;
+    companionVersion?: string | null;
+    addonVersion?: string | null;
+    companionOutdated?: boolean;
+    addonOutdated?: boolean;
   };
 }) {
   if (companion.state === "none") {
@@ -201,20 +213,29 @@ function CompanionCell({
     companion.lastReceivedAt != null
       ? new Date(companion.lastReceivedAt)
       : null;
-  const title =
+  // Append the installed companion + addon versions to the tooltip when known.
+  const versionPart =
+    companion.companionVersion || companion.addonVersion
+      ? `Companion v${companion.companionVersion ?? "?"} · Addon v${companion.addonVersion ?? "?"}`
+      : null;
+  const dataPart =
     received != null
       ? `Last data received: ${received.toLocaleString()}`
       : "No data received yet";
-  if (companion.state === "warning") {
-    return (
-      <span className="text-amber-500" title={title} aria-label={title}>
-        ⚠
-      </span>
-    );
-  }
+  const title = versionPart ? `${dataPart}\n${versionPart}` : dataPart;
+  // Theme-colored asterisk when either the companion or addon is behind latest.
+  const outdated = companion.companionOutdated || companion.addonOutdated;
+  const glyph = companion.state === "warning" ? "⚠" : "✓";
+  const glyphColor =
+    companion.state === "warning" ? "text-amber-500" : "text-emerald-500";
   return (
-    <span className="text-emerald-500" title={title} aria-label={title}>
-      ✓
+    <span title={title} aria-label={title}>
+      <span className={glyphColor}>{glyph}</span>
+      {outdated ? (
+        <span className="text-primary" aria-label="Update available">
+          *
+        </span>
+      ) : null}
     </span>
   );
 }

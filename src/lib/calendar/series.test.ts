@@ -91,6 +91,44 @@ describe("reconcileSeries", () => {
     expect(noLongerWanted.toDelete).toEqual([]);
   });
 
+  it("hardDelete: deletes a de-scheduled occurrence WITH signups (no cancel)", () => {
+    const plan = reconcileSeries(
+      [],
+      [ev({ id: "e1", occurrenceDate: "2026-06-16", signupCount: 3 })],
+      { hardDelete: true },
+    );
+    expect(plan.toDelete).toEqual(["e1"]);
+    expect(plan.toCancel).toEqual([]);
+  });
+
+  it("hardDelete: still leaves pinned / locked / cancelled occurrences alone", () => {
+    const plan = reconcileSeries(
+      [],
+      [
+        ev({ id: "pin", occurrenceDate: "2026-06-16", seriesOverride: true, signupCount: 2 }),
+        ev({ id: "locked", occurrenceDate: "2026-06-17", status: "LOCKED", signupCount: 5 }),
+        ev({ id: "cancelled", occurrenceDate: "2026-06-18", status: "CANCELLED", signupCount: 1 }),
+      ],
+      { hardDelete: true },
+    );
+    expect(plan.toDelete).toEqual([]);
+    expect(plan.toCancel).toEqual([]);
+    expect(plan.toUpdate).toEqual([]);
+  });
+
+  it("hardDelete: routes every de-scheduled future occurrence (signed-up and empty) to delete", () => {
+    const plan = reconcileSeries(
+      [],
+      [
+        ev({ id: "signed", occurrenceDate: "2026-06-16", signupCount: 4 }),
+        ev({ id: "empty", occurrenceDate: "2026-06-18", signupCount: 0 }),
+      ],
+      { hardDelete: true },
+    );
+    expect(plan.toDelete).toEqual(["signed", "empty"]);
+    expect(plan.toCancel).toEqual([]);
+  });
+
   it("handles a mixed plan: add a day, drop a day, keep a day, respect an override", () => {
     const desired = [occ("2026-06-16"), occ("2026-06-18")]; // Tue + Thu
     const existing = [
