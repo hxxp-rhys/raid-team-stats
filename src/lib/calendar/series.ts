@@ -13,10 +13,13 @@
  *  - A no-longer-scheduled occurrence with signups is CANCELLED (history kept),
  *    not hard-deleted; only an empty placeholder is deleted. (Exception: the
  *    `hardDelete` mode — used by "Delete raid" on a recurring raid — routes
- *    EVERY de-scheduled future occurrence to hard-delete regardless of signups,
- *    so the series disappears from the Month view entirely. Pinned/locked/
- *    cancelled occurrences are still left alone; past occurrences aren't passed
- *    here at all, so attendance history survives.)
+ *    EVERY de-scheduled occurrence to hard-delete regardless of signups AND
+ *    regardless of pin/lock/cancel state, so the series disappears from BOTH the
+ *    Agenda and Month views entirely — including a leader-edited (seriesOverride),
+ *    LOCKED, or already-CANCELLED occurrence that would otherwise linger as a
+ *    visible "deleted" row. Only past occurrences are preserved, and they aren't
+ *    passed here at all, so attendance history survives. The non-hardDelete
+ *    editor path STILL leaves pinned/locked/cancelled occurrences alone.)
  *  - We never create a second event on a date that already has ANY event for
  *    the series (the (seriesId, occurrenceDate) unique key would reject it).
  */
@@ -52,11 +55,13 @@ export function reconcileSeries(
   existing: ExistingSeriesEvent[],
   opts?: {
     /**
-     * Hard-delete EVERY de-scheduled future occurrence (even ones with signups),
-     * instead of soft-cancelling the signed-up ones. Used by "Delete raid" on a
-     * recurring raid so the whole series leaves the Month view; the default
-     * (false) keeps the cancel-signed-up behavior the series editor / "End
-     * series" rely on. Pinned/locked/cancelled occurrences are still skipped.
+     * Hard-delete EVERY de-scheduled occurrence — even ones with signups AND
+     * even pinned/locked/cancelled ones — instead of soft-cancelling the
+     * signed-up ones and skipping pins. Used by "Delete raid" on a recurring
+     * raid so the whole series leaves both the Agenda and Month views (no
+     * leftover seriesOverride/LOCKED/CANCELLED row survives). The default
+     * (false) keeps the cancel-signed-up behavior AND the pin/lock/cancel skip
+     * that the series editor / "End series" rely on.
      */
     hardDelete?: boolean;
   },
@@ -73,7 +78,10 @@ export function reconcileSeries(
   };
 
   for (const e of existing) {
-    if (isPinned(e)) continue; // override / locked / cancelled — never auto-touch
+    // Editor / "End series" path: a pinned (override / locked / cancelled)
+    // occurrence is never auto-touched. hardDelete ("Delete raid") overrides
+    // this — those occurrences must also be removed so no leftover row lingers.
+    if (isPinned(e) && !hardDelete) continue;
     const stillScheduled = desiredByDate.get(e.occurrenceDate);
     if (stillScheduled) {
       plan.toUpdate.push({ id: e.id, occurrence: stillScheduled });

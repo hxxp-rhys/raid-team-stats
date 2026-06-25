@@ -1098,17 +1098,27 @@ export const calendarRouter = router({
    * Stop a recurring series: deactivate it and clear its FUTURE occurrences.
    * Default (`hardDelete` false / omitted) — the series editor's "End series"
    * action — cancels future occurrences with signups (history kept) and deletes
-   * empty placeholders. With `hardDelete: true` — the calendar "Delete raid"
-   * button on a recurring raid — EVERY future occurrence is hard-deleted
-   * regardless of signups, so the whole series disappears from the Month view.
-   * Either way pinned/locked/already-cancelled occurrences are left as-is and
-   * past occurrences are preserved (attendance history intact). LEADER+.
+   * empty placeholders, leaving pinned/locked/already-cancelled ones as-is.
+   * With `hardDelete: true` — the calendar "Delete raid" button on a recurring
+   * raid — EVERY in-scope occurrence is hard-deleted regardless of signups OR
+   * pin/lock/cancel state, so the whole series disappears from BOTH the Agenda
+   * and Month views with no leftover row.
+   *
+   * `fromStartsAt` lets "Delete raid" include the very occurrence the user
+   * clicked even when it already started (today's raid earlier in the day, or
+   * one in progress): the delete floor drops to that instant so the clicked
+   * occurrence is removed too. Genuinely past occurrences before the floor are
+   * preserved (attendance history intact). LEADER+.
    */
   endSeries: protectedProcedure
     .input(
       z.object({
         seriesId: z.string().cuid(),
         hardDelete: z.boolean().optional(),
+        // The startsAt of the clicked occurrence. When it's already in the past
+        // (today's / in-progress raid), the delete floor drops to it so the
+        // clicked occurrence is removed too — not just strictly-future ones.
+        fromStartsAt: z.date().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1131,14 +1141,22 @@ export const calendarRouter = router({
       if (!series) throw new TRPCError({ code: "NOT_FOUND" });
       await assertRaidTeamRole(ctx, series.raidTeamId, "LEADER");
 
+      // Deactivate FIRST: the materializer skips inactive series, so once this
+      // commits no concurrent sweep (or later request) can re-create the
+      // occurrences we're about to delete.
       await ctx.db.raidEventSeries.update({
         where: { id: input.seriesId },
         data: { isActive: false },
       });
 
       const now = new Date();
+      // Always cover now→future; if the clicked occurrence already started, drop
+      // the floor to it so it's deleted too (occurrences before the floor are
+      // genuinely past and kept as attendance history).
+      const floor =
+        input.fromStartsAt && input.fromStartsAt < now ? input.fromStartsAt : now;
       const futureEvents = await ctx.db.raidEvent.findMany({
-        where: { seriesId: series.id, startsAt: { gte: now } },
+        where: { seriesId: series.id, startsAt: { gte: floor } },
         select: {
           id: true,
           occurrenceDate: true,
