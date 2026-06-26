@@ -196,6 +196,74 @@ export function MembersModal({
 
   const canManage = !eligible.error;
 
+  // The add-member bar (character search / rank / role / Add). Rendered through
+  // the Modal's `bottomBar` slot — i.e. BETWEEN the scrollable body and the
+  // Close footer — so it sits flush against the footer with no gap. (A `sticky`
+  // bar inside the `overflow-y-auto` body could not reliably reach the footer:
+  // the body's bottom padding stayed as scrollable space below it.)
+  const addBar = canManage ? (
+    <div className="border-border bg-card border-t px-5 py-3">
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!pick) return;
+          add.mutate({
+            raidTeamId: teamId,
+            characterId: pick,
+            rank: pickRank,
+            role: pickRole,
+          });
+        }}
+      >
+        <EligibleCombobox
+          options={eligible.data ?? []}
+          value={pick}
+          onChange={setPick}
+          disabled={eligible.isPending || (eligible.data?.length ?? 0) === 0}
+          placeholder={
+            eligible.isPending
+              ? "Loading…"
+              : (eligible.data?.length ?? 0) === 0
+                ? "No eligible characters"
+                : "Search a character…"
+          }
+        />
+        <select
+          value={pickRank}
+          onChange={(e) => setPickRank(e.target.value as RankValue)}
+          aria-label="Rank for new member"
+          className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+        >
+          {RANKS.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={pickRole}
+          onChange={(e) =>
+            setPickRole(e.target.value as "MEMBER" | "CO_LEADER")
+          }
+          aria-label="Role for new member"
+          className="bg-background border-border h-8 rounded-md border px-2 text-sm"
+        >
+          <option value="MEMBER">Member</option>
+          <option value="CO_LEADER">Co-leader</option>
+        </select>
+        <Button type="submit" disabled={!pick || add.isPending} size="sm">
+          {add.isPending ? "Adding…" : "Add"}
+        </Button>
+      </form>
+      {add.error && (
+        <p className="text-destructive mt-2 text-xs" role="alert">
+          {add.error.message}
+        </p>
+      )}
+    </div>
+  ) : null;
+
   return (
     <Modal
       open={open}
@@ -206,8 +274,9 @@ export function MembersModal({
           ? "Add or remove characters tracked by this raid team."
           : "Active roster. Co-leaders and above can add or remove members."
       }
+      bottomBar={addBar}
     >
-      <div className="space-y-4 text-sm">
+      <div className="text-sm">
         {team.isPending ? (
           <p className="text-muted-foreground">Loading…</p>
         ) : totalCount === 0 ? (
@@ -278,75 +347,6 @@ export function MembersModal({
               </li>
             ))}
           </ul>
-        )}
-
-        {canManage && (
-          // Pinned add bar (character search / rank / role / Add): kept static
-          // and flush against the modal's Close footer while the roster scrolls.
-          // Spans the body padding (-mx-5 / -mb-4) and sits on the scroll
-          // container's bottom edge via `sticky bottom-0`.
-          <div className="border-border bg-card sticky bottom-0 -mx-5 -mb-4 border-t">
-            <form
-              className="flex flex-wrap items-center gap-2 px-5 py-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!pick) return;
-                add.mutate({
-                  raidTeamId: teamId,
-                  characterId: pick,
-                  rank: pickRank,
-                  role: pickRole,
-                });
-              }}
-            >
-              <EligibleCombobox
-                options={eligible.data ?? []}
-                value={pick}
-                onChange={setPick}
-                disabled={
-                  eligible.isPending || (eligible.data?.length ?? 0) === 0
-                }
-                placeholder={
-                  eligible.isPending
-                    ? "Loading…"
-                    : (eligible.data?.length ?? 0) === 0
-                      ? "No eligible characters"
-                      : "Search a character…"
-                }
-              />
-              <select
-                value={pickRank}
-                onChange={(e) => setPickRank(e.target.value as RankValue)}
-                aria-label="Rank for new member"
-                className="bg-background border-border h-8 rounded-md border px-2 text-sm"
-              >
-                {RANKS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={pickRole}
-                onChange={(e) =>
-                  setPickRole(e.target.value as "MEMBER" | "CO_LEADER")
-                }
-                aria-label="Role for new member"
-                className="bg-background border-border h-8 rounded-md border px-2 text-sm"
-              >
-                <option value="MEMBER">Member</option>
-                <option value="CO_LEADER">Co-leader</option>
-              </select>
-              <Button type="submit" disabled={!pick || add.isPending} size="sm">
-                {add.isPending ? "Adding…" : "Add"}
-              </Button>
-            </form>
-            {add.error && (
-              <p className="text-destructive px-5 pb-2 text-xs" role="alert">
-                {add.error.message}
-              </p>
-            )}
-          </div>
         )}
       </div>
     </Modal>
