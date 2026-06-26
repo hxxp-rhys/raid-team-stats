@@ -16,6 +16,7 @@ export function Modal({
   description,
   children,
   className,
+  bottomBar,
   hideDefaultFooter = false,
   showCloseIcon = false,
 }: {
@@ -25,6 +26,11 @@ export function Modal({
   description?: string;
   children: ReactNode;
   className?: string;
+  /** Optional static bar rendered flush BETWEEN the scrollable body and the
+   *  footer — i.e. with NO scroll-body padding between it and the Close bar, so
+   *  a pinned add/action bar actually touches the footer (which a `sticky`
+   *  element inside the `overflow-y-auto` body cannot reliably do). */
+  bottomBar?: ReactNode;
   /** Hide the built-in footer "Close" — for modals that supply their own
    *  dismiss action (e.g. a form's Cancel/Save) so there's only one. */
   hideDefaultFooter?: boolean;
@@ -87,6 +93,7 @@ export function Modal({
           </header>
         )}
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+        {bottomBar}
         {!hideDefaultFooter && (
           <footer className="border-border bg-muted/30 flex justify-end gap-2 border-t px-5 py-3">
             <button
